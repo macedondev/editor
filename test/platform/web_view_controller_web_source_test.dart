@@ -51,4 +51,16 @@ void main() {
     expect(source, contains('_readyCompleter.completeError'));
     expect(source, contains('Unknown Monaco load error'));
   });
+
+  test('web Monaco vs path uses base href, not full route Uri.base', () {
+    final source = webControllerSource();
+
+    expect(source, contains('String _monacoVsAssetUrl()'));
+    expect(source, contains('final vsPath = _monacoVsAssetUrl();'));
+    expect(source, contains("querySelector('base')"));
+    expect(
+      source,
+      isNot(contains('Uri.base\n        .resolve(')),
+    );
+  });
 }

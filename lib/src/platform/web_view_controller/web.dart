@@ -11,6 +11,23 @@ import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/platform/web_interaction_coordinator.dart';
 import 'package:web/web.dart' as web;
 
+/// Resolves the bundled Monaco `vs/` directory on Flutter Web.
+///
+/// [Uri.base] follows the browser URL, so with path URL strategy (e.g.
+/// `/canvas/:id`) resolving `assets/...` against it incorrectly yields
+/// `/canvas/.../assets/...`. Packaged assets are served from the app root
+/// implied by `<base href>` in `web/index.html`, same as other `/assets/...`
+/// scripts.
+String _monacoVsAssetUrl() {
+  final origin = Uri.base.origin;
+  final baseHref =
+      web.document.querySelector('base')?.getAttribute('href') ?? '/';
+  final appRoot = Uri.parse(origin).resolve(baseHref);
+  return appRoot
+      .resolve('assets/${MonacoAssets.assetBaseDir}/min/vs')
+      .toString();
+}
+
 /// WebView implementation for Flutter Web using an iframe.
 ///
 /// On web platforms, native WebViews aren't available, so Monaco is hosted
@@ -292,10 +309,7 @@ class WebViewController implements PlatformWebViewController {
     debugPrint('[WebViewController] Loading Monaco in iframe');
     await _waitForIframeAttachment();
 
-    // Resolve path against base URI to support subpaths
-    final vsPath = Uri.base
-        .resolve('assets/${MonacoAssets.assetBaseDir}/min/vs')
-        .toString();
+    final vsPath = _monacoVsAssetUrl();
 
     Object? lastError;
     const maxLoadAttempts = 2;
