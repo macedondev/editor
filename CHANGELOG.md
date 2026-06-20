@@ -3,6 +3,11 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-06-20
+
+### Fixed
+- **Flutter Web: Monaco failed to load under path URL strategy (#14).** With `usePathUrlStrategy()` (or any non-root route such as GoRouter `/canvas/:id`), the bundled `vs/` URL was built from the browser route, so `loader.js` 404'd and the editor surfaced "Failed to load Monaco loader.js". Asset URLs now resolve through Flutter's asset manager against the document `<base href>`, independent of the current route - so Monaco loads correctly under deep routes, a sub-path `<base href>`, and a CDN `assetBase`.
+
 ## [1.7.0] - 2026-05-19
 
 ### Added

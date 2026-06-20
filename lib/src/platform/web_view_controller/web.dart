@@ -9,23 +9,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_monaco/src/core/monaco_assets.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/platform/web_interaction_coordinator.dart';
+import 'package:flutter_monaco/src/platform/web_view_controller/web_asset_resolver.dart';
 import 'package:web/web.dart' as web;
 
-/// Resolves the bundled Monaco `vs/` directory on Flutter Web.
+/// Resolves the bundled Monaco `vs/` directory URL on Flutter Web.
 ///
-/// [Uri.base] follows the browser URL, so with path URL strategy (e.g.
-/// `/canvas/:id`) resolving `assets/...` against it incorrectly yields
-/// `/canvas/.../assets/...`. Packaged assets are served from the app root
-/// implied by `<base href>` in `web/index.html`, same as other `/assets/...`
-/// scripts.
+/// Monaco's files are ordinary Flutter assets, so the URL comes from Flutter's
+/// own resolver (`ui_web.assetManager`) - the single source of truth that
+/// already honors `<base href>`, a CDN `assetBase`, a custom `assetsDir`, and
+/// URL-encoding. The resolver may return a `<base href>`-relative URL, so it is
+/// absolutized against `web.document.baseURI` - the page's `<base href>`, which
+/// (unlike the raw page URL) excludes the active single-page route under path
+/// URL strategy, so the path stays correct and still resolves inside the
+/// blob-URL iframe that hosts Monaco (see issue #14).
 String _monacoVsAssetUrl() {
-  final origin = Uri.base.origin;
-  final baseHref =
-      web.document.querySelector('base')?.getAttribute('href') ?? '/';
-  final appRoot = Uri.parse(origin).resolve(baseHref);
-  return appRoot
-      .resolve('assets/${MonacoAssets.assetBaseDir}/min/vs')
-      .toString();
+  final assetUrl =
+      ui_web.assetManager.getAssetUrl('${MonacoAssets.assetBaseDir}/min/vs');
+  return resolveWebAssetUrl(web.document.baseURI, assetUrl);
 }
 
 /// WebView implementation for Flutter Web using an iframe.
