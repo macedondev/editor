@@ -13,7 +13,7 @@ import 'package:flutter/widgets.dart';
 /// ### Platform Implementations
 ///
 /// - **Android/iOS/macOS:** Uses `webview_flutter` via [FlutterWebViewController]
-/// - **Windows:** Uses `webview_windows` (WebView2) via [WindowsWebViewController]
+/// - **Windows:** Uses `webview_flutter_windows` (WebView2) via [WindowsWebViewController]
 /// - **Web:** Uses an iframe with `dart:js_interop` via web-specific controller
 ///
 /// ### Lifecycle
@@ -117,10 +117,7 @@ abstract class PlatformWebViewController {
   /// - [allowCdnFonts]: If `true`, relaxes Content-Security-Policy to allow
   ///   loading fonts from remote URLs. **Security note:** This enables
   ///   network requests from the WebView.
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-  });
+  Future<void> load({String? customCss, bool allowCdnFonts = false});
 
   /// Sets the background color of the WebView container.
   ///
@@ -138,4 +135,12 @@ abstract class PlatformWebViewController {
   /// On native platforms, this may be a no-op or implemented via
   /// platform-specific pointer transparency APIs.
   Future<void> setInteractionEnabled(bool enabled);
+
+  /// Requests native keyboard focus for the WebView host.
+  ///
+  /// On Windows, WebView2 must hold real Win32 keyboard focus before any
+  /// in-page (JavaScript) focus call has an effect, so this moves native
+  /// focus to the WebView2 control. On all other platforms this is a no-op;
+  /// their WebViews participate in the regular platform focus system.
+  Future<void> requestNativeFocus();
 }

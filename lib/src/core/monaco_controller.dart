@@ -11,8 +11,8 @@ import 'package:flutter_monaco/src/platform/platform_webview.dart';
 /// A callback function that provides completion items for a given
 /// [CompletionRequest]. It should return a [Future] that resolves to a
 /// [CompletionList].
-typedef CompletionProvider = Future<CompletionList> Function(
-    CompletionRequest request);
+typedef CompletionProvider =
+    Future<CompletionList> Function(CompletionRequest request);
 
 /// Manages the lifecycle and interaction with a Monaco Editor instance.
 ///
@@ -183,7 +183,7 @@ class MonacoController {
       })();
 
       if (kIsWeb) {
-        unawaited(readyFuture.catchError((Object _, StackTrace __) {}));
+        unawaited(readyFuture.catchError((Object _, StackTrace _) {}));
       } else {
         await readyFuture;
       }
@@ -274,10 +274,9 @@ class MonacoController {
   ///
   /// See [JsonDiagnosticsOptions] for available settings and defaults.
   Future<void> setJsonDiagnostics(JsonDiagnosticsOptions diagnostics) async {
-    await _invokeMonacoCommand(
-      'setJsonDiagnosticsOptions',
-      [diagnostics.toJson()],
-    );
+    await _invokeMonacoCommand('setJsonDiagnosticsOptions', [
+      diagnostics.toJson(),
+    ]);
   }
 
   /// Changes the editor's color theme.
@@ -339,10 +338,7 @@ class MonacoController {
   /// an [ArgumentError] when [id] is empty.
   ///
   /// [data] must follow Monaco's `IStandaloneThemeData` shape.
-  Future<void> defineThemeFromJson(
-    String id,
-    Map<String, Object?> data,
-  ) async {
+  Future<void> defineThemeFromJson(String id, Map<String, Object?> data) async {
     if (id.trim().isEmpty) {
       throw ArgumentError.value(
         id,
@@ -469,7 +465,8 @@ class MonacoController {
       throw ArgumentError.value(id, 'id', 'Completion source already exists');
     }
 
-    final providerId = id ??
+    final providerId =
+        id ??
         'flutter_${DateTime.now().millisecondsSinceEpoch}_${_completionSources.length}';
     final entry = _RegisteredCompletion(
       id: providerId,
@@ -549,14 +546,45 @@ class MonacoController {
     await _invokeMonacoCommand('executeAction', [actionId, args]);
   }
 
+  /// Whether a Flutter text input (TextField, CupertinoTextField,
+  /// SelectableText, ...) currently owns Flutter's primary focus.
+  ///
+  /// Focus nudges must never steal the keyboard from one: on Windows,
+  /// [PlatformWebViewController.requestNativeFocus] moves real Win32
+  /// keyboard focus to the WebView, which would make typing land in the
+  /// editor instead of, say, a dialog's TextField.
+  static bool _flutterTextInputHasFocus() {
+    final BuildContext? context;
+    try {
+      context = FocusManager.instance.primaryFocus?.context;
+    } catch (_) {
+      // MonacoController also runs headless (no widget binding, e.g. plain
+      // Dart tests); without a binding there is no Flutter focus to steal.
+      return false;
+    }
+    if (context == null) return false;
+    // Every Flutter text input attaches its focus node inside an
+    // EditableText, so it is found as an ancestor state.
+    return context.findAncestorStateOfType<EditableTextState>() != null;
+  }
+
   /// Requests focus for the editor widget.
   ///
   /// Uses a robust method that waits for visibility and layout before attempting focus.
   /// On Android and iOS, the OS soft keyboard may only appear after a user tap
   /// inside the editor.
+  ///
+  /// This is cooperative: it does nothing while a Flutter text input owns
+  /// the primary focus, so background refocus calls cannot steal the
+  /// keyboard from a focused TextField (e.g. in a dialog). For an
+  /// intentional handoff, unfocus the field first.
   Future<void> focus() async {
     if (!_interactionEnabled) return;
     await _ensureReady();
+    if (_flutterTextInputHasFocus()) return;
+    // On Windows, WebView2 must hold real Win32 keyboard focus before the
+    // in-page focus below has any effect. No-op on other platforms.
+    await _webViewController.requestNativeFocus();
     // Use robust in-page helper (waits for visibility, layouts, focuses textarea)
     await _webViewController.runJavaScript(
       'window.flutterMonaco && window.flutterMonaco.forceFocus && window.flutterMonaco.forceFocus()',
@@ -566,6 +594,11 @@ class MonacoController {
   /// Attempts to focus the editor multiple times to handle race conditions during layout transitions.
   ///
   /// [attempts] defaults to 3, with [interval] of 24ms.
+  ///
+  /// Like [focus], this is cooperative: attempts made while a Flutter text
+  /// input owns the primary focus are skipped, so refocus nudges (after
+  /// content updates, route pops, app resume) cannot steal the keyboard
+  /// from a focused TextField.
   Future<void> ensureEditorFocus({
     int attempts = 3,
     Duration interval = const Duration(milliseconds: 24),
@@ -573,18 +606,31 @@ class MonacoController {
     if (!_interactionEnabled) return;
     await _ensureReady();
 
+    var nativeFocusRequested = false;
+
     // On mobile, multiple async focus() calls interrupt the IME lifecycle.
-    final isMobileNative = !kIsWeb &&
+    final isMobileNative =
+        !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
     final effectiveAttempts = isMobileNative ? 1 : attempts;
 
     for (var i = 0; i < effectiveAttempts; i++) {
-      try {
-        await _webViewController.runJavaScript(
-          'window.flutterMonaco && window.flutterMonaco.forceFocus && window.flutterMonaco.forceFocus()',
-        );
-      } catch (_) {}
+      // Re-evaluated per attempt: a text input losing focus mid-loop (e.g.
+      // a closing dialog) lets the remaining attempts proceed.
+      if (!_flutterTextInputHasFocus()) {
+        if (!nativeFocusRequested) {
+          // On Windows, hand real Win32 keyboard focus to WebView2 first;
+          // the JS focus below cannot take effect without it.
+          await _webViewController.requestNativeFocus();
+          nativeFocusRequested = true;
+        }
+        try {
+          await _webViewController.runJavaScript(
+            'window.flutterMonaco && window.flutterMonaco.forceFocus && window.flutterMonaco.forceFocus()',
+          );
+        } catch (_) {}
+      }
       if (i + 1 < effectiveAttempts) {
         await Future<void>.delayed(interval);
       }
@@ -700,8 +746,9 @@ class MonacoController {
             'selection',
             alternativeKeys: ['sel', 'range'],
           );
-          final selection =
-              selectionMap != null ? Range.fromJson(selectionMap) : null;
+          final selection = selectionMap != null
+              ? Range.fromJson(selectionMap)
+              : null;
           _onSelectionChanged.add(selection);
           break;
         case 'focus':
@@ -767,7 +814,8 @@ class MonacoController {
 
       // Windows WebView2 might auto-decode JSON, handle both cases
       // Only decode if jsonAware is true (for API calls that return JSON)
-      final result = (jsonAware &&
+      final result =
+          (jsonAware &&
               raw is String &&
               (raw.startsWith('{') || raw.startsWith('[')))
           ? (raw.tryDecode() ?? raw)
@@ -1084,10 +1132,9 @@ class MonacoController {
   /// This is the most efficient way to make multiple changes at once.
   Future<void> applyEdits(List<EditOperation> edits) async {
     if (edits.isEmpty) return;
-    await _invokeMonacoCommand(
-      'applyEdits',
-      [edits.map((e) => e.toJson()).toList()],
-    );
+    await _invokeMonacoCommand('applyEdits', [
+      edits.map((e) => e.toJson()).toList(),
+    ]);
   }
 
   /// Inserts [text] at the specified [position].
@@ -1123,10 +1170,10 @@ class MonacoController {
   Future<List<String>> setDecorations(
     List<DecorationOptions> decorations,
   ) async {
-    final raw = await _invokeMonacoCommand(
-      'deltaDecorations',
-      [_decorationIds, decorations.map((d) => d.toJson()).toList()],
-    );
+    final raw = await _invokeMonacoCommand('deltaDecorations', [
+      _decorationIds,
+      decorations.map((d) => d.toJson()).toList(),
+    ]);
     if (raw is! List) {
       throw MonacoJavaScriptException(
         operation: 'deltaDecorations',
@@ -1135,8 +1182,10 @@ class MonacoController {
       );
     }
 
-    return _decorationIds =
-        raw.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+    return _decorationIds = raw
+        .map((e) => e.toString())
+        .where((s) => s.isNotEmpty)
+        .toList();
   }
 
   /// Adds inline style decorations (e.g., text color, background) to specific [ranges].
@@ -1191,10 +1240,10 @@ class MonacoController {
     List<MarkerData> markers, {
     String owner = 'flutter',
   }) async {
-    await _invokeMonacoCommand(
-      'setModelMarkers',
-      [owner, markers.map((m) => m.toJson()).toList()],
-    );
+    await _invokeMonacoCommand('setModelMarkers', [
+      owner,
+      markers.map((m) => m.toJson()).toList(),
+    ]);
   }
 
   /// Convenience method to set error markers.
@@ -1293,7 +1342,8 @@ class MonacoController {
     Uri? uri,
     Uri? defaultUri,
   }) async {
-    final script = '''
+    final script =
+        '''
       flutterMonaco.createModel(
         ${jsonEncode(value)}, 
         ${jsonEncode(language)}, 
@@ -1381,10 +1431,10 @@ class MonacoController {
 
   /// Set cursor position
   Future<void> setCursorPosition(Position position) async {
-    await _invokeMonacoCommand(
-      'setCursorPosition',
-      [position.line, position.column],
-    );
+    await _invokeMonacoCommand('setCursorPosition', [
+      position.line,
+      position.column,
+    ]);
   }
 
   /// Set cursor position from zero-based coordinates

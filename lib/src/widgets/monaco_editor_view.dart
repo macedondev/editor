@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
@@ -15,6 +16,29 @@ enum _ConnectionState {
 
   /// An error occurred during the initialization of the editor.
   error,
+}
+
+bool _pointerMayClaimKeyboard(PointerDownEvent event) {
+  if (event.kind == PointerDeviceKind.mouse ||
+      event.kind == PointerDeviceKind.trackpad) {
+    return event.buttons == kPrimaryMouseButton;
+  }
+  return true;
+}
+
+bool _pointerShouldNudgeFocus(
+  PointerDownEvent event, {
+  required bool hasFlutterFocus,
+  required bool editorReportsFocused,
+}) {
+  // Re-assert focus only when the editor is not already fully focused: it
+  // lacks Flutter focus (key routing) OR Monaco itself reports unfocused (its
+  // input cannot receive keystrokes). Reading Monaco's own focus signal - not
+  // just the Flutter-focus proxy - lets a click recover typing after the
+  // editor silently lost native focus (alt-tab, a dialog, a tab switch),
+  // while an already-focused editor is still left alone (no replay).
+  if (!_pointerMayClaimKeyboard(event)) return false;
+  return !hasFlutterFocus || !editorReportsFocused;
 }
 
 /// A widget that renders a Monaco Editor instance.
@@ -155,14 +179,14 @@ class MonacoEditor extends StatefulWidget {
   ///
   /// Defaults to an error icon and retry button.
   final Widget Function(BuildContext context, Object error, StackTrace? st)?
-      errorBuilder;
+  errorBuilder;
 
   /// If `true`, displays a status bar with line/column info at the bottom.
   final bool showStatusBar;
 
   /// Builder for a custom status bar widget.
   final Widget Function(BuildContext context, LiveStats stats)?
-      statusBarBuilder;
+  statusBarBuilder;
 
   /// The background color of the WebView container.
   ///
@@ -217,6 +241,12 @@ class _MonacoEditorState extends State<MonacoEditor> {
   /// FocusNode to explicitly request platform view focus for the WebView.
   final FocusNode _webFocusNode = FocusNode(debugLabel: 'MonacoWebViewFocus');
 
+  /// Whether Monaco itself reports the editor focused (its input can receive
+  /// keystrokes), driven by the controller's focus/blur stream. Lets a
+  /// pointer-down tell "already focused, leave it alone" apart from "Flutter
+  /// thinks it's focused but Monaco lost it" (the alt-tab/dialog desync).
+  bool _editorReportsFocused = false;
+
   @override
   void initState() {
     super.initState();
@@ -235,7 +265,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
     }
 
     // If we OWN the controller and HTML-affecting knobs changed, rebuild.
-    final htmlKnobsChanged = (oldWidget.customCss != widget.customCss) ||
+    final htmlKnobsChanged =
+        (oldWidget.customCss != widget.customCss) ||
         (oldWidget.allowCdnFonts != widget.allowCdnFonts);
     if (_ownsController && htmlKnobsChanged) {
       _teardown(disposeOldController: true);
@@ -246,7 +277,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
     if (widget.interactionEnabled != oldWidget.interactionEnabled &&
         _controller != null) {
       _ignoreAsync(
-          _controller!.setInteractionEnabled(widget.interactionEnabled));
+        _controller!.setInteractionEnabled(widget.interactionEnabled),
+      );
     }
 
     if (_connectionState != _ConnectionState.ready || _controller == null) {
@@ -257,9 +289,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     if (widget.options != oldWidget.options) {
       _ignoreAsync(_controller!.updateOptions(widget.options));
       // Explicitly update theme and language as they require separate bridge calls.
-      _ignoreAsync(
-        _controller!.setThemeById(widget.options.effectiveThemeId),
-      );
+      _ignoreAsync(_controller!.setThemeById(widget.options.effectiveThemeId));
       _ignoreAsync(_controller!.setLanguage(widget.options.language));
     }
 
@@ -289,7 +319,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
     try {
       final ownsController = widget.controller == null;
       _ownsController = ownsController;
-      final controller = widget.controller ??
+      final controller =
+          widget.controller ??
           await (widget.controllerFactory?.call() ??
               MonacoController.create(
                 options: widget.options,
@@ -331,8 +362,9 @@ class _MonacoEditorState extends State<MonacoEditor> {
           debugPrint('[MonacoEditor] setBackgroundColor failed: $e');
         }
         try {
-          await _controller!
-              .setHostPageBackgroundColor(widget.backgroundColor!);
+          await _controller!.setHostPageBackgroundColor(
+            widget.backgroundColor!,
+          );
         } catch (e) {
           debugPrint('[MonacoEditor] setHostPageBackgroundColor failed: $e');
         }
@@ -401,24 +433,33 @@ class _MonacoEditorState extends State<MonacoEditor> {
 
     _wireContentListener();
     if (widget.onSelectionChanged != null) {
-      final selectionSub = _controller!.onSelectionChanged
-          .listen((r) => widget.onSelectionChanged?.call(r));
+      final selectionSub = _controller!.onSelectionChanged.listen(
+        (r) => widget.onSelectionChanged?.call(r),
+      );
       _streamSubscriptions.add(selectionSub);
     }
-    final focusSub = _controller!.onFocus.listen((_) => widget.onFocus?.call());
+    final focusSub = _controller!.onFocus.listen((_) {
+      _editorReportsFocused = true;
+      widget.onFocus?.call();
+    });
     _streamSubscriptions.add(focusSub);
-    final blurSub = _controller!.onBlur.listen((_) => widget.onBlur?.call());
+    final blurSub = _controller!.onBlur.listen((_) {
+      _editorReportsFocused = false;
+      widget.onBlur?.call();
+    });
     _streamSubscriptions.add(blurSub);
 
-    _statsListener =
-        () => widget.onLiveStats?.call(_controller!.liveStats.value);
+    _statsListener = () =>
+        widget.onLiveStats?.call(_controller!.liveStats.value);
     _controller!.liveStats.addListener(_statsListener!);
   }
 
   void _ignoreAsync(Future<void> future) {
-    unawaited(future.catchError((e, st) {
-      debugPrint('[MonacoEditor] Async update error: $e');
-    }));
+    unawaited(
+      future.catchError((e, st) {
+        debugPrint('[MonacoEditor] Async update error: $e');
+      }),
+    );
   }
 
   /// Wires only the content changed listener, allowing it to be updated separately.
@@ -450,8 +491,10 @@ class _MonacoEditorState extends State<MonacoEditor> {
       }
 
       _contentDebounceTimer?.cancel();
-      _contentDebounceTimer =
-          Timer(widget.contentDebounce, () => _ignoreAsync(pullAndEmit()));
+      _contentDebounceTimer = Timer(
+        widget.contentDebounce,
+        () => _ignoreAsync(pullAndEmit()),
+      );
     });
   }
 
@@ -486,7 +529,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final bg = widget.backgroundColor ??
+    final bg =
+        widget.backgroundColor ??
         (theme.brightness == Brightness.dark
             ? const Color(0xFF1E1E1E)
             : Colors.white);
@@ -535,11 +579,16 @@ class _MonacoEditorState extends State<MonacoEditor> {
           },
           child: Listener(
             behavior: HitTestBehavior.translucent,
-            onPointerDown: (_) {
+            onPointerDown: (event) {
               if (!widget.interactionEnabled) return;
-              if (!_webFocusNode.hasFocus) {
-                _webFocusNode.requestFocus();
+              if (!_pointerShouldNudgeFocus(
+                event,
+                hasFlutterFocus: _webFocusNode.hasFocus,
+                editorReportsFocused: _editorReportsFocused,
+              )) {
+                return;
               }
+              _webFocusNode.requestFocus();
               unawaited(_controller!.ensureEditorFocus(attempts: 1));
             },
             child: _controller!.webViewWidget,
@@ -568,7 +617,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
         children: [
           webView,
           Positioned.fill(
-            child: widget.errorBuilder?.call(context, _error!, _stack) ??
+            child:
+                widget.errorBuilder?.call(context, _error!, _stack) ??
                 _DefaultError(
                   error: _error!,
                   onRetry: _ownsController ? _bootstrap : null,
@@ -622,7 +672,8 @@ class _MonacoStatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = MonacoEditorTheme.of(context);
-    final style = theme.statusBarTextStyle ??
+    final style =
+        theme.statusBarTextStyle ??
         Theme.of(context).textTheme.bodySmall ??
         const TextStyle(fontSize: 12);
 
@@ -640,13 +691,15 @@ class _MonacoStatusBar extends StatelessWidget {
         ].where((s) => s.isNotEmpty).toList();
 
         return Container(
-          padding: theme.statusBarPadding ??
+          padding:
+              theme.statusBarPadding ??
               const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           decoration: BoxDecoration(
             color: theme.statusBarBackgroundColor,
             border: Border(
               top: BorderSide(
-                color: theme.statusBarBorderColor ??
+                color:
+                    theme.statusBarBorderColor ??
                     Theme.of(context).dividerColor,
                 width: 0.5,
               ),
@@ -656,9 +709,7 @@ class _MonacoStatusBar extends StatelessWidget {
             alignment: WrapAlignment.end,
             spacing: theme.statusBarSpacing ?? 16,
             runSpacing: 4,
-            children: [
-              for (final entry in entries) Text(entry, style: style),
-            ],
+            children: [for (final entry in entries) Text(entry, style: style)],
           ),
         );
       },
@@ -689,10 +740,7 @@ class _DefaultLoading extends StatelessWidget {
 }
 
 class _DefaultError extends StatelessWidget {
-  const _DefaultError({
-    required this.error,
-    this.onRetry,
-  });
+  const _DefaultError({required this.error, this.onRetry});
 
   final Object error;
   final VoidCallback? onRetry;

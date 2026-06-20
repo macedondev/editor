@@ -23,7 +23,7 @@ class FakePlatformWebViewController implements PlatformWebViewController {
   ///
   /// [widget] - Optional widget to return from [widget] getter.
   FakePlatformWebViewController({Widget? widget})
-      : _widget = widget ?? const SizedBox.shrink();
+    : _widget = widget ?? const SizedBox.shrink();
 
   /// All executed JavaScript scripts in order.
   final List<String> executed = [];
@@ -124,6 +124,11 @@ class FakePlatformWebViewController implements PlatformWebViewController {
     }
     interactionEnabled = enabled;
     executed.add('SET_INTERACTION:$enabled');
+  }
+
+  @override
+  Future<void> requestNativeFocus() async {
+    executed.add('REQUEST_NATIVE_FOCUS');
   }
 
   @override
