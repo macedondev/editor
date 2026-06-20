@@ -51,4 +51,19 @@ void main() {
     expect(source, contains('_readyCompleter.completeError'));
     expect(source, contains('Unknown Monaco load error'));
   });
+
+  test(
+      'web Monaco vs path resolves via the Flutter asset manager, not '
+      'Uri.base', () {
+    final source = webControllerSource();
+
+    expect(source, contains('String _monacoVsAssetUrl()'));
+    expect(source, contains('final vsPath = _monacoVsAssetUrl();'));
+    // Delegate to Flutter's own asset resolver (the single source of truth)
+    // and absolutize against the document base href, not the SPA route.
+    expect(source, contains('ui_web.assetManager.getAssetUrl('));
+    expect(source, contains('resolveWebAssetUrl(web.document.baseURI'));
+    // The route-bearing Uri.base must never drive asset resolution (#14).
+    expect(source, isNot(contains('Uri.base')));
+  });
 }
