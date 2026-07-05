@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:path/path.dart' as p;
@@ -49,11 +50,19 @@ abstract class WebViewController implements PlatformWebViewController {
   const WebViewController._();
 
   @override
-  Future<void> requestNativeFocus() async {
-    // No-op by default. The webview_flutter API used for Android, iOS, and
-    // macOS does not expose a reliable native first-responder handoff here;
-    // only Windows WebView2 has an explicit focus method available.
+  Future<NativeFocusResult> requestNativeFocus() async {
+    // No-op by default: Android and iOS WebViews participate in the regular
+    // platform focus system. Windows (WebView2 Win32 focus) and macOS
+    // (WKWebView first responder, via the flutter_monaco native plugin)
+    // override this with a real handoff.
+    return NativeFocusResult.unsupported;
   }
+
+  @override
+  Future<bool?> hasNativeInputFocus() async => null;
+
+  @override
+  Future<void> releaseNativeFocus() async {}
 
   /// Generates and caches the Monaco editor HTML file for native platforms.
   ///
@@ -157,7 +166,15 @@ class FlutterWebViewController extends WebViewController {
   }
 
   @override
-  Widget get widget => wf.WebViewWidget(controller: _controller);
+  Widget get widget {
+    final webView = wf.WebViewWidget(controller: _controller);
+    if (Platform.isMacOS) {
+      // Anchor the WebView's render box so the macOS native focus channel
+      // can locate THIS WKWebView in the window (apps may host several).
+      return KeyedSubtree(key: _macosViewAnchorKey, child: webView);
+    }
+    return webView;
+  }
 
   late final wf.WebViewController _controller;
   bool _disposed = false;
@@ -167,6 +184,90 @@ class FlutterWebViewController extends WebViewController {
   /// Use this for advanced operations not exposed by [PlatformWebViewController],
   /// such as custom navigation delegates or platform-specific settings.
   wf.WebViewController get flutterController => _controller;
+
+  /// Method channel to the `flutter_monaco` macOS plugin, which performs the
+  /// NSWindow first-responder handoff that `webview_flutter_wkwebview` does
+  /// not implement (it has no responder management at all - verified against
+  /// 3.26.0 sources).
+  @visibleForTesting
+  static const MethodChannel macosNativeFocusChannel = MethodChannel(
+    'flutter_monaco/native_focus',
+  );
+
+  final GlobalKey _macosViewAnchorKey = GlobalKey(
+    debugLabel: 'MonacoMacosWebViewAnchor',
+  );
+
+  /// The WebView's current bounds in Flutter logical coordinates (which equal
+  /// AppKit points on macOS), relative to the Flutter view's top-left origin.
+  /// Null when the widget is not attached to the tree.
+  Map<String, double>? _macosWebViewRectArgs() {
+    final renderObject = _macosViewAnchorKey.currentContext?.findRenderObject();
+    if (renderObject is! RenderBox ||
+        !renderObject.attached ||
+        !renderObject.hasSize) {
+      return null;
+    }
+    final topLeft = renderObject.localToGlobal(Offset.zero);
+    return <String, double>{
+      'x': topLeft.dx,
+      'y': topLeft.dy,
+      'width': renderObject.size.width,
+      'height': renderObject.size.height,
+    };
+  }
+
+  @override
+  Future<NativeFocusResult> requestNativeFocus() async {
+    if (_disposed) return NativeFocusResult.failed;
+    if (!Platform.isMacOS) {
+      // Android and iOS WebViews take native focus from the user gesture
+      // itself; there is no handoff to perform.
+      return NativeFocusResult.unsupported;
+    }
+    try {
+      final status = await macosNativeFocusChannel.invokeMethod<String>(
+        'focusWebView',
+        _macosWebViewRectArgs(),
+      );
+      return switch (status) {
+        'granted' => NativeFocusResult.granted,
+        'already-owned' => NativeFocusResult.alreadyOwned,
+        _ => NativeFocusResult.failed,
+      };
+    } on MissingPluginException {
+      // Native side not registered (widget tests, headless, or an embedding
+      // that never ran plugin registration). Callers fall back to the
+      // in-page focus replay path.
+      return NativeFocusResult.unsupported;
+    } catch (e) {
+      debugPrint('[FlutterWebViewController] macOS focus handoff failed: $e');
+      return NativeFocusResult.failed;
+    }
+  }
+
+  @override
+  Future<bool?> hasNativeInputFocus() async {
+    if (_disposed || !Platform.isMacOS) return null;
+    try {
+      return await macosNativeFocusChannel.invokeMethod<bool>(
+        'hasNativeFocus',
+        _macosWebViewRectArgs(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> releaseNativeFocus() async {
+    if (_disposed || !Platform.isMacOS) return;
+    try {
+      await macosNativeFocusChannel.invokeMethod<void>('releaseWebViewFocus');
+    } catch (_) {
+      // Best-effort: without the native plugin there is nothing to release.
+    }
+  }
 
   @override
   Future<void> initialize() async {
@@ -406,11 +507,31 @@ class WindowsWebViewController extends WebViewController {
   }
 
   @override
-  Future<void> requestNativeFocus() async {
-    if (!_isInitialized || _disposed) return;
+  Future<NativeFocusResult> requestNativeFocus() async {
+    if (!_isInitialized || _disposed) return NativeFocusResult.failed;
+    final alreadyOwned = _controller.hasNativeFocus;
+    // Always run the handoff, even when the focus flag reads true: WebView2's
+    // MoveFocus is what re-arms keyboard routing after a native boundary.
     // Moves real Win32 keyboard focus to the WebView2 control so that
     // subsequent in-page focus calls (and typing) actually work.
     await _controller.focus();
+    return alreadyOwned
+        ? NativeFocusResult.alreadyOwned
+        : NativeFocusResult.granted;
+  }
+
+  @override
+  Future<bool?> hasNativeInputFocus() async {
+    if (!_isInitialized || _disposed) return null;
+    return _controller.hasNativeFocus;
+  }
+
+  @override
+  Future<void> releaseNativeFocus() async {
+    if (!_isInitialized || _disposed) return;
+    if (_controller.hasNativeFocus) {
+      await ww.WebviewController.releaseFocus();
+    }
   }
 
   @override

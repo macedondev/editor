@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
+import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../fakes/fake_platform_webview_controller.dart';
@@ -484,47 +485,68 @@ void main() {
         }
       });
 
-      testWidgets('macOS repeated primary mouse down replays input readiness', (
-        tester,
-      ) async {
-        debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-        try {
-          final bundle = await _createBundle();
-          await tester.pumpWidget(
-            _wrap(MonacoEditor(controller: bundle.controller)),
-          );
-          await tester.pumpAndSettle();
+      testWidgets(
+        'macOS repeated primary mouse down re-verifies native focus, and '
+        'replays input readiness only without a native handoff',
+        (tester) async {
+          debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+          try {
+            final bundle = await _createBundle();
+            await tester.pumpWidget(
+              _wrap(MonacoEditor(controller: bundle.controller)),
+            );
+            await tester.pumpAndSettle();
 
-          final target = tester.getCenter(find.byKey(const Key('webview')));
-          final first = await tester.createGesture(
-            kind: PointerDeviceKind.mouse,
-            buttons: kPrimaryMouseButton,
-          );
-          await first.down(target);
-          await tester.pumpAndSettle();
-          await first.up();
-          // Monaco reports the editor focused after the first click, but on
-          // macOS that cached DOM focus is not proof of native input readiness.
-          bundle.webview.emitToChannel('flutterChannel', '{"event":"focus"}');
-          await tester.pump();
+            final target = tester.getCenter(find.byKey(const Key('webview')));
+            final first = await tester.createGesture(
+              kind: PointerDeviceKind.mouse,
+              buttons: kPrimaryMouseButton,
+            );
+            await first.down(target);
+            await tester.pumpAndSettle();
+            await first.up();
+            // Monaco reports the editor focused after the first click, but on
+            // macOS that cached DOM focus is not proof of native input
+            // readiness, so every primary click still routes a user intent.
+            bundle.webview.emitToChannel('flutterChannel', '{"event":"focus"}');
+            await tester.pump();
 
-          bundle.webview.executed.clear();
-          final second = await tester.createGesture(
-            kind: PointerDeviceKind.mouse,
-            buttons: kPrimaryMouseButton,
-          );
-          await second.down(target);
-          await tester.pumpAndSettle();
-          await second.up();
+            // Without the native plugin (fake default: unsupported), the
+            // click falls back to the full input-focus replay.
+            bundle.webview.executed.clear();
+            final second = await tester.createGesture(
+              kind: PointerDeviceKind.mouse,
+              buttons: kPrimaryMouseButton,
+            );
+            await second.down(target);
+            await tester.pumpAndSettle();
+            await second.up();
 
-          expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
-          bundle.webview.assertExecuted(
-            'forceFocus({ replayInputFocus: true })',
-          );
-        } finally {
-          debugDefaultTargetPlatformOverride = null;
-        }
-      });
+            expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
+            bundle.webview.assertExecuted(
+              'forceFocus({ replayInputFocus: true })',
+            );
+
+            // With a working native handoff, the same click verifies first
+            // responder state and must NOT replay (no caret double-blink).
+            bundle.webview.nativeFocusResult = NativeFocusResult.alreadyOwned;
+            bundle.webview.executed.clear();
+            final third = await tester.createGesture(
+              kind: PointerDeviceKind.mouse,
+              buttons: kPrimaryMouseButton,
+            );
+            await third.down(target);
+            await tester.pumpAndSettle();
+            await third.up();
+
+            expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
+            bundle.webview.assertExecuted('forceFocus()');
+            bundle.webview.assertNotExecuted('replayInputFocus');
+          } finally {
+            debugDefaultTargetPlatformOverride = null;
+          }
+        },
+      );
 
       testWidgets('Windows repeated primary mouse down does not refocus', (
         tester,

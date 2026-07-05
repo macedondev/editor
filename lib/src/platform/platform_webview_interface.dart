@@ -2,6 +2,34 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+/// Outcome of a [PlatformWebViewController.requestNativeFocus] handoff.
+///
+/// Native focus means the OS-level keyboard routing target: the Win32 focus
+/// HWND on Windows, or the NSWindow first responder on macOS. It is layer 2
+/// of the three-layer focus model (Flutter focus, native focus, DOM focus)
+/// and the only layer Flutter cannot observe or drive by itself on desktop
+/// platform views.
+enum NativeFocusResult {
+  /// Native keyboard focus was handed to the WebView by this call.
+  granted,
+
+  /// The WebView already owned native keyboard focus; nothing changed.
+  alreadyOwned,
+
+  /// The platform (or the current embedding) has no native focus handoff.
+  ///
+  /// Android, iOS, and Web return this: their WebViews participate in the
+  /// regular platform focus system and need no explicit handoff. macOS also
+  /// returns this when the `flutter_monaco` native plugin is not registered
+  /// (for example in widget tests or headless runs).
+  unsupported,
+
+  /// A handoff was attempted but did not take effect (the WebView could not
+  /// be located in the window, the window refused the first-responder
+  /// change, or the platform call failed).
+  failed,
+}
+
 /// Abstract interface defining the contract for platform-specific WebView
 /// implementations.
 ///
@@ -142,8 +170,33 @@ abstract class PlatformWebViewController {
   /// in-page (JavaScript) focus call has an effect, so this moves native
   /// focus to the WebView2 control.
   ///
-  /// On `webview_flutter` platforms, including macOS WKWebView, the package
-  /// does not expose a reliable first-responder handoff, so this is a no-op.
-  /// Callers must still run the in-page Monaco focus helper after this method.
-  Future<void> requestNativeFocus();
+  /// On macOS, the WKWebView must be the NSWindow's first responder to
+  /// receive typing; this performs that handoff through the `flutter_monaco`
+  /// native plugin (`window.makeFirstResponder(webView)`).
+  ///
+  /// On Android, iOS, and Web the WebView participates in the regular
+  /// platform focus system, so this returns [NativeFocusResult.unsupported].
+  /// Callers should still run the in-page Monaco focus helper after this
+  /// method; that helper is idempotent when DOM focus is already correct.
+  Future<NativeFocusResult> requestNativeFocus();
+
+  /// Whether the native layer currently routes keyboard input to this
+  /// WebView.
+  ///
+  /// Returns `true`/`false` where the platform can answer authoritatively
+  /// (macOS: the WKWebView is the window's first responder; Windows: WebView2
+  /// reports native focus), and `null` where it cannot (Android, iOS, Web,
+  /// headless runs, or when the WebView cannot be located).
+  ///
+  /// This is the real input-readiness signal that Monaco's DOM
+  /// `onFocus`/`onBlur` stream cannot provide on desktop platform views.
+  Future<bool?> hasNativeInputFocus();
+
+  /// Hands native keyboard focus back to the Flutter view if this WebView
+  /// currently holds it.
+  ///
+  /// macOS makes the Flutter view first responder; Windows asks WebView2 to
+  /// release focus to the Flutter view. No-op on other platforms or when the
+  /// WebView does not own native focus.
+  Future<void> releaseNativeFocus();
 }

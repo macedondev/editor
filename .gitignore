@@ -131,3 +131,6 @@ app.*.map.json
 !.idea/runConfigurations/
 /pubspec.lock
 lib/core/config/api_keys.dart
+
+# Swift Package Manager build artifacts (macOS plugin)
+.build/

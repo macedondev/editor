@@ -1,6 +1,6 @@
 name: flutter_monaco
 description: Integrate Monaco Editor (VS Code's editor) in Flutter apps. Features 100+ languages, syntax highlighting, themes, and full API.
-version: 2.1.1
+version: 2.2.0
 homepage: https://github.com/omar-hanafy/flutter_monaco
 repository: https://github.com/omar-hanafy/flutter_monaco
 issue_tracker: https://github.com/omar-hanafy/flutter_monaco/issues
@@ -45,6 +45,16 @@ dev_dependencies:
   path_provider_platform_interface: ^2.1.2
 
 flutter:
+  # Native macOS helper for the WKWebView first-responder handoff
+  # (flutter_monaco/native_focus method channel). Other platforms need no
+  # native code here: Windows focus lives in webview_flutter_windows, and
+  # Android/iOS/Web WebViews participate in the regular platform focus
+  # system. The top-level `platforms:` key above keeps the pub.dev platform
+  # listing complete.
+  plugin:
+    platforms:
+      macos:
+        pluginClass: FlutterMonacoPlugin
   assets:
     - assets/github.svg
     - pubspec.yaml

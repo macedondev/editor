@@ -3,6 +3,16 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-07-05
+
+### Added
+- Added a macOS native focus plugin that performs the real NSWindow first-responder handoff between the Flutter view and the editor's WKWebView. Clicking Monaco now restores typing through the same native mechanism that made right-click "wake the editor up", instead of an in-page focus replay. The package registers as a plugin on macOS; run your app's usual build (CocoaPods integration is automatic) after upgrading.
+- Added `MonacoController.hasNativeInputFocus()`, the authoritative desktop input-readiness signal: whether the OS currently routes keyboard input to the editor (macOS first responder, Windows WebView2 native focus). Returns `null` where the platform cannot answer. Use it instead of inferring readiness from `onFocus`/`onBlur`, which only report DOM focus.
+- Added `MonacoController.releaseNativeInputFocus()` to hand native keyboard focus back to the Flutter view programmatically (mirrors the handoff Windows already had via `webview_flutter_windows`).
+
+### Fixed
+- macOS: user clicks on an already-focused editor no longer run the full in-page focus replay (a blur/refocus cycle that double-blinked the caret). When the native handoff verifies or restores first-responder state, the idempotent in-page focus is enough; the replay now runs only as a fallback when the native plugin is unavailable (for example custom embeddings or tests) or the handoff fails, and at most once per recovery instead of once per retry attempt.
+
 ## [2.1.1] - 2026-06-21
 
 ### Fixed
