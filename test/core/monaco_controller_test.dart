@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_monaco/src/core/monaco_bridge.dart';
+import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../fakes/fake_platform_webview_controller.dart';
@@ -1163,10 +1164,14 @@ void main() {
         }
       });
 
-      test('user focus intent replays input focus on macOS', () async {
+      test('macOS user intent falls back to input-focus replay when the '
+          'native handoff is unavailable', () async {
         debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
         try {
           final bundle = await _createBundle();
+          // Fake default: NativeFocusResult.unsupported (no native plugin
+          // registered, as in headless embeddings). The replay fallback
+          // must kick in to recover stale WKWebView input readiness.
           await bundle.controller.ensureEditorFocus(
             attempts: 1,
             interval: Duration.zero,
@@ -1179,6 +1184,82 @@ void main() {
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
+      });
+
+      test(
+        'macOS user intent skips the replay when the native handoff succeeds',
+        () async {
+          debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+          try {
+            for (final handoff in [
+              NativeFocusResult.granted,
+              NativeFocusResult.alreadyOwned,
+            ]) {
+              final bundle = await _createBundle();
+              bundle.webview.nativeFocusResult = handoff;
+              await bundle.controller.ensureEditorFocus(
+                attempts: 1,
+                interval: Duration.zero,
+                intent: MonacoFocusIntent.user,
+              );
+              final joined = bundle.webview.executed.join('\n');
+              expect(joined, contains('REQUEST_NATIVE_FOCUS'));
+              expect(joined, contains('forceFocus()'));
+              // First responder is real, so the caret-blinking blur/refocus
+              // replay must not run for either handoff outcome.
+              expect(joined, isNot(contains('replayInputFocus')));
+            }
+          } finally {
+            debugDefaultTargetPlatformOverride = null;
+          }
+        },
+      );
+
+      test(
+        'macOS fallback replay runs at most once across retry attempts',
+        () async {
+          debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+          try {
+            final bundle = await _createBundle();
+            bundle.webview.nativeFocusResult = NativeFocusResult.failed;
+            await bundle.controller.ensureEditorFocus(
+              attempts: 3,
+              interval: Duration.zero,
+              intent: MonacoFocusIntent.user,
+            );
+            final replays = bundle.webview.executed
+                .where((s) => s.contains('replayInputFocus'))
+                .length;
+            final plainFocuses = bundle.webview.executed
+                .where(
+                  (s) =>
+                      s.contains('forceFocus()') &&
+                      !s.contains('replayInputFocus'),
+                )
+                .length;
+            // One recovery replay, then idempotent settle retries: repeating
+            // the blur/refocus cycle would multiply the caret blink.
+            expect(replays, 1);
+            expect(plainFocuses, 2);
+          } finally {
+            debugDefaultTargetPlatformOverride = null;
+          }
+        },
+      );
+
+      test('hasNativeInputFocus delegates to the platform layer', () async {
+        final bundle = await _createBundle();
+        bundle.webview.nativeInputFocus = true;
+        expect(await bundle.controller.hasNativeInputFocus(), isTrue);
+        bundle.webview.nativeInputFocus = null;
+        expect(await bundle.controller.hasNativeInputFocus(), isNull);
+        expect(bundle.webview.executed, contains('HAS_NATIVE_INPUT_FOCUS'));
+      });
+
+      test('releaseNativeInputFocus delegates to the platform layer', () async {
+        final bundle = await _createBundle();
+        await bundle.controller.releaseNativeInputFocus();
+        expect(bundle.webview.executed, contains('RELEASE_NATIVE_FOCUS'));
       });
 
       test('maintenance focus intent keeps default idempotent focus', () async {

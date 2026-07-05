@@ -1050,6 +1050,10 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 If you find this package useful, please consider giving it a star on [GitHub](https://github.com/omar-hanafy/flutter_monaco) and sharing it with the Flutter community.
 
+You can also support ongoing development by buying me a coffee:
+
+[![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=omar.hanafy&button_colour=FFDD00&font_colour=000000&font_family=Comic&outline_colour=000000&coffee_colour=ffffff)](https://buymeacoffee.com/omar.hanafy)
+
 ## License
 
 This plugin is licensed under the MIT License. See LICENSE file for details.

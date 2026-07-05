@@ -266,8 +266,18 @@ class WebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> requestNativeFocus() async {
+  Future<NativeFocusResult> requestNativeFocus() async {
     // No-op on web; iframe focus is handled by the in-page focus helpers.
+    return NativeFocusResult.unsupported;
+  }
+
+  @override
+  Future<bool?> hasNativeInputFocus() async => null;
+
+  @override
+  Future<void> releaseNativeFocus() async {
+    // No-op on web; the browser owns focus arbitration between the iframe
+    // and the Flutter view.
   }
 
   @override

@@ -35,8 +35,17 @@ bool _pointerShouldRecoverInputFocus(
   if (!_pointerMayClaimKeyboard(event)) return false;
   final targetPlatform = platform ?? defaultTargetPlatform;
   if (targetPlatform == TargetPlatform.macOS) {
+    // macOS focus signals cannot be trusted for the skip decision: the
+    // WKWebView can silently lose NSWindow first-responder status while both
+    // the Flutter focus node and Monaco's DOM focus still read `true`. Every
+    // primary click therefore routes a user focus intent; the controller
+    // verifies real first-responder state through the native plugin, so a
+    // fresh editor costs one no-op channel query, not a focus replay.
     return true;
   }
+  // Windows/Linux: re-assert focus only when a signal says it is lost.
+  // Replaying focus on an already-focused editor flickers the caret and can
+  // tear down Monaco's context menu.
   return !hasFlutterFocus || !monacoReportsFocused;
 }
 

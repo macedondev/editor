@@ -589,10 +589,23 @@ class MonacoController {
     return intent == MonacoFocusIntent.maintenance;
   }
 
-  static bool _shouldReplayInputFocus(MonacoFocusIntent intent) {
+  /// Whether the in-page focus path must run a full replay (blur + refocus).
+  ///
+  /// The replay recovers stale WKWebView input readiness, but it is also the
+  /// caret double-blink. With the macOS native first-responder handoff in
+  /// place, replay is only the FALLBACK for embeddings where the handoff is
+  /// unavailable (no native plugin registered) or did not take effect - when
+  /// the handoff succeeded, native readiness is real and the idempotent
+  /// in-page focus is enough, exactly as on Windows.
+  static bool _shouldReplayInputFocus({
+    required MonacoFocusIntent intent,
+    required NativeFocusResult nativeFocus,
+  }) {
     return !kIsWeb &&
         defaultTargetPlatform == TargetPlatform.macOS &&
-        intent == MonacoFocusIntent.user;
+        intent == MonacoFocusIntent.user &&
+        (nativeFocus == NativeFocusResult.unsupported ||
+            nativeFocus == NativeFocusResult.failed);
   }
 
   static bool _shouldReleaseFlutterTextInput(MonacoFocusIntent intent) {
@@ -614,10 +627,8 @@ class MonacoController {
     await Future<void>.delayed(Duration.zero);
   }
 
-  static String _forceFocusScript(MonacoFocusIntent intent) {
-    final replayArg = _shouldReplayInputFocus(intent)
-        ? '({ replayInputFocus: true })'
-        : '()';
+  static String _forceFocusScript({bool replayInputFocus = false}) {
+    final replayArg = replayInputFocus ? '({ replayInputFocus: true })' : '()';
     return 'window.flutterMonaco && window.flutterMonaco.forceFocus && '
         'window.flutterMonaco.forceFocus$replayArg';
   }
@@ -636,13 +647,12 @@ class MonacoController {
     if (!_interactionEnabled) return;
     await _ensureReady();
     if (_flutterTextInputHasFocus()) return;
-    // On Windows, WebView2 must hold real Win32 keyboard focus before the
-    // in-page focus below has any effect. No-op on other platforms.
+    // Windows: WebView2 must hold real Win32 keyboard focus before the
+    // in-page focus below has any effect. macOS: the WKWebView must be the
+    // window's first responder. No-op elsewhere.
     await _webViewController.requestNativeFocus();
     // Use robust in-page helper (waits for visibility, layouts, focuses textarea)
-    await _webViewController.runJavaScript(
-      _forceFocusScript(MonacoFocusIntent.maintenance),
-    );
+    await _webViewController.runJavaScript(_forceFocusScript());
   }
 
   /// Attempts to focus the editor multiple times to handle race conditions during layout transitions.
@@ -657,9 +667,12 @@ class MonacoController {
   /// Pass [MonacoFocusIntent.user] only from direct user interaction with the
   /// editor, such as a primary pointer down inside the Monaco view. On desktop
   /// that intent first releases Flutter's text-input channel so a stale
-  /// TextField/dialog client cannot keep swallowing native input. On macOS it
-  /// also replays the in-page focus path because WKWebView native input
-  /// readiness can become stale while Monaco still reports DOM focus.
+  /// TextField/dialog client cannot keep swallowing native input, then hands
+  /// native keyboard focus to the WebView (Win32 focus on Windows, NSWindow
+  /// first responder on macOS). When the macOS handoff is unavailable (no
+  /// native plugin registered) or fails, the first in-page focus attempt
+  /// replays the full focus path as a fallback, because WKWebView native
+  /// input readiness can become stale while Monaco still reports DOM focus.
   Future<void> ensureEditorFocus({
     int attempts = 3,
     Duration interval = const Duration(milliseconds: 24),
@@ -669,6 +682,7 @@ class MonacoController {
     await _ensureReady();
 
     var nativeFocusRequested = false;
+    var replayInputFocus = false;
 
     // On mobile, multiple async focus() calls interrupt the IME lifecycle.
     final isMobileNative =
@@ -688,19 +702,60 @@ class MonacoController {
       if (!_shouldRespectFlutterTextInput(intent) ||
           !_flutterTextInputHasFocus()) {
         if (!nativeFocusRequested) {
-          // On Windows, hand real Win32 keyboard focus to WebView2 first;
-          // the JS focus below cannot take effect without it.
-          await _webViewController.requestNativeFocus();
+          // Hand native keyboard focus to the WebView first; the JS focus
+          // below cannot take effect without it (Win32 focus on Windows,
+          // first responder on macOS).
+          final nativeFocus = await _webViewController.requestNativeFocus();
           nativeFocusRequested = true;
+          replayInputFocus = _shouldReplayInputFocus(
+            intent: intent,
+            nativeFocus: nativeFocus,
+          );
         }
         try {
-          await _webViewController.runJavaScript(_forceFocusScript(intent));
+          await _webViewController.runJavaScript(
+            _forceFocusScript(replayInputFocus: replayInputFocus),
+          );
         } catch (_) {}
+        // Replay at most once per call: later attempts are settle-retries,
+        // and repeating the blur/refocus cycle would multiply the caret
+        // blink the replay already costs.
+        replayInputFocus = false;
       }
       if (i + 1 < effectiveAttempts) {
         await Future<void>.delayed(interval);
       }
     }
+  }
+
+  /// Whether the native layer currently routes keyboard input to the
+  /// editor's WebView.
+  ///
+  /// Returns `true`/`false` where the platform can answer authoritatively
+  /// (macOS: the WKWebView is the window's first responder, via the
+  /// `flutter_monaco` native plugin; Windows: WebView2 reports native
+  /// focus), and `null` where it cannot (Android, iOS, Web, headless test
+  /// environments, or when the WebView cannot be located in the window).
+  ///
+  /// This is the real desktop input-readiness signal: [onFocus]/[onBlur]
+  /// only report Monaco's DOM focus, which can stay `true` while the native
+  /// layer stopped routing keys to the WebView (for example after an
+  /// app switch, dialog, or tab change). Apps that model input readiness
+  /// can use this to verify staleness instead of assuming it.
+  Future<bool?> hasNativeInputFocus() {
+    return _webViewController.hasNativeInputFocus();
+  }
+
+  /// Hands native keyboard focus back to the Flutter view if the editor's
+  /// WebView currently holds it.
+  ///
+  /// Use this for an explicit programmatic handoff out of the editor (for
+  /// example before moving focus to a Flutter text field without a user
+  /// click). macOS makes the Flutter view first responder; Windows asks
+  /// WebView2 to release focus. No-op on other platforms or when the editor
+  /// does not own native focus.
+  Future<void> releaseNativeInputFocus() {
+    return _webViewController.releaseNativeFocus();
   }
 
   /// Forces the Monaco editor to re-measure its container and update its layout.

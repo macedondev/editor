@@ -1,3 +1,7 @@
 LSP-Support/
 build/
 *.log
+upcoming/
+review/
+docs/
+.code/

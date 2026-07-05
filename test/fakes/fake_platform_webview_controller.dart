@@ -126,9 +126,33 @@ class FakePlatformWebViewController implements PlatformWebViewController {
     executed.add('SET_INTERACTION:$enabled');
   }
 
+  /// Result returned by [requestNativeFocus].
+  ///
+  /// Defaults to [NativeFocusResult.unsupported], which matches the real
+  /// controllers in headless test environments (no native plugin registered)
+  /// and therefore exercises the macOS in-page focus replay fallback. Set to
+  /// [NativeFocusResult.granted] or [NativeFocusResult.alreadyOwned] to
+  /// simulate a working native first-responder handoff.
+  NativeFocusResult nativeFocusResult = NativeFocusResult.unsupported;
+
+  /// Value returned by [hasNativeInputFocus].
+  bool? nativeInputFocus;
+
   @override
-  Future<void> requestNativeFocus() async {
+  Future<NativeFocusResult> requestNativeFocus() async {
     executed.add('REQUEST_NATIVE_FOCUS');
+    return nativeFocusResult;
+  }
+
+  @override
+  Future<bool?> hasNativeInputFocus() async {
+    executed.add('HAS_NATIVE_INPUT_FOCUS');
+    return nativeInputFocus;
+  }
+
+  @override
+  Future<void> releaseNativeFocus() async {
+    executed.add('RELEASE_NATIVE_FOCUS');
   }
 
   @override
@@ -287,6 +311,8 @@ class FakePlatformWebViewController implements PlatformWebViewController {
     jsEnabled = false;
     disposed = false;
     interactionEnabled = true;
+    nativeFocusResult = NativeFocusResult.unsupported;
+    nativeInputFocus = null;
     loadedFiles.clear();
   }
 

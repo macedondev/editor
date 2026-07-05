@@ -130,7 +130,14 @@ class WebViewController implements PlatformWebViewController {
       _controller.setInteractionEnabled(enabled);
 
   @override
-  Future<void> requestNativeFocus() => _controller.requestNativeFocus();
+  Future<NativeFocusResult> requestNativeFocus() =>
+      _controller.requestNativeFocus();
+
+  @override
+  Future<bool?> hasNativeInputFocus() => _controller.hasNativeInputFocus();
+
+  @override
+  Future<void> releaseNativeFocus() => _controller.releaseNativeFocus();
 }
 
 /// Normalizes WebView2 `ExecuteScript` results to Dart-friendly types.
