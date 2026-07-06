@@ -547,6 +547,45 @@ class MonacoAssets {
                   return /Android|iPhone|iPad|iPod/i.test(ua) ||
                     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
                 };
+                // Listeners this document registers on PARENT window objects
+                // (the Flutter host page) outlive it when the host removes
+                // the iframe element: removal discards the browsing context
+                // WITHOUT firing pagehide, so the parent-side EventTarget
+                // keeps the handler - and the handler roots this whole
+                // document plus its Monaco instance - indefinitely. Every
+                // parent-side registration therefore goes through this
+                // helper: the wrapper drops itself on the first event after
+                // the frame leaves the parent DOM, pagehide detaches
+                // everything on in-place navigation (the load-retry path),
+                // and the Dart controller calls
+                // __flutterMonacoDetachParentBindings from dispose() so
+                // cleanup does not wait for the next parent viewport event.
+                const parentBindings = [];
+                const bindParentListener = (target, type, handler, options) => {
+                  if (!target) return;
+                  const unbind = () => {
+                    try { target.removeEventListener(type, wrapped, options); } catch (_) {}
+                  };
+                  const wrapped = (event) => {
+                    const frame = window.frameElement;
+                    if (!frame || !frame.isConnected) {
+                      unbind();
+                      return;
+                    }
+                    handler(event);
+                  };
+                  try {
+                    target.addEventListener(type, wrapped, options);
+                    parentBindings.push(unbind);
+                  } catch (_) {}
+                };
+                window.__flutterMonacoDetachParentBindings = () => {
+                  while (parentBindings.length) {
+                    const unbind = parentBindings.pop();
+                    try { unbind(); } catch (_) {}
+                  }
+                };
+                window.addEventListener('pagehide', window.__flutterMonacoDetachParentBindings, { once: true });
                 const getEditorNode = () => {
                   const ed = E();
                   if (!ed) return null;
@@ -1114,7 +1153,8 @@ class MonacoAssets {
                       } catch (_) {}
                       try {
                         if (ownerWindow.parent && ownerWindow.parent !== ownerWindow) {
-                          ownerWindow.parent.visualViewport?.addEventListener(
+                          bindParentListener(
+                            ownerWindow.parent.visualViewport,
                             'resize',
                             updateViewportKeyboardBaseline,
                             { passive: true }
@@ -1352,9 +1392,34 @@ class MonacoAssets {
                     const fitContainer = document.getElementById('editor-container');
                     const fitFrame = fitWindow.frameElement;
                     const fitParent = fitWindow.parent;
-                    if (fitContainer && fitFrame && fitParent && fitParent !== fitWindow) {
+                    if (fitContainer && fitFrame && fitParent && fitParent !== fitWindow && fitParent.visualViewport) {
                       fitWindow.__flutterMonacoViewportFitBound = true;
-                      const fitViewport = fitParent.visualViewport || null;
+                      const fitViewport = fitParent.visualViewport;
+                      // The pin below exists FOR the constrained-visual-viewport
+                      // states only: the soft keyboard shrinking the visual
+                      // viewport, or Safari panning it (nonzero offsets) to
+                      // chase the caret. A frame that merely extends past the
+                      // layout viewport - an editor half-scrolled off inside a
+                      // scrollable Flutter page - must keep its stylesheet
+                      // layout, or its content would anchor to the screen band
+                      // instead of scrolling away with the page. Pinch zoom
+                      // also shrinks the visual viewport but pans freely;
+                      // pinning would fight the user's zoom, so scale != 1 is
+                      // excluded.
+                      const isViewportConstrained = () => {
+                        const scale = fitViewport.scale || 1;
+                        if (Math.abs(scale - 1) > 0.02) return false;
+                        if (fitViewport.offsetLeft > 1 || fitViewport.offsetTop > 1) return true;
+                        const layoutWidth = fitParent.innerWidth || 0;
+                        const layoutHeight = fitParent.innerHeight || 0;
+                        // 24px absorbs scrollbar and rounding noise; soft
+                        // keyboards and hardware-keyboard accessory bars are
+                        // all taller than that.
+                        return (
+                          (layoutHeight > 0 && layoutHeight - fitViewport.height > 24) ||
+                          (layoutWidth > 0 && layoutWidth - fitViewport.width > 24)
+                        );
+                      };
                       let fitRaf = 0;
                       let fitApplied = false;
                       let fitLast = '';
@@ -1384,17 +1449,7 @@ class MonacoAssets {
                           clearViewportFit();
                           return;
                         }
-                        const viewLeft = fitViewport ? fitViewport.offsetLeft : 0;
-                        const viewTop = fitViewport ? fitViewport.offsetTop : 0;
-                        const viewWidth =
-                          (fitViewport && fitViewport.width) || fitParent.innerWidth || rect.width;
-                        const viewHeight =
-                          (fitViewport && fitViewport.height) || fitParent.innerHeight || rect.height;
-                        const left = Math.max(rect.left, viewLeft);
-                        const top = Math.max(rect.top, viewTop);
-                        const width = Math.min(rect.right, viewLeft + viewWidth) - left;
-                        const height = Math.min(rect.bottom, viewTop + viewHeight) - top;
-                        if (width >= rect.width - 1 && height >= rect.height - 1) {
+                        if (!isViewportConstrained()) {
                           clearViewportFit();
                           return;
                         }
@@ -1402,6 +1457,22 @@ class MonacoAssets {
                         // frame (scrolling, route animations) without firing
                         // any parent viewport event.
                         scheduleViewportFit();
+                        const viewLeft = fitViewport.offsetLeft;
+                        const viewTop = fitViewport.offsetTop;
+                        const viewWidth = fitViewport.width || fitParent.innerWidth || rect.width;
+                        const viewHeight = fitViewport.height || fitParent.innerHeight || rect.height;
+                        const left = Math.max(rect.left, viewLeft);
+                        const top = Math.max(rect.top, viewTop);
+                        const width = Math.min(rect.right, viewLeft + viewWidth) - left;
+                        const height = Math.min(rect.bottom, viewTop + viewHeight) - top;
+                        if (width >= rect.width - 1 && height >= rect.height - 1) {
+                          // Fully visible above the keyboard: the stylesheet
+                          // layout is already correct; the reschedule above
+                          // keeps watching while the viewport stays
+                          // constrained.
+                          clearViewportFit();
+                          return;
+                        }
                         // Sub-48px intersections are mid-transition slivers;
                         // keep the previous geometry instead of collapsing.
                         if (width < 48 || height < 48) return;
@@ -1424,23 +1495,9 @@ class MonacoAssets {
                           }
                         } catch (_) {}
                       };
-                      const detachViewportFit = () => {
-                        try {
-                          if (fitViewport) {
-                            fitViewport.removeEventListener('resize', scheduleViewportFit);
-                            fitViewport.removeEventListener('scroll', scheduleViewportFit);
-                          }
-                          fitParent.removeEventListener('resize', scheduleViewportFit);
-                        } catch (_) {}
-                      };
-                      if (fitViewport) {
-                        fitViewport.addEventListener('resize', scheduleViewportFit, { passive: true });
-                        fitViewport.addEventListener('scroll', scheduleViewportFit, { passive: true });
-                      }
-                      fitParent.addEventListener('resize', scheduleViewportFit, { passive: true });
-                      // The parent-side listeners outlive this document unless
-                      // removed; without this, every editor (re)load leaks one.
-                      fitWindow.addEventListener('pagehide', detachViewportFit, { once: true });
+                      bindParentListener(fitViewport, 'resize', scheduleViewportFit, { passive: true });
+                      bindParentListener(fitViewport, 'scroll', scheduleViewportFit, { passive: true });
+                      bindParentListener(fitParent, 'resize', scheduleViewportFit, { passive: true });
                       scheduleViewportFit();
                     }
                   } catch (_) {}

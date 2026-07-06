@@ -3,6 +3,12 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.3] - 2026-07-06
+
+### Fixed
+- Mobile web (#11 hardening): the keyboard viewport-fit no longer engages just because the editor is partially scrolled offscreen. It previously pinned `#editor-container` to the on-screen band whenever the iframe extended past the viewport, so an editor inside a scrollable Flutter page stopped scrolling away with the page (its content "anchored" to the screen), and pinch zoom fought the pin. The pin now activates only while the visual viewport is actually constrained - the soft keyboard shrinking it, or Safari panning it to chase the caret - and never while pinch-zoomed. The keyboard behavior on iOS Safari is unchanged.
+- Mobile web: disposing an editor no longer leaks its Monaco instance. The viewport-fit and keyboard-baseline listeners the editor document registers on the host page's `visualViewport`/window survived `dispose()` (removing an iframe fires no `pagehide`), keeping the whole dead editor document - Monaco included - reachable from the host page. Parent-side listeners now self-detach once the frame leaves the DOM, are all detached eagerly on `dispose()`, and the load-retry path no longer leaks the keyboard-baseline listener either.
+
 ## [2.2.2] - 2026-07-06
 
 ### Fixed

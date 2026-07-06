@@ -75,6 +75,23 @@ void main() {
     expect(source, contains("..style.overscrollBehavior = 'none'"));
   });
 
+  test('dispose detaches parent-side viewport bindings before removing the '
+      'iframe', () {
+    final source = webControllerSource();
+
+    // iframe.remove() fires no pagehide, so without the eager detach every
+    // disposed mobile-web editor leaves its viewport listeners on the host
+    // page, rooting the dead document and its Monaco instance.
+    expect(source, contains('__flutterMonacoDetachParentBindings'));
+
+    final disposeStart = source.indexOf('void dispose() {');
+    expect(disposeStart, isNonNegative);
+    final detachCall = source.indexOf('_detachParentBindings();', disposeStart);
+    final removeCall = source.indexOf('_iframe?.remove();', disposeStart);
+    expect(detachCall, isNonNegative);
+    expect(removeCall, greaterThan(detachCall));
+  });
+
   test('disabling interaction returns the keyboard to Flutter, not just '
       'the pointer', () {
     final source = webControllerSource();
