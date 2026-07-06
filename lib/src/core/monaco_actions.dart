@@ -2,7 +2,7 @@
 
 /// Pre-built Monaco editor action identifiers.
 ///
-/// These IDs are sourced from the bundled Monaco 0.54.0 assets, plus
+/// These IDs are sourced from the bundled Monaco editor assets, plus
 /// Flutter Monaco helper actions that are already part of the public API.
 class MonacoAction {
   MonacoAction._();

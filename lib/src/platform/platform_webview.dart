@@ -86,8 +86,16 @@ class WebViewController implements PlatformWebViewController {
   Future<void> initialize() => _controller.initialize();
 
   @override
-  Future<void> load({String? customCss, bool allowCdnFonts = false}) {
-    return _controller.load(customCss: customCss, allowCdnFonts: allowCdnFonts);
+  Future<void> load({
+    String? customCss,
+    bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
+  }) {
+    return _controller.load(
+      customCss: customCss,
+      allowCdnFonts: allowCdnFonts,
+      allowedConnectSources: allowedConnectSources,
+    );
   }
 
   @override

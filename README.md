@@ -25,6 +25,7 @@ Check the [live demo here](https://omar-hanafy.github.io/flutter-monaco/) to try
 - 📊 **Live Statistics** - Real-time line/character counts and selection info
 - 🎯 **Type-safe API** - Comprehensive typed bindings for Monaco's JavaScript API
 - 🧠 **Custom IntelliSense** - Register multiple completion providers (static or remote)
+- 🔌 **Language Server Protocol** - Connect real language servers (pyright, typescript-language-server, gopls, ...) for server-grade completions, diagnostics, hover, rename, and more
 - 🔍 **Find & Replace** - Full programmatic find/replace with regex support
 - 🎭 **Decorations & Markers** - Add highlights, errors, warnings to your code
 - 📡 **Event Streams** - Listen to content changes, selection, focus events
@@ -355,6 +356,105 @@ String _currentWord(CompletionRequest request) {
 - `triggerKind`, `triggerCharacter` – what caused the completion (manual `Ctrl+Space`, character, etc.).
 
 Need to remove a provider? Call `controller.unregisterCompletionSource(id)` at any time. You can register as many providers as you need. Monaco merges them and sorts via each item's `sortText`.
+
+## Language Server Protocol (LSP)
+
+Flutter Monaco can connect the editor to a **real language server** using Monaco's built-in LSP client (Monaco 0.55+). Once connected, everything the server advertises works directly inside the editor - completions, hover, signature help, go-to-definition, references, rename, formatting, code actions, folding, inlay hints, semantic tokens, and live diagnostics. Nothing is mirrored into Dart: **the package owns the transport, Monaco owns the language smarts.**
+
+```dart
+final connection = await controller.connectLanguageServer(
+  id: 'pyright',
+  transport: LspWebSocketTransport(
+    url: Uri.parse('ws://127.0.0.1:3000/python'),
+  ),
+);
+
+connection.stateChanges.listen(print); // connecting → open → closed/failed
+// ... later
+await connection.disconnect();
+```
+
+### Transports
+
+Pick the transport that matches where your server lives:
+
+| Transport | Use case | Platforms |
+|-----------|----------|-----------|
+| `LspWebSocketTransport` | Server (or a proxy) speaks WebSocket | All (CSP opt-in required) |
+| `LspBridgedTransport` + `LspServerProcess` | Local stdio server binary, no network | Desktop (macOS, Windows) |
+| `LspCustomTransport` | Worker/iframe/custom transports you build in JS | Depends on your code |
+
+**WebSocket** - most stdio language servers don't speak WebSocket natively; front them with a thin proxy:
+
+```sh
+npx jsonrpc-ws-proxy --port 3000 \
+  --languageServers '{"python": ["pyright-langserver", "--stdio"]}'
+```
+
+The editor page's Content-Security-Policy blocks all network connections by default, so allow the endpoint explicitly when creating the editor:
+
+```dart
+final controller = await MonacoController.create(
+  allowedConnectSources: ['ws://127.0.0.1:3000'], // CSP connect-src opt-in
+);
+// or on the widget:
+MonacoEditor(allowedConnectSources: ['wss://lsp.example.com'])
+```
+
+> Browser WebSockets cannot carry custom headers. If your server needs auth,
+> pass a token in the URL query string or build an authenticated socket with
+> `LspCustomTransport`.
+
+**Local stdio server (desktop)** - the killer feature for desktop apps: spawn the server as a child process and relay JSON-RPC through the Flutter bridge. No port, no proxy, no CSP changes:
+
+```dart
+final server = await LspServerProcess.start('pyright-langserver', ['--stdio']);
+final connection = await controller.connectLanguageServer(
+  id: 'pyright',
+  transport: server.transport,
+);
+// Disconnecting (or disposing the controller) stops the process automatically.
+```
+
+> **macOS App Sandbox:** a sandboxed app cannot spawn external binaries
+> (`ProcessException: Operation not permitted`). Disable
+> `com.apple.security.app-sandbox` in your entitlements (fine outside the
+> App Store) or bundle the server inside the app with inherit entitlements.
+> The example app disables the sandbox in debug builds for this reason.
+
+**Custom** - register a factory on `window.flutterMonacoLspTransports` (e.g. via `controller.runJavaScript`) and reference it by name. The factory must return an object implementing Monaco's `IMessageTransport`; Monaco's own helpers (`monaco.lsp.createTransportToWorker`, `createTransportToIFrame`, `WebSocketTransport.fromWebSocket`) all qualify:
+
+```dart
+await controller.runJavaScript('''
+  window.flutterMonacoLspTransports = {
+    myWorker: (config) => monaco.lsp.createTransportToWorker(
+      new Worker(config.workerUrl)),
+  };
+''');
+final connection = await controller.connectLanguageServer(
+  id: 'worker',
+  transport: LspCustomTransport(
+    factoryName: 'myWorker',
+    config: {'workerUrl': 'my-language-server.js'},
+  ),
+);
+```
+
+### Lifecycle, reconnects, and observability
+
+- `connectLanguageServer` resolves only after the LSP `initialize` handshake completes; on failure it throws and nothing is registered.
+- `connection.state` / `stateChanges` report `connecting → open → closed/failed`; `whenClosed` completes when the connection permanently ends.
+- Unexpected drops can auto-reconnect with `reconnectPolicy: LspReconnectPolicy.exponentialBackoff(...)` (WebSocket/custom transports only - a bridged server process must be respawned by your code).
+- `MonacoController.dispose()` tears down all connections and stops bridged server processes.
+- Experimental `connection.sendRequest` / `sendNotification` forward raw JSON-RPC for non-standard server extensions (e.g. `pyright/createConfigFile`). They rely on Monaco internals verified against 0.55.1 and may break on future Monaco upgrades.
+
+### Good to know
+
+- **Model URIs matter.** Language servers key their state on document URIs - create models with stable `file:///...` URIs (`createModel(..., uri: ...)`) instead of relying on Monaco's default `inmemory://` model.
+- **Diagnostics owner.** LSP diagnostics appear as Monaco markers under the owner `'lsp'`; they're cleared automatically when the last connection closes.
+- **Multiple servers.** Allowed, but Monaco synchronizes *all* models to every connected server and all LSP diagnostics share one marker owner - prefer one server per editor unless your servers handle disjoint files.
+- **Multiple editors.** Each `MonacoController` is an isolated WebView with its own JavaScript context; connect each editor separately (most servers handle multiple client connections fine).
+- **Try it:** `flutter run -t lib/lsp_example.dart` in `example/` demonstrates both the WebSocket and the local stdio paths.
 
 ## Multiple Editors Example
 
@@ -811,7 +911,7 @@ The plugin uses a versioned cache system:
 
 - Monaco assets (~30MB) are bundled with the plugin in `assets/monaco/min/`
 - Assets are extracted once to the app's support directory
-- Assets are versioned (e.g., `monaco-0.54.0/`) for clean updates
+- Assets are versioned (e.g., `monaco-0.55.1/`) for clean updates
 - Multiple editors share the same asset installation
 - Thread-safe initialization with re-entrant protection
 

@@ -2,8 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Sandbox disabled in debug/profile so the LSP demo can spawn local
+	     language-server processes (LspServerProcess). Release builds keep the
+	     sandbox; apps that spawn servers in production must either disable it
+	     too (non-App Store) or bundle the server with inherit entitlements. -->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.network.server</key>

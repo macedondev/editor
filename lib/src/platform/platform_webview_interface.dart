@@ -145,7 +145,14 @@ abstract class PlatformWebViewController {
   /// - [allowCdnFonts]: If `true`, relaxes Content-Security-Policy to allow
   ///   loading fonts from remote URLs. **Security note:** This enables
   ///   network requests from the WebView.
-  Future<void> load({String? customCss, bool allowCdnFonts = false});
+  /// - [allowedConnectSources]: Extra Content-Security-Policy `connect-src`
+  ///   origins (e.g. `ws://127.0.0.1:3000` for WebSocket language servers).
+  ///   Changes require recreating the controller.
+  Future<void> load({
+    String? customCss,
+    bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
+  });
 
   /// Sets the background color of the WebView container.
   ///
