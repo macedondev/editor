@@ -31,6 +31,8 @@ import 'package:flutter_monaco/src/platform/platform_webview.dart';
 /// - `error`: JavaScript error, logged to debug console
 /// - `contentChanged`, `selectionChanged`, `focus`, `blur`: Forwarded to controller
 /// - `completionRequest`: Autocompletion request, handled by controller
+/// - `invokeResult`: Async bridge invocation result, handled by controller
+/// - `lspStatus`, `lspMessage`: Language server events, handled by controller
 ///
 /// ### Lifecycle
 ///
@@ -229,6 +231,9 @@ class MonacoBridge extends ChangeNotifier {
       case 'focus':
       case 'blur':
       case 'completionRequest':
+      case 'invokeResult':
+      case 'lspStatus':
+      case 'lspMessage':
         // Handled by controller's raw listener
         break;
 

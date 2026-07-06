@@ -3,7 +3,20 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.3] - 2026-07-06
+## [2.3.0] - 2026-07-06
+
+### Added
+- **Language Server Protocol support.** `MonacoController.connectLanguageServer` connects the editor to a real language server through Monaco 0.55's built-in LSP client; once connected, completions, hover, go-to-definition, references, rename, formatting, code actions, folding, inlay hints, semantic tokens, and diagnostics come straight from the server with nothing to wire up in Dart. The returned `LanguageServerConnection` exposes `state`/`stateChanges`/`whenClosed`, `disconnect()`, and experimental `sendRequest`/`sendNotification` escape hatches for non-standard server extensions. `disconnectLanguageServer`, `languageServerConnections`, and `languageServerConnection(id)` round out the controller API.
+- Three pluggable LSP transports: `LspWebSocketTransport` (server behind a `ws://`/`wss://` endpoint - works on every supported platform), `LspBridgedTransport` (Dart owns the wire; JSON-RPC is relayed through the Flutter bridge - no port, no proxy, no CSP changes), and `LspCustomTransport` (user-registered JavaScript factory on `window.flutterMonacoLspTransports` for worker/iframe/custom setups).
+- `LspServerProcess.start(executable, args)` spawns a local stdio language server (e.g. `pyright-langserver --stdio`) on desktop and hands you a fully wired bridged transport, with stderr forwarding, graceful stop (stdin EOF, then SIGTERM, then SIGKILL), and automatic shutdown when the connection or controller is disposed.
+- Optional automatic reconnect for WebSocket/custom transports via `LspReconnectPolicy.exponentialBackoff(...)` on `connectLanguageServer`; drops after the connection was open reconnect with backoff and surface each attempt on `stateChanges`.
+- `allowedConnectSources` on `MonacoController.create` and the `MonacoEditor` widget: an explicit Content-Security-Policy opt-in for `connect-src` origins. Required for WebSocket language servers (the default policy blocks all `ws://`/`wss://` handshakes); entries that could inject CSP directives are rejected.
+- Exported `LspStdioMessageEncoder`/`LspStdioMessageDecoder` (LSP `Content-Length` framing codec) for apps that integrate their own process or socket plumbing with `LspBridgedTransport`.
+- New LSP demo in the example app (`example/lib/lsp_example.dart`) covering both the WebSocket and the local stdio-process paths.
+
+### Changed
+- Upgraded the bundled Monaco Editor from 0.54.0 to 0.55.1 (first version to ship `monaco.lsp`). Extracted assets re-extract once on first launch after upgrading. The deprecated `monaco.languages.json/css/html/typescript` namespaces are still aliased by Monaco, and the bridge's JSON diagnostics configuration now prefers the new top-level `monaco.json` namespace, so existing code and raw-JS integrations keep working.
+- Removed a stray `debugger;` statement from the bundled Monaco 0.55.1 LSP diagnostics feature (an upstream build artifact) so opening the web inspector while an LSP connection starts no longer pauses the editor.
 
 ### Fixed
 - Mobile web (#11 hardening): the keyboard viewport-fit no longer engages just because the editor is partially scrolled offscreen. It previously pinned `#editor-container` to the on-screen band whenever the iframe extended past the viewport, so an editor inside a scrollable Flutter page stopped scrolling away with the page (its content "anchored" to the screen), and pinch zoom fought the pin. The pin now activates only while the visual viewport is actually constrained - the soft keyboard shrinking it, or Safari panning it to chase the caret - and never while pinch-zoomed. The keyboard behavior on iOS Safari is unchanged.

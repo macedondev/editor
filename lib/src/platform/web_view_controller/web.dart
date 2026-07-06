@@ -392,7 +392,11 @@ class WebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> load({String? customCss, bool allowCdnFonts = false}) async {
+  Future<void> load({
+    String? customCss,
+    bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
+  }) async {
     debugPrint('[WebViewController] Loading Monaco in iframe');
     await _waitForIframeAttachment();
 
@@ -412,6 +416,7 @@ class WebViewController implements PlatformWebViewController {
         messageToken: _messageToken,
         customCss: customCss,
         allowCdnFonts: allowCdnFonts,
+        allowedConnectSources: allowedConnectSources,
       );
 
       final blobUrl = web.URL.createObjectURL(

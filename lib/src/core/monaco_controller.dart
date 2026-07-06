@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_monaco/src/core/monaco_bridge.dart';
+import 'package:flutter_monaco/src/lsp/lsp_connection.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 
 /// A callback function that provides completion items for a given
@@ -41,6 +42,11 @@ enum MonacoFocusIntent {
 class MonacoController {
   MonacoController._(this._bridge, this._webViewController) {
     _wireEvents();
+    _lspManager = MonacoLspManager(
+      bridge: _bridge,
+      runJavaScript: _webViewController.runJavaScript,
+      ensureReady: _ensureReady,
+    );
   }
 
   static const String _jsEvalEnvelopeKey = '__flutterMonacoEval';
@@ -53,6 +59,7 @@ class MonacoController {
   final MonacoBridge _bridge;
   final PlatformWebViewController _webViewController;
   final Completer<void> _onReady = Completer<void>();
+  late final MonacoLspManager _lspManager;
   bool _disposed = false;
   bool _interactionEnabled = true;
 
@@ -112,10 +119,16 @@ class MonacoController {
   /// * [options]: Initial configuration (theme, language, etc.).
   /// * [customCss]: CSS injected into the HTML (e.g., for custom fonts).
   /// * [allowCdnFonts]: If `true`, allows loading fonts from remote URLs (enables network requests).
+  /// * [allowedConnectSources]: Extra Content-Security-Policy `connect-src`
+  ///   origins the editor page may reach (e.g. `['ws://127.0.0.1:3000']`).
+  ///   Required for [connectLanguageServer] with an [LspWebSocketTransport];
+  ///   see that class for details. **Security note:** every listed origin
+  ///   becomes reachable from JavaScript inside the editor.
   static Future<MonacoController> create({
     EditorOptions? options,
     String? customCss,
     bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
     Duration? readyTimeout,
   }) async {
     // Ensure Monaco assets are ready
@@ -145,6 +158,7 @@ class MonacoController {
           await webViewController.load(
             customCss: customCss,
             allowCdnFonts: allowCdnFonts,
+            allowedConnectSources: allowedConnectSources,
           );
           debugPrint(
             '[MonacoController] Loading HTML (Platform: ${kIsWeb ? 'Web' : defaultTargetPlatform.name})',
@@ -1603,6 +1617,94 @@ class MonacoController {
     );
   }
 
+  // --- LANGUAGE SERVER PROTOCOL ---
+
+  /// Connects the editor to a language server and returns a handle to the
+  /// live connection.
+  ///
+  /// Monaco's built-in LSP client (Monaco 0.55+) registers every language
+  /// feature the server advertises - completions, hover, go-to-definition,
+  /// references, rename, formatting, code actions, folding, inlay hints,
+  /// semantic tokens, and diagnostics - directly inside the editor. After
+  /// this call resolves, the editor "just works"; nothing needs to be
+  /// mirrored into Dart.
+  ///
+  /// The call waits for editor readiness, establishes the [transport], and
+  /// resolves only after the LSP `initialize` handshake completes. On
+  /// failure (unreachable server, CSP-blocked WebSocket, handshake timeout)
+  /// it throws and no connection is registered.
+  ///
+  /// * [id]: Unique identifier for this connection within the controller.
+  ///   Reusing an id that is still connected throws a [StateError].
+  /// * [transport]: Where the server lives - [LspWebSocketTransport],
+  ///   [LspBridgedTransport] (see [LspServerProcess] for local stdio servers
+  ///   on desktop), or [LspCustomTransport].
+  /// * [reconnectPolicy]: Optional automatic reconnect for unexpected
+  ///   transport drops after the connection was open. Defaults to no
+  ///   reconnecting. Not supported for bridged transports.
+  /// * [initializationTimeout]: Upper bound for transport setup plus the
+  ///   `initialize` handshake, per attempt.
+  ///
+  /// ### Model URIs matter
+  ///
+  /// Language servers key their state on document URIs. Create models with
+  /// stable, file-like URIs ([createModel] with a `file:///...` uri) so the
+  /// server can associate diagnostics and cross-file features correctly.
+  ///
+  /// ### Scoping and multiple servers
+  ///
+  /// Monaco's LSP client synchronizes **all** models to the server and
+  /// scopes feature providers by the server's advertised
+  /// `documentSelector`s. Servers that advertise capabilities without a
+  /// selector are registered for every language. Multiple concurrent
+  /// connections are allowed, but note that LSP diagnostics from all
+  /// connections share the Monaco marker owner `'lsp'` - prefer one server
+  /// per editor unless your servers publish diagnostics for disjoint files.
+  ///
+  /// ### Example (WebSocket)
+  ///
+  /// ```dart
+  /// final controller = await MonacoController.create(
+  ///   allowedConnectSources: ['ws://127.0.0.1:3000'],
+  /// );
+  /// final connection = await controller.connectLanguageServer(
+  ///   id: 'pyright',
+  ///   transport: LspWebSocketTransport(
+  ///     url: Uri.parse('ws://127.0.0.1:3000/python'),
+  ///   ),
+  /// );
+  /// connection.stateChanges.listen(print);
+  /// ```
+  Future<LanguageServerConnection> connectLanguageServer({
+    required String id,
+    required LspTransport transport,
+    LspReconnectPolicy reconnectPolicy = const LspReconnectPolicy.none(),
+    Duration initializationTimeout = const Duration(seconds: 30),
+  }) {
+    return _lspManager.connect(
+      id: id,
+      transport: transport,
+      reconnectPolicy: reconnectPolicy,
+      initializationTimeout: initializationTimeout,
+    );
+  }
+
+  /// Disconnects the language server connection registered under [id].
+  ///
+  /// No-op when the id is unknown or already closed. Equivalent to calling
+  /// `disconnect()` on the [LanguageServerConnection] handle.
+  Future<void> disconnectLanguageServer(String id) {
+    return _lspManager.disconnect(id);
+  }
+
+  /// The language server connections that have not permanently closed.
+  List<LanguageServerConnection> get languageServerConnections =>
+      _lspManager.connections;
+
+  /// The active language server connection registered under [id], or `null`.
+  LanguageServerConnection? languageServerConnection(String id) =>
+      _lspManager.connection(id);
+
   // --- JAVASCRIPT ESCAPE HATCH ---
 
   /// Executes arbitrary JavaScript in the editor WebView.
@@ -1731,6 +1833,10 @@ class MonacoController {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    // LSP connections must come down before the WebView: closing them fires
+    // bridged-transport onClose callbacks (e.g. killing server processes)
+    // and finalizes connection state streams.
+    _lspManager.dispose();
     _onContentChanged.close();
     _onSelectionChanged.close();
     _onFocus.close();

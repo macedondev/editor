@@ -32,7 +32,11 @@ class _ThrowingWebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> load({String? customCss, bool allowCdnFonts = false}) async {
+  Future<void> load({
+    String? customCss,
+    bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
+  }) async {
     if (throwOnLoadFile) {
       throw StateError('loadFile failed');
     }
