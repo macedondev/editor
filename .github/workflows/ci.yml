@@ -93,10 +93,9 @@ jobs:
           scores = data.get('scores', {})
           granted = scores.get('grantedPoints', 0)
           max_points = scores.get('maxPoints', 0)
-          minimum_points = 150
           if max_points == 0:
             raise SystemExit('pana did not report scores; failing.')
-          if granted < minimum_points:
-            raise SystemExit(f'pana score {granted}/{max_points} (minimum {minimum_points} required).')
+          if granted != max_points:
+            raise SystemExit(f'pana score {granted}/{max_points} (full score required).')
           print(f'pana score {granted}/{max_points}')
           "
