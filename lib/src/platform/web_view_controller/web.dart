@@ -60,6 +60,13 @@ String _monacoVsAssetUrl() {
 /// widgets. Desktop web also reasserts Monaco focus while mobile web avoids
 /// amplifying accidental focus during scroll gestures.
 ///
+/// The reverse handoff is explicit: [releaseNativeFocus] (also run by
+/// [setInteractionEnabled] `false`) blurs Monaco inside the iframe AND
+/// returns the parent document's focus to the Flutter view host, so Flutter
+/// overlays receive keyboard events (Escape, Tab, typing) without needing a
+/// first click. While the iframe element is the parent document's
+/// activeElement, no key event can reach Flutter at all.
+///
 /// See also:
 /// - [MonacoAssets.generateIndexHtml] for HTML generation with web-specific
 ///   worker shims.
@@ -245,23 +252,10 @@ class WebViewController implements PlatformWebViewController {
     _applyInteractionEnabled();
 
     if (!enabled) {
-      // Best-effort: blur Monaco's textarea so keyboard input doesn't keep going to the editor.
-      try {
-        _iframe?.contentWindow?.callMethod(
-          'eval'.toJS,
-          '''
-            (function() {
-              try {
-                var ta = document.querySelector('textarea.inputarea');
-                if (ta && ta.blur) ta.blur();
-                var ae = document.activeElement;
-                if (ae && ae.blur) ae.blur();
-              } catch (e) {}
-            })();
-          '''
-              .toJS,
-        );
-      } catch (_) {}
+      // A pointer-inert editor must not keep the keyboard either: hand
+      // document focus back to Flutter so overlays receive key events
+      // (Escape closes a dialog, Tab traverses it) without a first click.
+      await releaseNativeFocus();
     }
   }
 
@@ -276,8 +270,77 @@ class WebViewController implements PlatformWebViewController {
 
   @override
   Future<void> releaseNativeFocus() async {
-    // No-op on web; the browser owns focus arbitration between the iframe
-    // and the Flutter view.
+    // Web's "native focus" (layer 2 of the focus model) is the browser's
+    // document focus. While the parent document's activeElement is the
+    // editor iframe, every key event dispatches inside the iframe's
+    // document; Flutter's keyboard listeners live on the Flutter view host
+    // in the parent document and receive nothing. Blurring inside the
+    // iframe alone is not enough - keys keep draining into the iframe's
+    // body. The handoff is two-sided, mirroring the desktop
+    // implementations: blur Monaco's textarea INSIDE the iframe, then move
+    // the parent document's focus onto the Flutter view host so keys flow
+    // to Flutter again.
+    _blurInsideIframe();
+    if (_iframeHoldsDocumentFocus) {
+      _focusFlutterHost();
+    }
+  }
+
+  /// Whether the parent document currently routes keyboard input into the
+  /// editor's iframe. Compared by element id (set in [initialize]) because
+  /// JS-interop reference equality is compiler-dependent.
+  bool get _iframeHoldsDocumentFocus {
+    final viewId = _viewId;
+    if (viewId == null) return false;
+    final active = web.document.activeElement;
+    return active != null && active.tagName == 'IFRAME' && active.id == viewId;
+  }
+
+  void _blurInsideIframe() {
+    // Best-effort: blur Monaco's textarea so the editor stops handling keys
+    // and its caret stops blinking while it is interaction-disabled.
+    try {
+      _iframe?.contentWindow?.callMethod(
+        'eval'.toJS,
+        '''
+          (function() {
+            try {
+              var ta = document.querySelector('textarea.inputarea');
+              if (ta && ta.blur) ta.blur();
+              var ae = document.activeElement;
+              if (ae && ae.blur) ae.blur();
+            } catch (e) {}
+          })();
+        '''
+            .toJS,
+      );
+    } catch (_) {}
+  }
+
+  /// Moves the parent document's focus from the editor iframe onto the
+  /// Flutter view host element, so the framework's key listeners receive
+  /// events again.
+  void _focusFlutterHost() {
+    final iframe = _iframe;
+    if (iframe == null) return;
+    try {
+      // closest() keeps this correct under multi-view embeddings: focus the
+      // <flutter-view> THIS editor lives in, not the first one on the page.
+      final host = iframe.closest('flutter-view');
+      if (host == null || !host.isA<web.HTMLElement>()) {
+        // Unknown host DOM (engine change / exotic embedding): at least pull
+        // focus off the iframe so keys stop draining into an inert editor.
+        iframe.blur();
+        return;
+      }
+      final hostElement = host as web.HTMLElement;
+      if (!hostElement.hasAttribute('tabindex')) {
+        // Programmatic focus() requires focusability; -1 keeps the host out
+        // of the user's Tab order.
+        hostElement.tabIndex = -1;
+      }
+      hostElement.focus(web.FocusOptions(preventScroll: true));
+    } catch (_) {}
   }
 
   @override

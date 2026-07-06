@@ -40,7 +40,14 @@ Windows focus is solved at the correct layer by the `webview_flutter_windows` pa
 
 ### Web
 
-The iframe participates in the browser's focus system; `requestNativeFocus()` is a no-op. The platform-specific problem on Web is pointer swallowing by the iframe, handled by the first-party DOM overlay shield (`MonacoScaffold`, `MonacoOverlayBoundary`, `MonacoWebInteractionCoordinator`, `runWithInteractionDisabled`). See the README section "Web: Handling Overlays".
+The iframe participates in the browser's focus system; `requestNativeFocus()` is a no-op. Web has TWO platform-specific problems, and both exist because the browser arbitrates input BEFORE Flutter ever sees it:
+
+- Pointer: the browser's DOM hit test picks the target first. Flutter paints into `pointer-events: none` canvases, so over the editor's rect the topmost interactive DOM element is the iframe, and events dispatched inside an iframe never bubble to the parent document. A Flutter widget painted above the editor (a dialog, a menu) is visible but unreachable - Flutter's hit testing never runs. This is handled by the first-party DOM overlay shield (`MonacoScaffold`, `MonacoOverlayBoundary`, `MonacoWebInteractionCoordinator`, `runWithInteractionDisabled`) and by `setInteractionEnabled(false)` for route overlays. See the README section "Web: Handling Overlays".
+- Keyboard: web's layer-2 "native focus" is the parent document's focus. While the iframe element is the parent `document.activeElement`, every key event dispatches inside the iframe's document and Flutter receives nothing. `setInteractionEnabled(false)` and `releaseNativeInputFocus()` therefore perform a two-sided handoff: blur Monaco inside the iframe AND move the parent document's focus onto the editor's `<flutter-view>` host, so overlays get Escape/Tab/typing without needing a first click.
+
+Nested navigators caveat: `MonacoFocusGuard` observes route pushes only within the `Navigator` its route belongs to. `showDialog` defaults to `useRootNavigator: true`, so an app that hosts the editor inside a nested navigator MUST either observe the root navigator too and drive `setInteractionEnabled` itself, or pass `useRootNavigator: false` consistently. An observer attached to one navigator never notifies a guard subscribed to a route of another navigator.
+
+Also note: while Monaco holds document focus on web, app-global key handlers (`HardwareKeyboard` handlers, `Shortcuts` on ancestors) do not fire - keys never leave the iframe. If the app needs global shortcuts to work while typing in the editor, they must be registered as Monaco keybindings and forwarded over the bridge.
 
 ### Android / iOS (native mobile)
 
