@@ -72,6 +72,15 @@ String _monacoVsAssetUrl() {
 ///   worker shims.
 /// - [native.dart] for native platform implementations.
 class WebViewController implements PlatformWebViewController {
+  /// Monotonic per-controller counter mixed into [_viewId].
+  ///
+  /// A purely clock-derived id collides when several editors initialize in
+  /// the same millisecond (one widget build creating multiple editors): the
+  /// platform view registry rejects the duplicate factory, every
+  /// HtmlElementView resolves to the first iframe, and the other editors
+  /// never become ready.
+  static int _instanceCounter = 0;
+
   final Map<String, void Function(String)> _channels = {};
   bool _disposed = false;
   bool _interactionEnabled = true;
@@ -93,7 +102,9 @@ class WebViewController implements PlatformWebViewController {
 
   @override
   Future<void> initialize() async {
-    _viewId = 'monaco-iframe-${DateTime.now().millisecondsSinceEpoch}';
+    final instanceId = ++_instanceCounter;
+    _viewId =
+        'monaco-iframe-$instanceId-${DateTime.now().millisecondsSinceEpoch}';
     debugPrint('[WebViewController] Initializing iframe approach');
     _messageToken = 'monaco-${DateTime.now().microsecondsSinceEpoch}-$_viewId';
 

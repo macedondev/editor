@@ -229,6 +229,7 @@ class MonacoBridge extends ChangeNotifier {
       case 'focus':
       case 'blur':
       case 'completionRequest':
+      case 'scrollHandoff':
         // Handled by controller's raw listener
         break;
 

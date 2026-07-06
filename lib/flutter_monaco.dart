@@ -75,6 +75,12 @@ export 'src/models/monaco_enums.dart'
         MonacoTheme,
         RenderWhitespace,
         DiagnosticsSeverity;
+export 'src/models/monaco_scroll_handoff.dart'
+    show
+        MonacoScrollHandoff,
+        MonacoScrollHandoffDetails,
+        MonacoScrollHandoffMode,
+        MonacoScrollHandoffSource;
 export 'src/models/monaco_theme_definition.dart'
     show MonacoThemeDefinition, MonacoThemeRule;
 export 'src/models/monaco_types.dart'

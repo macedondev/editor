@@ -3,6 +3,18 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-07-06
+
+### Added
+- Added opt-in **edge scroll handoff** for editors embedded in scrollable pages. With `MonacoEditor(scrollHandoff: MonacoScrollHandoff.edge(...))`, wheel or trackpad scrolling keeps moving Monaco until the editor reaches its scroll edge (or the document has nothing to scroll), then continues into a configured `ScrollController` or the nearest enclosing vertical `Scrollable`; reversing direction hands the wheel back to the editor. Disabled by default: existing apps keep the exact previous scroll-trapping behavior. Ctrl/meta wheel (editor zoom, browser zoom, macOS pinch) and Monaco's own scrollable overlays (suggest list, hover docs, menus, peek editors) are never handed off, and `scrollBeyondLastLine` blank space counts as editor-scrollable. This is edge handoff across the WebView bridge, not native nested scrolling.
+- Added `MonacoScrollHandoff` (with `MonacoScrollHandoffDetails`, `MonacoScrollHandoffMode`, `MonacoScrollHandoffSource`) including an `onHandoff` callback to consume forwarded deltas in app code.
+- Added `MonacoController.onScrollHandoff` (typed stream of unconsumed scroll deltas) and `MonacoController.setScrollHandoffSources(...)` for headless or custom-widget integrations that want the events without `MonacoEditor`'s built-in scrolling.
+- Added an experimental, separately opt-in touch source (`MonacoScrollHandoff.edge(mobileTouch: true)`). Touch forwarding is observation-only (it never blocks Monaco's touch handling, never opens the keyboard, and yields to text selection) and has no native momentum or fling transfer.
+- Added `example/lib/scroll_handoff_example.dart`: a scrollable page with short, long, and handoff-disabled editors plus live toggles.
+
+### Fixed
+- Flutter Web: creating multiple editors in the same frame no longer collides. The iframe view id was derived purely from the wall clock (milliseconds), so editors initialized in the same millisecond shared one platform-view id and one message token: every `HtmlElementView` resolved to the first iframe and the remaining editors never became ready (stuck on the loading spinner). View ids now include a per-instance counter, keeping every editor's iframe and bridge messages isolated.
+
 ## [2.2.2] - 2026-07-06
 
 ### Fixed

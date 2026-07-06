@@ -30,6 +30,7 @@ Check the [live demo here](https://omar-hanafy.github.io/flutter-monaco/) to try
 - 📡 **Event Streams** - Listen to content changes, selection, focus events
 - 🎨 **Themeable Chrome** - Customize loading, error, and status-bar UI via `MonacoEditorTheme`
 - 🧰 **Typed Actions** - `MonacoAction` constants cover Monaco's full command surface (fold, indent, comment, format, find, and more)
+- 🖱️ **Edge Scroll Handoff** - Opt-in: wheel/trackpad scrolling continues into the surrounding page once the editor hits its scroll edge
 
 > **⚠️ Platform Support:** Currently supports **Android**, **iOS**, **macOS**, **Windows**, and **Web**. Linux is **not supported** at this time.
 
@@ -418,6 +419,58 @@ Future<void> _initializeEditors() async {
   setState(() {});
 }
 ```
+
+## Edge Scroll Handoff
+
+By default the editor traps wheel and touch input, the way an embedded WebView always does. For documentation pages, playgrounds, and forms that embed editors inside a scrollable page, you can opt in to **edge scroll handoff**: the editor consumes scroll input while it can, and forwards the rest to a Flutter scrollable once it reaches its scroll edge.
+
+```dart
+final pageScrollController = ScrollController();
+
+SingleChildScrollView(
+  controller: pageScrollController,
+  child: Column(
+    children: [
+      // ... page content ...
+      SizedBox(
+        height: 320,
+        child: MonacoEditor(
+          scrollHandoff: MonacoScrollHandoff.edge(
+            controller: pageScrollController,
+          ),
+        ),
+      ),
+      // ... more page content ...
+    ],
+  ),
+)
+```
+
+Behavior with `MonacoScrollHandoff.edge()`:
+
+- A scrollable editor consumes the wheel until its top/bottom edge, then the page continues scrolling; reversing direction immediately returns the wheel to the editor.
+- A non-scrollable editor (short snippet) hands everything off, so the page scrolls straight through it.
+- The delta goes to the explicit `controller` if provided, otherwise to the nearest enclosing vertical `Scrollable` (`useNearestScrollable: true` by default). Provide `onHandoff` and return `true` to consume deltas yourself.
+- Ctrl/meta wheel (editor `mouseWheelZoom`, browser zoom, macOS pinch) is never handed off, and Monaco-owned scrollable overlays (suggest list, hover docs, menus, peek editors) keep their own wheel handling.
+- `scrollBeyondLastLine` blank space counts as editor-scrollable; set it to `false` in `EditorOptions` if you want handoff to begin at the real last line.
+- Multiple editors route independently: each editor forwards only to its own configured target.
+
+Headless / custom-widget integrations can skip the widget wiring and consume the stream directly:
+
+```dart
+await controller.setScrollHandoffSources(wheel: true);
+controller.onScrollHandoff.listen((details) {
+  // details.deltaY uses wheel semantics (positive scrolls down).
+});
+```
+
+### What edge handoff is (and is not)
+
+This is **edge scroll handoff, not native nested scrolling**. Monaco lives inside a WebView/iframe, so the platform gesture itself never enters Flutter's gesture arena; the package forwards the unconsumed scroll intent across the bridge instead. Wheel and trackpad input is the stable, supported source on macOS, Windows, and desktop web (plus external mice on mobile where the WebView reports wheel events).
+
+Touch forwarding is a separate, **experimental** opt-in (`mobileTouch: true`). It is observation-only: it never blocks Monaco's own touch handling, never opens the keyboard, and yields to text selection, but there is no native momentum or fling transfer, and iOS Safari on Flutter Web remains best-effort.
+
+See `example/lib/scroll_handoff_example.dart` for a full page with short, long, and handoff-disabled editors.
 
 ## API Reference
 

@@ -61,6 +61,8 @@ class MonacoController {
   final _onSelectionChanged = StreamController<Range?>.broadcast();
   final _onFocus = StreamController<void>.broadcast();
   final _onBlur = StreamController<void>.broadcast();
+  final _onScrollHandoff =
+      StreamController<MonacoScrollHandoffDetails>.broadcast();
 
   // Decoration tracking
   List<String> _decorationIds = const [];
@@ -97,6 +99,16 @@ class MonacoController {
 
   /// Stream emitting Monaco DOM blur events.
   Stream<void> get onBlur => _onBlur.stream;
+
+  /// Stream emitting scroll deltas the editor could not consume.
+  ///
+  /// Events only arrive after a source was enabled with
+  /// [setScrollHandoffSources] (the `MonacoEditor.scrollHandoff`
+  /// configuration does this automatically). Malformed bridge payloads are
+  /// dropped silently. See [MonacoScrollHandoffDetails] for the delta
+  /// conventions.
+  Stream<MonacoScrollHandoffDetails> get onScrollHandoff =>
+      _onScrollHandoff.stream;
 
   /// Creates and initializes a new [MonacoController].
   ///
@@ -792,6 +804,26 @@ class MonacoController {
     ''');
   }
 
+  /// Enables or disables edge scroll handoff sources inside the editor page.
+  ///
+  /// When a source is enabled, the page installs the matching DOM listeners
+  /// and posts `scrollHandoff` events (surfaced through [onScrollHandoff])
+  /// for deltas the editor cannot consume. Disabling a source removes its
+  /// listeners again, so both sources disabled restores the exact
+  /// pre-feature behavior. Waits for the editor to be ready.
+  ///
+  /// `MonacoEditor` calls this automatically from its `scrollHandoff`
+  /// configuration; call it directly only for headless or custom-widget
+  /// integrations that consume [onScrollHandoff] themselves.
+  Future<void> setScrollHandoffSources({
+    bool wheel = false,
+    bool touch = false,
+  }) async {
+    await _invokeMonacoCommand('setScrollHandoff', [
+      {'wheel': wheel, 'touch': touch},
+    ]);
+  }
+
   /// Format the document
   Future<void> format() => executeAction(MonacoAction.formatDocument);
 
@@ -877,6 +909,12 @@ class MonacoController {
           break;
         case 'blur':
           _onBlur.add(null);
+          break;
+        case 'scrollHandoff':
+          final details = MonacoScrollHandoffDetails.tryParse(json);
+          if (details != null) {
+            _onScrollHandoff.add(details);
+          }
           break;
         default:
           break;
@@ -1735,6 +1773,7 @@ class MonacoController {
     _onSelectionChanged.close();
     _onFocus.close();
     _onBlur.close();
+    _onScrollHandoff.close();
     _bridge.dispose();
     _webViewController.dispose();
   }

@@ -117,4 +117,33 @@ void main() {
     expect(source, contains('hostElement.tabIndex = -1;'));
     expect(source, contains('web.FocusOptions(preventScroll: true)'));
   });
+
+  test('web view ids stay unique when editors initialize in the same '
+      'millisecond', () {
+    final source = webControllerSource();
+
+    // Multiple editors created in one frame land in the same millisecond,
+    // so a purely clock-derived id collides: the platform view registry
+    // rejects the duplicate factory, every HtmlElementView resolves to the
+    // FIRST iframe, and the other editors never become ready. The id must
+    // include a per-instance counter, and the message token must build on
+    // that unique id so bridge messages cannot cross editors.
+    expect(source, contains('static int _instanceCounter'));
+    expect(source, contains('++_instanceCounter'));
+    expect(
+      source,
+      isNot(
+        contains(
+          "_viewId = 'monaco-iframe-\${DateTime.now().millisecondsSinceEpoch}';",
+        ),
+      ),
+    );
+    final tokenIndex = source.indexOf('_messageToken = ');
+    expect(tokenIndex, isNonNegative);
+    final tokenLine = source.substring(
+      tokenIndex,
+      source.indexOf(';', tokenIndex),
+    );
+    expect(tokenLine, contains(r'$_viewId'));
+  });
 }
