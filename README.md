@@ -734,6 +734,8 @@ MonacoFocusGuard(
 )
 ```
 
+> **Nested navigators:** the guard only sees routes pushed on the `Navigator` its own route belongs to. If your editor lives inside a nested navigator while dialogs go to the root navigator (`showDialog`'s default `useRootNavigator: true`), the root observer never notifies the guard. In that layout, observe every navigator that can host overlays and call `controller.setInteractionEnabled(...)` from your own observer instead - `setInteractionEnabled(false)` also hands the keyboard back to Flutter so Escape/Tab reach the dialog.
+
 #### 2. Static overlays (FABs, drawers, in-tree stacked widgets)
 
 Persistent widgets that share the page with the editor - a `floatingActionButton`, a `Drawer`, a persistent footer, anything inside a `Stack` over the editor - do not push a route, so the focus guard cannot fire for them. The package provides two complementary tools:

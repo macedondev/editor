@@ -3,6 +3,14 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] - 2026-07-06
+
+### Fixed
+- Flutter Web: disabling editor interaction now returns the keyboard to Flutter, not just the pointer. `setInteractionEnabled(false)` (and the `MonacoFocusGuard` route-overlay path that calls it) previously made the iframe pointer-inert and blurred Monaco's textarea, but the parent document's focus stayed ON the iframe element, so every key event kept dispatching inside the iframe: Escape could not close a dialog shown over the editor, Tab could not traverse it, and a button-only alert stayed keyboard-dead until its first click. The interaction toggle now performs the same two-sided handoff as the desktop platforms: blur inside the iframe, then move the parent document's focus onto the editor's own `<flutter-view>` host (multi-view safe, `tabindex` fallback, no scroll jump), so Flutter overlays receive keys immediately. `MonacoController.releaseNativeInputFocus()` performs the same handoff on web instead of being a no-op.
+
+### Docs
+- Documented that `MonacoFocusGuard` bridges route overlays only within its own `Navigator`: with nested navigators (for example `showDialog` with its default `useRootNavigator: true` while the editor lives in a nested navigator), the observer on one navigator never notifies a guard subscribed to a route of another. Apps with nested navigators should observe every navigator that can host overlays and drive `setInteractionEnabled` from that (see the focus guide).
+
 ## [2.2.1] - 2026-07-06
 
 ### Fixed

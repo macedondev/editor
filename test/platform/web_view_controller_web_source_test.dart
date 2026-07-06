@@ -74,4 +74,47 @@ void main() {
     expect(source, contains("..style.touchAction = 'none'"));
     expect(source, contains("..style.overscrollBehavior = 'none'"));
   });
+
+  test('disabling interaction returns the keyboard to Flutter, not just '
+      'the pointer', () {
+    final source = webControllerSource();
+
+    // setInteractionEnabled(false) must run the full two-sided handoff.
+    final disableStart = source.indexOf(
+      'Future<void> setInteractionEnabled(bool enabled) async {',
+    );
+    final disableEnd = source.indexOf(
+      'Future<NativeFocusResult> requestNativeFocus()',
+    );
+    expect(disableStart, isNonNegative);
+    expect(disableEnd, greaterThan(disableStart));
+    final disableBlock = source.substring(disableStart, disableEnd);
+    expect(disableBlock, contains('await releaseNativeFocus();'));
+
+    // releaseNativeFocus is the web layer-2 handoff: blur INSIDE the iframe
+    // AND move the parent document's focus onto the Flutter view host.
+    // Regressing it to a no-op silently kills Escape/Tab on dialogs shown
+    // over the editor (they only recover after a first click).
+    final releaseStart = source.indexOf(
+      'Future<void> releaseNativeFocus() async {',
+    );
+    expect(releaseStart, isNonNegative);
+    expect(source, contains('_blurInsideIframe();'));
+    expect(source, contains('if (_iframeHoldsDocumentFocus)'));
+    expect(source, contains('_focusFlutterHost();'));
+
+    // Parent-document focus checks compare by element id: JS-interop
+    // reference equality is compiler-dependent (dart2js vs dart2wasm).
+    expect(source, contains('bool get _iframeHoldsDocumentFocus'));
+    expect(
+      source,
+      contains("active.tagName == 'IFRAME' && active.id == viewId"),
+    );
+
+    // The host focus must be multi-view safe (the editor's OWN view),
+    // programmatically focusable, and must not scroll the page.
+    expect(source, contains("iframe.closest('flutter-view')"));
+    expect(source, contains('hostElement.tabIndex = -1;'));
+    expect(source, contains('web.FocusOptions(preventScroll: true)'));
+  });
 }
