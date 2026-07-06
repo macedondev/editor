@@ -88,7 +88,11 @@ class WebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> load({String? customCss, bool allowCdnFonts = false}) {
+  Future<void> load({
+    String? customCss,
+    bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
+  }) {
     throw UnsupportedError('WebView not supported on this platform');
   }
 }

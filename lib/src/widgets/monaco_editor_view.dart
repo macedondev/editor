@@ -84,6 +84,7 @@ class MonacoEditor extends StatefulWidget {
     this.autofocus = false,
     this.customCss,
     this.allowCdnFonts = false,
+    this.allowedConnectSources = const [],
     this.readyTimeout,
     this.onReady,
     this.onContentChanged,
@@ -143,6 +144,18 @@ class MonacoEditor extends StatefulWidget {
   /// **Security Note**: This enables network requests from the WebView.
   /// Changing this property triggers a full reload.
   final bool allowCdnFonts;
+
+  /// Extra Content-Security-Policy `connect-src` origins the editor page may
+  /// reach (e.g. `['ws://127.0.0.1:3000']` for a WebSocket language server).
+  ///
+  /// Required for `MonacoController.connectLanguageServer` with an
+  /// `LspWebSocketTransport`. Only used when this widget owns the controller
+  /// (no [controller] supplied). Changing this property triggers a full
+  /// reload.
+  ///
+  /// **Security Note**: Every listed origin becomes reachable from
+  /// JavaScript inside the editor.
+  final List<String> allowedConnectSources;
 
   /// The maximum duration to wait for the editor to initialize before showing an error.
   final Duration? readyTimeout;
@@ -299,7 +312,11 @@ class _MonacoEditorState extends State<MonacoEditor> {
     // If we OWN the controller and HTML-affecting knobs changed, rebuild.
     final htmlKnobsChanged =
         (oldWidget.customCss != widget.customCss) ||
-        (oldWidget.allowCdnFonts != widget.allowCdnFonts);
+        (oldWidget.allowCdnFonts != widget.allowCdnFonts) ||
+        !listEquals(
+          oldWidget.allowedConnectSources,
+          widget.allowedConnectSources,
+        );
     if (_ownsController && htmlKnobsChanged) {
       _teardown(disposeOldController: true);
       _bootstrap();
@@ -365,6 +382,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
                 options: widget.options,
                 customCss: widget.customCss,
                 allowCdnFonts: widget.allowCdnFonts,
+                allowedConnectSources: widget.allowedConnectSources,
                 readyTimeout: widget.readyTimeout,
               ));
 
