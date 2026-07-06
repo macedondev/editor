@@ -52,7 +52,7 @@ class MonacoAssets {
   ///
   /// When this version changes, [ensureReady] will re-extract assets on
   /// native platforms to ensure the correct version is used.
-  static const String monacoVersion = '0.54.0';
+  static const String monacoVersion = '0.55.1';
 
   /// Cache-busting version for generated HTML and the JS bridge contract.
   ///
@@ -64,9 +64,39 @@ class MonacoAssets {
   ///
   /// Bump this whenever [generateIndexHtml] output or the JS bridge changes
   /// in a way Dart depends on.
-  static const int htmlGenerationVersion = 3;
+  ///
+  /// v5: added the LSP bridge (`flutterMonaco.lsp`, `flutterMonacoInvokeAsync`)
+  /// and the edge scroll handoff module (`flutterMonaco.setScrollHandoff` and
+  /// the `scrollHandoff` event).
+  static const int htmlGenerationVersion = 5;
 
   static Completer<void>? _initCompleter;
+
+  /// Validates and joins extra CSP `connect-src` source expressions.
+  ///
+  /// Returns either an empty string or a leading-space-joined list ready to
+  /// splice after `connect-src 'self' blob:`. Throws [ArgumentError] for
+  /// entries that could break out of the policy attribute or smuggle in
+  /// additional directives (whitespace, quotes, `;`, `<`, `>`).
+  static String _sanitizeConnectSources(List<String> sources) {
+    if (sources.isEmpty) return '';
+    final forbidden = RegExp(r'''[\s;'"<>]''');
+    final cleaned = <String>[];
+    for (final raw in sources) {
+      final source = raw.trim();
+      if (source.isEmpty) continue;
+      if (forbidden.hasMatch(source)) {
+        throw ArgumentError.value(
+          raw,
+          'allowedConnectSources',
+          'Each entry must be a single CSP source expression without '
+              'whitespace, quotes, or ";" (e.g. "wss://lsp.example.com")',
+        );
+      }
+      cleaned.add(source);
+    }
+    return cleaned.isEmpty ? '' : ' ${cleaned.join(' ')}';
+  }
 
   // HTML cache to avoid regenerating the same HTML multiple times
   static final Map<int, String> _htmlCache = {};
@@ -278,6 +308,15 @@ class MonacoAssets {
   ///   and `font-src`, enabling CDN-hosted fonts. **Security note:** This allows
   ///   network requests from the editor.
   ///
+  /// - [allowedConnectSources]: Additional CSP `connect-src` source
+  ///   expressions (e.g. `wss://lsp.example.com` or `ws://127.0.0.1:3000`).
+  ///   Required for WebSocket language servers - the default policy of
+  ///   `'self' blob:` blocks every `ws://`/`wss://` handshake. Each entry
+  ///   must be a single CSP source expression; entries containing
+  ///   whitespace, quotes, or `;` throw an [ArgumentError] to prevent
+  ///   policy injection. **Security note:** every listed origin becomes
+  ///   reachable from any JavaScript running inside the editor page.
+  ///
   /// ### The `flutterMonaco` Bridge
   ///
   /// The generated HTML defines `window.flutterMonaco` with methods like:
@@ -300,7 +339,9 @@ class MonacoAssets {
     String? messageToken,
     String? customCss,
     bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
   }) {
+    final extraConnectSources = _sanitizeConnectSources(allowedConnectSources);
     // Platform-specific initialization scripts
     String platformScript = '';
 
@@ -422,10 +463,11 @@ class MonacoAssets {
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' file: 'unsafe-inline' 'unsafe-eval'; script-src 'self' file: 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'${allowCdnFonts ? ' https:' : ''}; font-src 'self' file: data:${allowCdnFonts ? ' https:' : ''}; img-src 'self' data: blob: file:; worker-src 'self' blob:; connect-src 'self' blob:;"
+      content="default-src 'self' file: 'unsafe-inline' 'unsafe-eval'; script-src 'self' file: 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'${allowCdnFonts ? ' https:' : ''}; font-src 'self' file: data:${allowCdnFonts ? ' https:' : ''}; img-src 'self' data: blob: file:; worker-src 'self' blob:; connect-src 'self' blob:$extraConnectSources;"
     />
     <!-- NOTE: connect-src intentionally limits in-page requests to self/blob.
-         If you need the embedded JS to call remote APIs directly, add https: to connect-src. -->
+         Opt into remote endpoints (e.g. WebSocket language servers) via the
+         allowedConnectSources parameter instead of editing this policy. -->
     <style>
       html, body, #editor-container {
         width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
@@ -547,6 +589,45 @@ class MonacoAssets {
                   return /Android|iPhone|iPad|iPod/i.test(ua) ||
                     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
                 };
+                // Listeners this document registers on PARENT window objects
+                // (the Flutter host page) outlive it when the host removes
+                // the iframe element: removal discards the browsing context
+                // WITHOUT firing pagehide, so the parent-side EventTarget
+                // keeps the handler - and the handler roots this whole
+                // document plus its Monaco instance - indefinitely. Every
+                // parent-side registration therefore goes through this
+                // helper: the wrapper drops itself on the first event after
+                // the frame leaves the parent DOM, pagehide detaches
+                // everything on in-place navigation (the load-retry path),
+                // and the Dart controller calls
+                // __flutterMonacoDetachParentBindings from dispose() so
+                // cleanup does not wait for the next parent viewport event.
+                const parentBindings = [];
+                const bindParentListener = (target, type, handler, options) => {
+                  if (!target) return;
+                  const unbind = () => {
+                    try { target.removeEventListener(type, wrapped, options); } catch (_) {}
+                  };
+                  const wrapped = (event) => {
+                    const frame = window.frameElement;
+                    if (!frame || !frame.isConnected) {
+                      unbind();
+                      return;
+                    }
+                    handler(event);
+                  };
+                  try {
+                    target.addEventListener(type, wrapped, options);
+                    parentBindings.push(unbind);
+                  } catch (_) {}
+                };
+                window.__flutterMonacoDetachParentBindings = () => {
+                  while (parentBindings.length) {
+                    const unbind = parentBindings.pop();
+                    try { unbind(); } catch (_) {}
+                  }
+                };
+                window.addEventListener('pagehide', window.__flutterMonacoDetachParentBindings, { once: true });
                 const getEditorNode = () => {
                   const ed = E();
                   if (!ed) return null;
@@ -647,6 +728,53 @@ class MonacoAssets {
                       },
                     };
                   }
+                };
+
+                // Async bridge dispatcher.
+                //
+                // flutterMonacoInvoke returns synchronously, which cannot
+                // represent promise-returning helpers (LSP connect must await
+                // the initialize handshake). This variant resolves the method
+                // (dotted paths reach sub-namespaces like 'lsp.connect'),
+                // awaits the result, and reports back over flutterChannel as
+                // an 'invokeResult' event that Dart correlates by requestId.
+                // This behaves identically on Android, iOS, macOS, Windows,
+                // and Web because no platform has to unwrap a JS Promise.
+                window.flutterMonacoInvokeAsync = (requestId, method, args) => {
+                  const respond = (payload) => {
+                    postMessageToFlutter(Object.assign(
+                      { event: 'invokeResult', requestId: requestId }, payload));
+                  };
+                  Promise.resolve()
+                    .then(() => {
+                      let parent = null;
+                      let target = window.flutterMonaco;
+                      for (const part of String(method).split('.')) {
+                        parent = target;
+                        target = target ? target[part] : undefined;
+                      }
+                      if (typeof target !== 'function') {
+                        throw new Error('Unknown flutterMonaco method: ' + method);
+                      }
+                      return target.apply(parent, Array.isArray(args) ? args : []);
+                    })
+                    .then((value) => respond({
+                      ok: true,
+                      isUndefined: typeof value === 'undefined',
+                      value: typeof value === 'undefined' ? null : value,
+                    }))
+                    .catch((e) => {
+                      console.error('[flutterMonaco] async invoke failed:', method, e);
+                      respond({
+                        ok: false,
+                        error: {
+                          name: e && e.name ? String(e.name) : 'Error',
+                          message: e && e.message ? String(e.message) : String(e),
+                          stack: e && e.stack ? String(e.stack) : null,
+                        },
+                      });
+                    });
+                  return true;
                 };
 
                 window.flutterMonaco = {
@@ -822,9 +950,18 @@ class MonacoAssets {
                   deltaDecorations: (oldIds, newDecos) =>
                     requireEditor().deltaDecorations(oldIds || [], newDecos || []),
 
-                  // JSON language diagnostics
+                  // JSON language diagnostics.
+                  // Monaco 0.55 moved the language defaults from
+                  // monaco.languages.json to the top-level monaco.json and
+                  // deprecated the old path; prefer the new namespace and
+                  // fall back so a vendored older build keeps working.
                   setJsonDiagnosticsOptions: (diagnostics) => {
-                    monaco.languages.json.jsonDefaults.setDiagnosticsOptions(diagnostics);
+                    const jsonApi = (typeof monaco.json !== 'undefined' && monaco.json) ||
+                      (monaco.languages && monaco.languages.json);
+                    if (!jsonApi || !jsonApi.jsonDefaults) {
+                      throw new Error('Monaco JSON language API is not available.');
+                    }
+                    jsonApi.jsonDefaults.setDiagnosticsOptions(diagnostics);
                     return true;
                   },
 
@@ -1114,7 +1251,8 @@ class MonacoAssets {
                       } catch (_) {}
                       try {
                         if (ownerWindow.parent && ownerWindow.parent !== ownerWindow) {
-                          ownerWindow.parent.visualViewport?.addEventListener(
+                          bindParentListener(
+                            ownerWindow.parent.visualViewport,
                             'resize',
                             updateViewportKeyboardBaseline,
                             { passive: true }
@@ -1352,9 +1490,34 @@ class MonacoAssets {
                     const fitContainer = document.getElementById('editor-container');
                     const fitFrame = fitWindow.frameElement;
                     const fitParent = fitWindow.parent;
-                    if (fitContainer && fitFrame && fitParent && fitParent !== fitWindow) {
+                    if (fitContainer && fitFrame && fitParent && fitParent !== fitWindow && fitParent.visualViewport) {
                       fitWindow.__flutterMonacoViewportFitBound = true;
-                      const fitViewport = fitParent.visualViewport || null;
+                      const fitViewport = fitParent.visualViewport;
+                      // The pin below exists FOR the constrained-visual-viewport
+                      // states only: the soft keyboard shrinking the visual
+                      // viewport, or Safari panning it (nonzero offsets) to
+                      // chase the caret. A frame that merely extends past the
+                      // layout viewport - an editor half-scrolled off inside a
+                      // scrollable Flutter page - must keep its stylesheet
+                      // layout, or its content would anchor to the screen band
+                      // instead of scrolling away with the page. Pinch zoom
+                      // also shrinks the visual viewport but pans freely;
+                      // pinning would fight the user's zoom, so scale != 1 is
+                      // excluded.
+                      const isViewportConstrained = () => {
+                        const scale = fitViewport.scale || 1;
+                        if (Math.abs(scale - 1) > 0.02) return false;
+                        if (fitViewport.offsetLeft > 1 || fitViewport.offsetTop > 1) return true;
+                        const layoutWidth = fitParent.innerWidth || 0;
+                        const layoutHeight = fitParent.innerHeight || 0;
+                        // 24px absorbs scrollbar and rounding noise; soft
+                        // keyboards and hardware-keyboard accessory bars are
+                        // all taller than that.
+                        return (
+                          (layoutHeight > 0 && layoutHeight - fitViewport.height > 24) ||
+                          (layoutWidth > 0 && layoutWidth - fitViewport.width > 24)
+                        );
+                      };
                       let fitRaf = 0;
                       let fitApplied = false;
                       let fitLast = '';
@@ -1384,17 +1547,7 @@ class MonacoAssets {
                           clearViewportFit();
                           return;
                         }
-                        const viewLeft = fitViewport ? fitViewport.offsetLeft : 0;
-                        const viewTop = fitViewport ? fitViewport.offsetTop : 0;
-                        const viewWidth =
-                          (fitViewport && fitViewport.width) || fitParent.innerWidth || rect.width;
-                        const viewHeight =
-                          (fitViewport && fitViewport.height) || fitParent.innerHeight || rect.height;
-                        const left = Math.max(rect.left, viewLeft);
-                        const top = Math.max(rect.top, viewTop);
-                        const width = Math.min(rect.right, viewLeft + viewWidth) - left;
-                        const height = Math.min(rect.bottom, viewTop + viewHeight) - top;
-                        if (width >= rect.width - 1 && height >= rect.height - 1) {
+                        if (!isViewportConstrained()) {
                           clearViewportFit();
                           return;
                         }
@@ -1402,6 +1555,22 @@ class MonacoAssets {
                         // frame (scrolling, route animations) without firing
                         // any parent viewport event.
                         scheduleViewportFit();
+                        const viewLeft = fitViewport.offsetLeft;
+                        const viewTop = fitViewport.offsetTop;
+                        const viewWidth = fitViewport.width || fitParent.innerWidth || rect.width;
+                        const viewHeight = fitViewport.height || fitParent.innerHeight || rect.height;
+                        const left = Math.max(rect.left, viewLeft);
+                        const top = Math.max(rect.top, viewTop);
+                        const width = Math.min(rect.right, viewLeft + viewWidth) - left;
+                        const height = Math.min(rect.bottom, viewTop + viewHeight) - top;
+                        if (width >= rect.width - 1 && height >= rect.height - 1) {
+                          // Fully visible above the keyboard: the stylesheet
+                          // layout is already correct; the reschedule above
+                          // keeps watching while the viewport stays
+                          // constrained.
+                          clearViewportFit();
+                          return;
+                        }
                         // Sub-48px intersections are mid-transition slivers;
                         // keep the previous geometry instead of collapsing.
                         if (width < 48 || height < 48) return;
@@ -1424,23 +1593,9 @@ class MonacoAssets {
                           }
                         } catch (_) {}
                       };
-                      const detachViewportFit = () => {
-                        try {
-                          if (fitViewport) {
-                            fitViewport.removeEventListener('resize', scheduleViewportFit);
-                            fitViewport.removeEventListener('scroll', scheduleViewportFit);
-                          }
-                          fitParent.removeEventListener('resize', scheduleViewportFit);
-                        } catch (_) {}
-                      };
-                      if (fitViewport) {
-                        fitViewport.addEventListener('resize', scheduleViewportFit, { passive: true });
-                        fitViewport.addEventListener('scroll', scheduleViewportFit, { passive: true });
-                      }
-                      fitParent.addEventListener('resize', scheduleViewportFit, { passive: true });
-                      // The parent-side listeners outlive this document unless
-                      // removed; without this, every editor (re)load leaks one.
-                      fitWindow.addEventListener('pagehide', detachViewportFit, { once: true });
+                      bindParentListener(fitViewport, 'resize', scheduleViewportFit, { passive: true });
+                      bindParentListener(fitViewport, 'scroll', scheduleViewportFit, { passive: true });
+                      bindParentListener(fitParent, 'resize', scheduleViewportFit, { passive: true });
                       scheduleViewportFit();
                     }
                   } catch (_) {}
@@ -1584,6 +1739,650 @@ class MonacoAssets {
                     } finally {
                       delete completion.resolvers[requestId];
                     }
+                  };
+                })();
+
+                // Edge scroll handoff (opt-in): forward scroll deltas the
+                // editor cannot consume to Flutter, which applies them to a
+                // host scrollable. Sources are toggled from Dart through
+                // flutterMonaco.setScrollHandoff; while disabled this module
+                // installs no DOM listeners and adds no per-event work, so
+                // the default editor behavior is untouched.
+                (function () {
+                  const EDGE_EPSILON = 1;
+                  const TOUCH_SLOP = 8;
+                  const handoffState = {
+                    wheel: false,
+                    touch: false,
+                    touchGesture: null,
+                    touchSelectionWatch: null,
+                  };
+
+                  const scrollMetrics = (ed) => {
+                    let layout = null;
+                    try { layout = ed.getLayoutInfo ? ed.getLayoutInfo() : null; } catch (_) {}
+                    const viewportHeight = (layout && layout.height) || 0;
+                    const viewportWidth = (layout && layout.width) || 0;
+                    const scrollTop = ed.getScrollTop ? ed.getScrollTop() : 0;
+                    const scrollLeft = ed.getScrollLeft ? ed.getScrollLeft() : 0;
+                    const scrollHeight = ed.getScrollHeight ? ed.getScrollHeight() : 0;
+                    const scrollWidth = ed.getScrollWidth ? ed.getScrollWidth() : 0;
+                    const maxTop = Math.max(0, scrollHeight - viewportHeight);
+                    const maxLeft = Math.max(0, scrollWidth - viewportWidth);
+                    return {
+                      maxTop: maxTop,
+                      viewportHeight: viewportHeight,
+                      atTop: scrollTop <= EDGE_EPSILON,
+                      atBottom: scrollTop >= maxTop - EDGE_EPSILON,
+                      atLeft: scrollLeft <= EDGE_EPSILON,
+                      atRight: scrollLeft >= maxLeft - EDGE_EPSILON,
+                    };
+                  };
+
+                  const editorLineHeight = (ed) => {
+                    try {
+                      const value = ed.getOption(monaco.editor.EditorOption.lineHeight);
+                      if (typeof value === 'number' && value > 0) return value;
+                    } catch (_) {}
+                    return 20;
+                  };
+
+                  const editorWheelDisabled = (ed) => {
+                    try {
+                      const scrollbar = ed.getOption(monaco.editor.EditorOption.scrollbar);
+                      return !!scrollbar && scrollbar.handleMouseWheel === false;
+                    } catch (_) {}
+                    return false;
+                  };
+
+                  // Default deny: only the main editor scroll region hands
+                  // off. Monaco-owned overlays (suggest list, hover, find,
+                  // menus, peek editors) keep their own wheel handling, and
+                  // widgets rendered outside the editor DOM never match.
+                  const HANDOFF_BLOCKED_WIDGETS = [
+                    '.suggest-widget', '.suggest-details-container',
+                    '.monaco-hover', '.parameter-hints-widget',
+                    '.find-widget', '.context-view', '.monaco-menu',
+                    '.quick-input-widget', '.zone-widget',
+                    '.peekview-widget', '.rename-box', '.monaco-inputbox',
+                  ].join(', ');
+                  const isMainScrollRegion = (ed, target) => {
+                    const editorDom = ed.getDomNode ? ed.getDomNode() : null;
+                    if (!editorDom) return false;
+                    let el = target;
+                    if (el && el.nodeType !== 1) el = el.parentElement;
+                    if (!el || !el.closest || !editorDom.contains(el)) return false;
+                    if (el.closest(HANDOFF_BLOCKED_WIDGETS)) return false;
+                    if (el.closest('.monaco-editor') !== editorDom) return false;
+                    const scrollable = el.closest('.monaco-scrollable-element');
+                    if (scrollable && !scrollable.classList.contains('editor-scrollable')) {
+                      return false;
+                    }
+                    return true;
+                  };
+
+                  const postHandoff = (source, deltaX, deltaY, metrics) => {
+                    post('scrollHandoff', {
+                      source: source,
+                      deltaX: deltaX,
+                      deltaY: deltaY,
+                      atTop: metrics.atTop,
+                      atBottom: metrics.atBottom,
+                      atLeft: metrics.atLeft,
+                      atRight: metrics.atRight,
+                    });
+                  };
+
+                  const onHandoffWheel = (event) => {
+                    try {
+                      if (event.defaultPrevented) return;
+                      // Zoom owns ctrl/meta wheel: editor mouseWheelZoom,
+                      // browser zoom, and macOS pinch (reported as ctrl).
+                      if (event.ctrlKey || event.metaKey) return;
+                      const ed = E();
+                      if (!ed || !isMainScrollRegion(ed, event.target)) return;
+
+                      const metrics = scrollMetrics(ed);
+                      let deltaX = event.deltaX || 0;
+                      let deltaY = event.deltaY || 0;
+                      if (event.deltaMode === 1) {
+                        const lineHeight = editorLineHeight(ed);
+                        deltaX *= lineHeight;
+                        deltaY *= lineHeight;
+                      } else if (event.deltaMode === 2) {
+                        deltaX *= metrics.viewportHeight;
+                        deltaY *= metrics.viewportHeight;
+                      }
+                      // Vertical handoff only: dominant-horizontal wheel
+                      // input stays with the editor.
+                      if (deltaY === 0 || Math.abs(deltaY) <= Math.abs(deltaX)) return;
+
+                      const wantsDown = deltaY > 0;
+                      const editorCannotConsume =
+                        editorWheelDisabled(ed) ||
+                        metrics.maxTop <= EDGE_EPSILON ||
+                        (wantsDown ? metrics.atBottom : metrics.atTop);
+                      if (!editorCannotConsume) return;
+
+                      event.preventDefault();
+                      event.stopPropagation();
+                      postHandoff('wheel', deltaX, deltaY, metrics);
+                    } catch (_) {}
+                  };
+
+                  // Touch forwarding is observation-only: passive listeners
+                  // that never block, refocus, or select, so Monaco's touch
+                  // handling and the mobile focus guards keep working exactly
+                  // as before. Worst case is an extra parent scroll, never a
+                  // broken editor gesture.
+                  const gestureTouch = (event) => {
+                    const gesture = handoffState.touchGesture;
+                    if (!gesture) return null;
+                    const touches = event.changedTouches || [];
+                    for (let i = 0; i < touches.length; i++) {
+                      if (touches[i].identifier === gesture.id) return touches[i];
+                    }
+                    return null;
+                  };
+                  const onHandoffTouchStart = (event) => {
+                    try {
+                      if (event.touches && event.touches.length > 1) {
+                        handoffState.touchGesture = null;
+                        return;
+                      }
+                      const touchPoint = (event.touches && event.touches[0]) ||
+                        (event.changedTouches && event.changedTouches[0]);
+                      if (!touchPoint) return;
+                      const ed = E();
+                      if (!ed || !isMainScrollRegion(ed, event.target)) {
+                        handoffState.touchGesture = null;
+                        return;
+                      }
+                      handoffState.touchGesture = {
+                        id: touchPoint.identifier,
+                        startX: touchPoint.clientX,
+                        startY: touchPoint.clientY,
+                        lastY: touchPoint.clientY,
+                        moved: false,
+                        cancelled: false,
+                      };
+                    } catch (_) {}
+                  };
+                  const onHandoffTouchMove = (event) => {
+                    try {
+                      const gesture = handoffState.touchGesture;
+                      const touchPoint = gestureTouch(event);
+                      if (!gesture || !touchPoint || gesture.cancelled) return;
+                      const dy = touchPoint.clientY - gesture.lastY;
+                      gesture.lastY = touchPoint.clientY;
+                      if (!gesture.moved) {
+                        const totalX = touchPoint.clientX - gesture.startX;
+                        const totalY = touchPoint.clientY - gesture.startY;
+                        if ((totalX * totalX + totalY * totalY) <= TOUCH_SLOP * TOUCH_SLOP) {
+                          return;
+                        }
+                        gesture.moved = true;
+                      }
+                      if (dy === 0) return;
+                      const ed = E();
+                      if (!ed) return;
+                      // A downward finger drag requests scrolling up; express
+                      // the intent with wheel-style sign conventions.
+                      const deltaY = -dy;
+                      const metrics = scrollMetrics(ed);
+                      const wantsDown = deltaY > 0;
+                      const editorCannotConsume =
+                        metrics.maxTop <= EDGE_EPSILON ||
+                        (wantsDown ? metrics.atBottom : metrics.atTop);
+                      if (!editorCannotConsume) return;
+                      postHandoff('touch', 0, deltaY, metrics);
+                    } catch (_) {}
+                  };
+                  const onHandoffTouchEnd = (event) => {
+                    try {
+                      if (gestureTouch(event)) handoffState.touchGesture = null;
+                    } catch (_) {}
+                  };
+
+                  const wheelOptions = { capture: true, passive: false };
+                  const touchOptions = { capture: true, passive: true };
+                  const installScrollHandoffWheel = () => {
+                    window.addEventListener('wheel', onHandoffWheel, wheelOptions);
+                  };
+                  const removeScrollHandoffWheel = () => {
+                    window.removeEventListener('wheel', onHandoffWheel, wheelOptions);
+                  };
+                  const installScrollHandoffTouch = () => {
+                    window.addEventListener('touchstart', onHandoffTouchStart, touchOptions);
+                    window.addEventListener('touchmove', onHandoffTouchMove, touchOptions);
+                    window.addEventListener('touchend', onHandoffTouchEnd, touchOptions);
+                    window.addEventListener('touchcancel', onHandoffTouchEnd, touchOptions);
+                    try {
+                      const ed = E();
+                      if (ed && ed.onDidChangeCursorSelection && !handoffState.touchSelectionWatch) {
+                        // Text selection wins: a selection change during a
+                        // moved gesture stops forwarding for that gesture.
+                        handoffState.touchSelectionWatch = ed.onDidChangeCursorSelection(() => {
+                          const gesture = handoffState.touchGesture;
+                          if (gesture && gesture.moved) gesture.cancelled = true;
+                        });
+                      }
+                    } catch (_) {}
+                  };
+                  const removeScrollHandoffTouch = () => {
+                    window.removeEventListener('touchstart', onHandoffTouchStart, touchOptions);
+                    window.removeEventListener('touchmove', onHandoffTouchMove, touchOptions);
+                    window.removeEventListener('touchend', onHandoffTouchEnd, touchOptions);
+                    window.removeEventListener('touchcancel', onHandoffTouchEnd, touchOptions);
+                    const watch = handoffState.touchSelectionWatch;
+                    handoffState.touchSelectionWatch = null;
+                    if (watch && watch.dispose) {
+                      try { watch.dispose(); } catch (_) {}
+                    }
+                    handoffState.touchGesture = null;
+                  };
+
+                  window.flutterMonaco.setScrollHandoff = function (cfg) {
+                    const wheel = !!(cfg && cfg.wheel);
+                    const touch = !!(cfg && cfg.touch);
+                    if (wheel !== handoffState.wheel) {
+                      handoffState.wheel = wheel;
+                      if (wheel) { installScrollHandoffWheel(); }
+                      else { removeScrollHandoffWheel(); }
+                    }
+                    if (touch !== handoffState.touch) {
+                      handoffState.touch = touch;
+                      if (touch) { installScrollHandoffTouch(); }
+                      else { removeScrollHandoffTouch(); }
+                    }
+                    return true;
+                  };
+                })();
+
+                // LSP bridge: Dart owns transports and connection lifecycle,
+                // Monaco's built-in monaco.lsp.MonacoLspClient owns every
+                // language feature (completions, hover, diagnostics, rename,
+                // formatting, semantic tokens, ...). Nothing here mirrors LSP
+                // capabilities into Dart - once a connection is open the
+                // editor "just works".
+                (function () {
+                  const connections = new Map(); // id -> entry
+
+                  const lspAvailable = () =>
+                    !!(window.monaco && monaco.lsp && monaco.lsp.MonacoLspClient);
+
+                  function toErrorInfo(error) {
+                    if (!error) return null;
+                    return {
+                      name: error.name ? String(error.name) : 'Error',
+                      message: error.message ? String(error.message) : String(error),
+                    };
+                  }
+
+                  function postStatus(id, status, error) {
+                    postMessageToFlutter({
+                      event: 'lspStatus',
+                      connectionId: id,
+                      status: status,
+                      error: toErrorInfo(error),
+                    });
+                  }
+
+                  // Minimal IValueWithChangeEvent implementation - the shape
+                  // monaco.lsp transports expose via their `state` member.
+                  function createTransportState(initial) {
+                    const listeners = new Set();
+                    let current = initial;
+                    return {
+                      get value() { return current; },
+                      set value(next) {
+                        current = next;
+                        for (const listener of Array.from(listeners)) {
+                          try { listener(next); } catch (_) {}
+                        }
+                      },
+                      get onChange() {
+                        return (listener) => {
+                          listeners.add(listener);
+                          return { dispose: () => listeners.delete(listener) };
+                        };
+                      },
+                    };
+                  }
+
+                  // IMessageTransport whose wire is the Flutter bridge:
+                  // client->server messages surface as 'lspMessage' events;
+                  // server->client messages arrive via deliverServerMessage.
+                  function createBridgedTransport(id) {
+                    let listener = null;
+                    let closed = false;
+                    const state = createTransportState({ state: 'open' });
+                    return {
+                      state: state,
+                      send(message) {
+                        if (closed) {
+                          return Promise.reject(
+                            new Error('Bridged LSP transport is closed: ' + id));
+                        }
+                        postMessageToFlutter({
+                          event: 'lspMessage',
+                          connectionId: id,
+                          message: message,
+                        });
+                        return Promise.resolve();
+                      },
+                      setListener(next) { listener = next; },
+                      deliver(message) {
+                        if (!closed && listener) listener(message);
+                      },
+                      close(error) {
+                        if (closed) return;
+                        closed = true;
+                        state.value = { state: 'closed', error: error };
+                      },
+                      dispose() { this.close(undefined); },
+                      toString() {
+                        return 'FlutterMonacoBridgedTransport(' + id + ')';
+                      },
+                    };
+                  }
+
+                  // Monaco 0.55.1's MonacoLspClient exposes no dispose() and
+                  // discards the feature DisposableStore it creates in its
+                  // constructor, so a stock client can never unregister its
+                  // providers. This wrapper captures the store and reaches
+                  // into the private fields (_initPromise, _bridge,
+                  // _capabilitiesRegistry, _connection) - all verified against
+                  // the 0.55.1 sources. Kept in this one block so future
+                  // Monaco upgrades have a single place to re-verify.
+                  let FlutterLspClientClass = null;
+                  function getClientClass() {
+                    if (FlutterLspClientClass) return FlutterLspClientClass;
+                    FlutterLspClientClass = class extends monaco.lsp.MonacoLspClient {
+                      // Called from the base constructor, before subclass
+                      // field initializers run - stash on a lazily created
+                      // property instead of a declared field (a declared
+                      // field initializer would overwrite this afterwards).
+                      createFeatures() {
+                        const store = super.createFeatures();
+                        if (!this.__flutterFeatureStores) {
+                          this.__flutterFeatureStores = [];
+                        }
+                        this.__flutterFeatureStores.push(store);
+                        return store;
+                      }
+                      get initialized() { return this._initPromise; }
+                      get lspConnection() { return this._connection; }
+                      dispose() {
+                        for (const store of this.__flutterFeatureStores || []) {
+                          try { store.dispose(); } catch (_) {}
+                        }
+                        this.__flutterFeatureStores = [];
+                        try {
+                          this._bridge && this._bridge.dispose && this._bridge.dispose();
+                        } catch (_) {}
+                        try {
+                          this._capabilitiesRegistry &&
+                            this._capabilitiesRegistry.dispose &&
+                            this._capabilitiesRegistry.dispose();
+                        } catch (_) {}
+                      }
+                    };
+                    return FlutterLspClientClass;
+                  }
+
+                  async function buildTransport(id, payload) {
+                    switch (payload && payload.kind) {
+                      case 'webSocket':
+                        // Rejected by the browser when the URL is not in the
+                        // page's connect-src (see allowedConnectSources).
+                        return await monaco.lsp.WebSocketTransport.connectTo({
+                          address: String(payload.url),
+                        });
+                      case 'bridged':
+                        return createBridgedTransport(id);
+                      case 'custom': {
+                        const registry = window.flutterMonacoLspTransports || {};
+                        const factory = registry[payload.factoryName];
+                        if (typeof factory !== 'function') {
+                          throw new Error(
+                            'Unknown LSP transport factory "' + payload.factoryName +
+                            '". Register it on window.flutterMonacoLspTransports ' +
+                            'before connecting.');
+                        }
+                        return await factory(payload.config || {});
+                      }
+                      default:
+                        throw new Error(
+                          'Unknown LSP transport kind: ' + (payload && payload.kind));
+                    }
+                  }
+
+                  // Monaco 0.55.1's client leaves several optional
+                  // server->client requests unhandled and answers them with
+                  // a method-not-found error. Some servers treat that error
+                  // as fatal - pyright (vscode-languageserver) dies on the
+                  // unhandled promise rejection when its
+                  // workspace/diagnostic/refresh call is rejected. These are
+                  // void requests per the LSP spec, so acknowledge them with
+                  // a null result instead. Monaco re-pulls diagnostics and
+                  // tokens on edits, so ignoring the hint is safe.
+                  function registerBenignRefreshHandlers(entry) {
+                    let channel = null;
+                    try {
+                      channel = entry.client.lspConnection &&
+                        entry.client.lspConnection.connection;
+                    } catch (_) {}
+                    if (!channel ||
+                        typeof channel.registerRequestHandler !== 'function') {
+                      return;
+                    }
+                    const passthrough = {
+                      serializeToJson: (v) => (typeof v === 'undefined' ? null : v),
+                      deserializeFromJson: (v) => ({ hasErrors: false, value: v }),
+                    };
+                    const methods = [
+                      'workspace/diagnostic/refresh',
+                      'workspace/semanticTokens/refresh',
+                      'workspace/codeLens/refresh',
+                      'workspace/inlineValue/refresh',
+                      'workspace/foldingRange/refresh',
+                      'workspace/inlayHint/refresh',
+                    ];
+                    for (const method of methods) {
+                      try {
+                        channel.registerRequestHandler({
+                          method: method,
+                          paramsSerializer: passthrough,
+                          resultSerializer: passthrough,
+                          errorSerializer: passthrough,
+                          isOptional: true,
+                        }, async () => ({ ok: null }));
+                      } catch (_) {
+                        // Monaco already handles this method - keep its
+                        // handler.
+                      }
+                    }
+                  }
+
+                  function watchTransportClose(entry) {
+                    const transport = entry.transport;
+                    try {
+                      if (transport && transport.state &&
+                          typeof transport.state.onChange === 'function') {
+                        entry.stateWatch = transport.state.onChange((s) => {
+                          if (s && s.state === 'closed' && !entry.disposed) {
+                            postStatus(entry.id, 'closed', s.error);
+                          }
+                        });
+                      }
+                    } catch (_) {}
+                  }
+
+                  function disposeEntry(entry) {
+                    if (entry.disposed) return;
+                    entry.disposed = true;
+                    try {
+                      entry.stateWatch && entry.stateWatch.dispose &&
+                        entry.stateWatch.dispose();
+                    } catch (_) {}
+                    try {
+                      entry.client && entry.client.dispose && entry.client.dispose();
+                    } catch (_) {}
+                    try {
+                      entry.transport && entry.transport.dispose &&
+                        entry.transport.dispose();
+                    } catch (_) {}
+                    connections.delete(entry.id);
+                    if (connections.size === 0) {
+                      // Monaco's LSP diagnostics all publish under the fixed
+                      // marker owner 'lsp'. Clear them when the last
+                      // connection goes away so stale squiggles don't outlive
+                      // their server.
+                      try {
+                        for (const model of monaco.editor.getModels()) {
+                          monaco.editor.setModelMarkers(model, 'lsp', []);
+                        }
+                      } catch (_) {}
+                    }
+                  }
+
+                  window.flutterMonaco.lsp = {
+                    isAvailable: () => lspAvailable(),
+
+                    async connect(id, transportPayload) {
+                      if (!lspAvailable()) {
+                        throw new Error(
+                          'monaco.lsp is not available in this Monaco build.');
+                      }
+                      if (connections.has(id)) {
+                        throw new Error('LSP connection already exists: ' + id);
+                      }
+                      const entry = {
+                        id: id,
+                        client: null,
+                        transport: null,
+                        bridged: null,
+                        stateWatch: null,
+                        disposed: false,
+                      };
+                      // Register synchronously (before any await) so bridged
+                      // server->client messages can be delivered while the
+                      // initialize handshake is still in flight - the
+                      // handshake cannot complete without them.
+                      connections.set(id, entry);
+                      try {
+                        if (transportPayload && transportPayload.kind === 'bridged') {
+                          entry.bridged = createBridgedTransport(id);
+                          entry.transport = entry.bridged;
+                        } else {
+                          entry.transport = await buildTransport(id, transportPayload);
+                        }
+                        if (!entry.transport ||
+                            typeof entry.transport.send !== 'function' ||
+                            typeof entry.transport.setListener !== 'function') {
+                          throw new Error(
+                            'LSP transport for "' + id +
+                            '" does not implement IMessageTransport ' +
+                            '(state/send/setListener).');
+                        }
+                        const ClientClass = getClientClass();
+                        entry.client = new ClientClass(entry.transport);
+                        registerBenignRefreshHandlers(entry);
+                        watchTransportClose(entry);
+                        await entry.client.initialized;
+                        if (entry.disposed) {
+                          throw new Error(
+                            'LSP connection "' + id +
+                            '" was disposed during initialization.');
+                        }
+                        postStatus(id, 'open', null);
+                        return true;
+                      } catch (e) {
+                        disposeEntry(entry);
+                        throw e;
+                      }
+                    },
+
+                    disconnect(id) {
+                      const entry = connections.get(id);
+                      if (!entry) return false;
+                      disposeEntry(entry);
+                      postStatus(id, 'closed', null);
+                      return true;
+                    },
+
+                    disconnectAll() {
+                      for (const entry of Array.from(connections.values())) {
+                        disposeEntry(entry);
+                        postStatus(entry.id, 'closed', null);
+                      }
+                      return true;
+                    },
+
+                    // Dart -> JS delivery for bridged transports
+                    // (server -> client direction).
+                    deliverServerMessage(id, message) {
+                      const entry = connections.get(id);
+                      if (!entry || !entry.bridged) return false;
+                      entry.bridged.deliver(message);
+                      return true;
+                    },
+
+                    listConnections() {
+                      return Array.from(connections.keys());
+                    },
+
+                    // EXPERIMENTAL escape hatch for non-standard server
+                    // extensions. Depends on Monaco-internal channel plumbing
+                    // (verified against 0.55.1); may break on future Monaco
+                    // upgrades, in which case it throws a descriptive error.
+                    async sendRequest(id, method, params) {
+                      const entry = connections.get(id);
+                      if (!entry || !entry.client) {
+                        throw new Error('No such LSP connection: ' + id);
+                      }
+                      const lspConnection = entry.client.lspConnection;
+                      const channel = lspConnection && lspConnection.connection;
+                      if (!channel || typeof channel.request !== 'function') {
+                        throw new Error(
+                          'Generic LSP requests are not supported by this ' +
+                          'Monaco build.');
+                      }
+                      const passthrough = {
+                        serializeToJson: (v) => (typeof v === 'undefined' ? null : v),
+                        deserializeFromJson: (v) => ({ hasErrors: false, value: v }),
+                      };
+                      return await channel.request({
+                        method: String(method),
+                        paramsSerializer: passthrough,
+                        resultSerializer: passthrough,
+                        errorSerializer: passthrough,
+                        isOptional: false,
+                      }, params);
+                    },
+
+                    async sendNotification(id, method, params) {
+                      const entry = connections.get(id);
+                      if (!entry || !entry.client) {
+                        throw new Error('No such LSP connection: ' + id);
+                      }
+                      const lspConnection = entry.client.lspConnection;
+                      const channel = lspConnection && lspConnection.connection;
+                      if (!channel || typeof channel.notify !== 'function') {
+                        throw new Error(
+                          'Generic LSP notifications are not supported by ' +
+                          'this Monaco build.');
+                      }
+                      const passthrough = {
+                        serializeToJson: (v) => (typeof v === 'undefined' ? null : v),
+                      };
+                      channel.notify({
+                        method: String(method),
+                        paramsSerializer: passthrough,
+                      }, params);
+                      return true;
+                    },
                   };
                 })();
               })();

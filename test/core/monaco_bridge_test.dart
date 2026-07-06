@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_monaco/src/core/monaco_bridge.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -281,6 +282,33 @@ void main() {
 
         bridge.handleJavaScriptMessage('{"data":"test"}');
         expect(received, true); // Still notifies raw listeners
+      });
+
+      test('treats scrollHandoff as a known event and forwards it', () {
+        final bridge = MonacoBridge();
+        Map<String, dynamic>? received;
+        bridge.addRawListener((json) => received = json);
+
+        final logs = <String>[];
+        final previous = debugPrint;
+        debugPrint = (String? message, {int? wrapWidth}) {
+          if (message != null) logs.add(message);
+        };
+        addTearDown(() => debugPrint = previous);
+
+        bridge.handleJavaScriptMessage(
+          '{"event":"scrollHandoff","source":"wheel","deltaX":0,'
+          '"deltaY":24,"atTop":false,"atBottom":true,'
+          '"atLeft":true,"atRight":true}',
+        );
+
+        expect(received, isNotNull);
+        expect(received!['event'], 'scrollHandoff');
+        expect(
+          logs.where((line) => line.contains('Unhandled JS event')),
+          isEmpty,
+          reason: 'scrollHandoff must be routed as a known event',
+        );
       });
     });
   });

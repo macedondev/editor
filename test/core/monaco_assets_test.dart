@@ -212,14 +212,64 @@ void main() {
       expect(html, contains('const clearViewportFit = () =>'));
       expect(html, contains('fitFrame.getBoundingClientRect()'));
       expect(html, contains('fitParent.visualViewport'));
-      expect(html, contains("fitViewport.addEventListener('resize'"));
-      expect(html, contains("fitViewport.addEventListener('scroll'"));
+      expect(html, contains("bindParentListener(fitViewport, 'resize'"));
+      expect(html, contains("bindParentListener(fitViewport, 'scroll'"));
+      expect(html, contains("bindParentListener(fitParent, 'resize'"));
       expect(html, contains('ed.revealPosition(pos)'));
-      expect(
-        html,
-        contains("fitWindow.addEventListener('pagehide', detachViewportFit"),
-      );
     });
+
+    test('viewport fit pins only while the visual viewport is constrained', () {
+      final html = MonacoAssets.generateIndexHtml(
+        'https://example.com/assets/monaco/min/vs',
+        isWeb: true,
+        messageToken: 'token',
+      );
+
+      // The pin exists for keyboard/caret-pan states. Without this gate, an
+      // editor half-scrolled off inside a scrollable Flutter page gets pinned
+      // to the on-screen band and stops scrolling away with the page.
+      expect(html, contains('const isViewportConstrained = () =>'));
+      expect(html, contains('if (!isViewportConstrained())'));
+      // Pinch zoom constrains the visual viewport too but must not pin.
+      expect(html, contains('Math.abs(scale - 1)'));
+    });
+
+    test(
+      'parent-side listeners are self-detaching and centrally detachable',
+      () {
+        final html = MonacoAssets.generateIndexHtml(
+          'https://example.com/assets/monaco/min/vs',
+          isWeb: true,
+          messageToken: 'token',
+        );
+
+        // Removing the iframe fires no pagehide, so raw addEventListener on a
+        // parent object would root the dead document (and Monaco) in the host
+        // page forever. Registration must go through bindParentListener, which
+        // self-detaches once the frame leaves the parent DOM, and the Dart
+        // controller detaches eagerly on dispose via the window hook.
+        expect(html, contains('const bindParentListener ='));
+        expect(html, contains('frame.isConnected'));
+        expect(html, contains('window.__flutterMonacoDetachParentBindings'));
+        expect(
+          html,
+          contains(
+            "window.addEventListener('pagehide', "
+            'window.__flutterMonacoDetachParentBindings',
+          ),
+        );
+        // The keyboard-baseline listener on the parent viewport is one of the
+        // registrations that must use the helper.
+        expect(html, contains('ownerWindow.parent.visualViewport,'));
+        // No raw registrations on parent objects may remain.
+        expect(
+          html,
+          isNot(contains('parent.visualViewport?.addEventListener')),
+        );
+        expect(html, isNot(contains('fitViewport.addEventListener')));
+        expect(html, isNot(contains('fitParent.addEventListener')));
+      },
+    );
 
     test(
       'apple worker shim emits escaped newlines inside JS string literals',

@@ -75,6 +75,23 @@ void main() {
     expect(source, contains("..style.overscrollBehavior = 'none'"));
   });
 
+  test('dispose detaches parent-side viewport bindings before removing the '
+      'iframe', () {
+    final source = webControllerSource();
+
+    // iframe.remove() fires no pagehide, so without the eager detach every
+    // disposed mobile-web editor leaves its viewport listeners on the host
+    // page, rooting the dead document and its Monaco instance.
+    expect(source, contains('__flutterMonacoDetachParentBindings'));
+
+    final disposeStart = source.indexOf('void dispose() {');
+    expect(disposeStart, isNonNegative);
+    final detachCall = source.indexOf('_detachParentBindings();', disposeStart);
+    final removeCall = source.indexOf('_iframe?.remove();', disposeStart);
+    expect(detachCall, isNonNegative);
+    expect(removeCall, greaterThan(detachCall));
+  });
+
   test('disabling interaction returns the keyboard to Flutter, not just '
       'the pointer', () {
     final source = webControllerSource();
@@ -116,5 +133,34 @@ void main() {
     expect(source, contains("iframe.closest('flutter-view')"));
     expect(source, contains('hostElement.tabIndex = -1;'));
     expect(source, contains('web.FocusOptions(preventScroll: true)'));
+  });
+
+  test('web view ids stay unique when editors initialize in the same '
+      'millisecond', () {
+    final source = webControllerSource();
+
+    // Multiple editors created in one frame land in the same millisecond,
+    // so a purely clock-derived id collides: the platform view registry
+    // rejects the duplicate factory, every HtmlElementView resolves to the
+    // FIRST iframe, and the other editors never become ready. The id must
+    // include a per-instance counter, and the message token must build on
+    // that unique id so bridge messages cannot cross editors.
+    expect(source, contains('static int _instanceCounter'));
+    expect(source, contains('++_instanceCounter'));
+    expect(
+      source,
+      isNot(
+        contains(
+          "_viewId = 'monaco-iframe-\${DateTime.now().millisecondsSinceEpoch}';",
+        ),
+      ),
+    );
+    final tokenIndex = source.indexOf('_messageToken = ');
+    expect(tokenIndex, isNonNegative);
+    final tokenLine = source.substring(
+      tokenIndex,
+      source.indexOf(';', tokenIndex),
+    );
+    expect(tokenLine, contains(r'$_viewId'));
   });
 }

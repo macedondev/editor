@@ -72,6 +72,15 @@ String _monacoVsAssetUrl() {
 ///   worker shims.
 /// - [native.dart] for native platform implementations.
 class WebViewController implements PlatformWebViewController {
+  /// Monotonic per-controller counter mixed into [_viewId].
+  ///
+  /// A purely clock-derived id collides when several editors initialize in
+  /// the same millisecond (one widget build creating multiple editors): the
+  /// platform view registry rejects the duplicate factory, every
+  /// HtmlElementView resolves to the first iframe, and the other editors
+  /// never become ready.
+  static int _instanceCounter = 0;
+
   final Map<String, void Function(String)> _channels = {};
   bool _disposed = false;
   bool _interactionEnabled = true;
@@ -93,7 +102,9 @@ class WebViewController implements PlatformWebViewController {
 
   @override
   Future<void> initialize() async {
-    _viewId = 'monaco-iframe-${DateTime.now().millisecondsSinceEpoch}';
+    final instanceId = ++_instanceCounter;
+    _viewId =
+        'monaco-iframe-$instanceId-${DateTime.now().millisecondsSinceEpoch}';
     debugPrint('[WebViewController] Initializing iframe approach');
     _messageToken = 'monaco-${DateTime.now().microsecondsSinceEpoch}-$_viewId';
 
@@ -392,7 +403,11 @@ class WebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> load({String? customCss, bool allowCdnFonts = false}) async {
+  Future<void> load({
+    String? customCss,
+    bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
+  }) async {
     debugPrint('[WebViewController] Loading Monaco in iframe');
     await _waitForIframeAttachment();
 
@@ -412,6 +427,7 @@ class WebViewController implements PlatformWebViewController {
         messageToken: _messageToken,
         customCss: customCss,
         allowCdnFonts: allowCdnFonts,
+        allowedConnectSources: allowedConnectSources,
       );
 
       final blobUrl = web.URL.createObjectURL(
@@ -466,7 +482,25 @@ class WebViewController implements PlatformWebViewController {
     }
     _channels.clear();
     _cachedWidget = null;
+    _detachParentBindings();
     _iframe?.remove();
     _iframe = null;
+  }
+
+  /// Removing the iframe element discards its browsing context WITHOUT
+  /// firing `pagehide`, so listeners the embedded document registered on
+  /// the parent's `visualViewport`/window (the mobile-web viewport-fit of
+  /// issue #11) would stay attached to the host page and keep the dead
+  /// document - and its whole Monaco instance - rooted until the next
+  /// parent viewport event evicts them. Detach them eagerly so a disposed
+  /// editor is collectable immediately.
+  void _detachParentBindings() {
+    try {
+      _iframe?.contentWindow?.callMethod(
+        'eval'.toJS,
+        'window.__flutterMonacoDetachParentBindings && window.__flutterMonacoDetachParentBindings();'
+            .toJS,
+      );
+    } catch (_) {}
   }
 }

@@ -80,12 +80,14 @@ abstract class WebViewController implements PlatformWebViewController {
   Future<String> _ensureHtmlFile({
     String? customCss,
     bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
   }) async {
     final htmlFilePath = await MonacoAssets.indexHtmlPath(
       cacheKey: Object.hash(
         MonacoAssets.htmlGenerationVersion,
         customCss,
         allowCdnFonts,
+        Object.hashAll(allowedConnectSources),
       ),
     );
 
@@ -113,6 +115,7 @@ abstract class WebViewController implements PlatformWebViewController {
         isIosOrMacOS: false,
         customCss: customCss,
         allowCdnFonts: allowCdnFonts,
+        allowedConnectSources: allowedConnectSources,
       );
     } else {
       // macOS uses relative paths since HTML is in the same directory
@@ -122,6 +125,7 @@ abstract class WebViewController implements PlatformWebViewController {
         isIosOrMacOS: Platform.isIOS || Platform.isMacOS,
         customCss: customCss,
         allowCdnFonts: allowCdnFonts,
+        allowedConnectSources: allowedConnectSources,
       );
     }
 
@@ -351,10 +355,15 @@ class FlutterWebViewController extends WebViewController {
   }
 
   @override
-  Future<void> load({String? customCss, bool allowCdnFonts = false}) async {
+  Future<void> load({
+    String? customCss,
+    bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
+  }) async {
     final htmlFilePath = await _ensureHtmlFile(
       customCss: customCss,
       allowCdnFonts: allowCdnFonts,
+      allowedConnectSources: allowedConnectSources,
     );
     await _controller.loadFile(htmlFilePath);
   }
@@ -488,10 +497,15 @@ class WindowsWebViewController extends WebViewController {
   }
 
   @override
-  Future<void> load({String? customCss, bool allowCdnFonts = false}) async {
+  Future<void> load({
+    String? customCss,
+    bool allowCdnFonts = false,
+    List<String> allowedConnectSources = const [],
+  }) async {
     final htmlFilePath = await _ensureHtmlFile(
       customCss: customCss,
       allowCdnFonts: allowCdnFonts,
+      allowedConnectSources: allowedConnectSources,
     );
     await _controller.loadUrl(Uri.file(htmlFilePath).toString());
   }

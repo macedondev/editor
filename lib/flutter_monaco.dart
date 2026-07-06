@@ -7,6 +7,8 @@
 /// ## Features
 ///
 /// - **100+ Language Support** - Syntax highlighting for all major programming languages
+/// - **Language Server Protocol** - Connect real language servers for
+///   completions, diagnostics, hover, go-to-definition, rename, and more
 /// - **Multiple Themes** - VS Light, VS Dark, High Contrast themes
 /// - **Rich API** - Full programmatic control over the editor
 /// - **Multi-Editor Support** - Run multiple independent editor instances
@@ -63,6 +65,21 @@ export 'src/core/monaco_controller.dart'
     show MonacoController, MonacoFocusIntent;
 export 'src/core/monaco_js_error.dart' show MonacoJavaScriptException;
 
+// LSP exports
+export 'src/lsp/lsp_connection.dart' show LanguageServerConnection;
+export 'src/lsp/lsp_server_process.dart' show LspServerProcess;
+export 'src/lsp/lsp_stdio_framing.dart'
+    show LspStdioMessageDecoder, LspStdioMessageEncoder;
+export 'src/lsp/lsp_transport.dart'
+    show
+        LspBridgedTransport,
+        LspCustomTransport,
+        LspTransport,
+        LspTransportKind,
+        LspWebSocketTransport;
+export 'src/lsp/lsp_types.dart'
+    show LspConnectionState, LspConnectionStatus, LspReconnectPolicy;
+
 // Model exports
 export 'src/models/editor_options.dart' show EditorOptions;
 export 'src/models/monaco_enums.dart'
@@ -75,6 +92,12 @@ export 'src/models/monaco_enums.dart'
         MonacoTheme,
         RenderWhitespace,
         DiagnosticsSeverity;
+export 'src/models/monaco_scroll_handoff.dart'
+    show
+        MonacoScrollHandoff,
+        MonacoScrollHandoffDetails,
+        MonacoScrollHandoffMode,
+        MonacoScrollHandoffSource;
 export 'src/models/monaco_theme_definition.dart'
     show MonacoThemeDefinition, MonacoThemeRule;
 export 'src/models/monaco_types.dart'
