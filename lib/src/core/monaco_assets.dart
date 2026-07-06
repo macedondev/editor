@@ -1,10 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_monaco/src/core/io_export.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter_monaco/src/core/monaco_asset_storage.dart';
 
 /// Manages Monaco Editor assets across all platforms.
 ///
@@ -111,37 +108,17 @@ class MonacoAssets {
 
     final completer = _initCompleter = Completer<void>();
 
-    if (!kIsWeb) {
-      try {
-        final targetDir = await _getTargetDir();
-        final loader = File(p.join(targetDir, 'min', 'vs', 'loader.js'));
-        final sentinel = File(p.join(targetDir, '.monaco_complete'));
-
-        final ok =
-            loader.existsSync() &&
-            sentinel.existsSync() &&
-            (await sentinel.readAsString()).trim() == monacoVersion;
-
-        if (!ok) {
-          debugPrint(
-            '[MonacoAssets] Monaco not found or incomplete, copying assets...',
-          );
-          await _copyAllAssets(targetDir);
-        } else {
-          debugPrint(
-            '[MonacoAssets] Monaco already extracted at: $targetDir (version $monacoVersion)',
-          );
-        }
-
-        completer.complete();
-      } catch (e, st) {
-        _initCompleter = null;
-        completer.completeError(e, st);
-      }
-    }
-
-    if (!completer.isCompleted && kIsWeb) {
+    try {
+      await ensureMonacoAssetsReady(
+        assetBaseDir: assetBaseDir,
+        cacheSubDir: _cacheSubDir,
+        htmlFileName: _htmlFileName,
+        monacoVersion: monacoVersion,
+      );
       completer.complete();
+    } catch (e, st) {
+      _initCompleter = null;
+      completer.completeError(e, st);
     }
 
     return completer.future;
@@ -174,15 +151,16 @@ class MonacoAssets {
     }
 
     await ensureReady();
-    final targetDir = await _getTargetDir();
 
-    // Check if we already have this HTML cached
-    if (_htmlCache.containsKey(cacheKey)) {
-      return _htmlCache[cacheKey]!;
-    }
+    final cached = _htmlCache[cacheKey];
+    if (cached != null) return cached;
 
-    // Cache and return the path
-    return _htmlCache[cacheKey] = p.join(targetDir, 'monaco_$cacheKey.html');
+    return _htmlCache[cacheKey] = await monacoAssetHtmlPath(
+      cacheKey: cacheKey,
+      assetBaseDir: assetBaseDir,
+      cacheSubDir: _cacheSubDir,
+      monacoVersion: monacoVersion,
+    );
   }
 
   /// Returns diagnostic information about extracted Monaco assets.
@@ -212,51 +190,11 @@ class MonacoAssets {
   /// print('Monaco ${info['version']} - ${info['totalSizeMB']} MB');
   /// ```
   static Future<Map<String, dynamic>> assetInfo() async {
-    // Web platform doesn't use extracted assets
-    if (kIsWeb) {
-      return {
-        'exists': true,
-        'path': 'assets/$assetBaseDir',
-        'version': monacoVersion,
-        'platform': 'web',
-        'note': 'Assets served directly from web server, no extraction needed.',
-      };
-    }
-
-    final targetDir = await _getTargetDir();
-    final directory = Directory(targetDir);
-
-    if (!directory.existsSync()) {
-      return {'exists': false, 'path': targetDir, 'version': monacoVersion};
-    }
-
-    // Count files and calculate size
-    int fileCount = 0;
-    int totalSize = 0;
-    int generatedHtmlCount = 0;
-
-    await for (final entity in directory.list(recursive: true)) {
-      if (entity is File) {
-        fileCount++;
-        totalSize += await entity.length();
-
-        // Count generated HTML files (monaco_*.html pattern)
-        final fileName = p.basename(entity.path);
-        if (fileName.startsWith('monaco_') && fileName.endsWith('.html')) {
-          generatedHtmlCount++;
-        }
-      }
-    }
-
-    return {
-      'exists': true,
-      'path': targetDir,
-      'version': monacoVersion,
-      'fileCount': fileCount,
-      'totalSize': totalSize,
-      'totalSizeMB': (totalSize / 1024 / 1024).toStringAsFixed(2),
-      'generatedHtmlCount': generatedHtmlCount,
-    };
+    return monacoAssetInfo(
+      assetBaseDir: assetBaseDir,
+      cacheSubDir: _cacheSubDir,
+      monacoVersion: monacoVersion,
+    );
   }
 
   /// Deletes all extracted Monaco assets and resets initialization state.
@@ -297,107 +235,15 @@ class MonacoAssets {
       return;
     }
 
-    final targetDir = await _getTargetDir();
-    final directory = Directory(targetDir);
-
-    if (directory.existsSync()) {
-      await directory.delete(recursive: true);
-      debugPrint('[MonacoAssets] Monaco assets cleaned');
-    }
+    await clearMonacoAssetCache(
+      assetBaseDir: assetBaseDir,
+      cacheSubDir: _cacheSubDir,
+      monacoVersion: monacoVersion,
+    );
 
     // Reset the init completer and HTML cache
     _initCompleter = null;
     _htmlCache.clear();
-  }
-
-  // --- Private Helpers ---
-
-  static Future<String> _getTargetDir() async {
-    return p.join(
-      (await getApplicationSupportDirectory()).path,
-      _cacheSubDir,
-      'monaco-$monacoVersion',
-    );
-  }
-
-  static Future<void> _copyAllAssets(String targetDir) async {
-    final stopwatch = Stopwatch()..start();
-    final failures = <String>[];
-
-    // Clean and create target directory
-    final directory = Directory(targetDir);
-    if (directory.existsSync()) {
-      await directory.delete(recursive: true);
-    }
-    await directory.create(recursive: true);
-
-    // Get all assets from the manifest
-    final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
-    final monacoAssets = manifest
-        .listAssets()
-        .where(
-          (key) => key.startsWith('$assetBaseDir/'),
-        ) // Trailing slash prevents matching similar prefixes
-        .where((key) => !key.endsWith('.DS_Store')) // Skip macOS metadata files
-        .where(
-          (key) => !key.endsWith('/$_htmlFileName'),
-        ) // Exclude index.html from copy list
-        .toList();
-
-    debugPrint(
-      '[MonacoAssets] Found ${monacoAssets.length} Monaco assets to copy',
-    );
-
-    // Copy each asset maintaining directory structure
-    var copiedCount = 0;
-    for (final assetKey in monacoAssets) {
-      try {
-        // Calculate relative path within the monaco directory
-        final relativePath = assetKey.substring('$assetBaseDir/'.length);
-        if (relativePath.isEmpty) continue;
-
-        // Create target file path
-        final targetFile = File(p.join(targetDir, relativePath));
-
-        // Ensure parent directory exists
-        await targetFile.parent.create(recursive: true);
-
-        // Load and write asset
-        final bytes = await rootBundle.load(assetKey);
-        await targetFile.writeAsBytes(bytes.buffer.asUint8List());
-
-        copiedCount++;
-
-        // Log progress every 100 files
-        if (copiedCount % 100 == 0) {
-          debugPrint(
-            '[MonacoAssets] Progress: $copiedCount/${monacoAssets.length} files copied',
-          );
-        }
-      } catch (e) {
-        debugPrint('[MonacoAssets] Error copying $assetKey: $e');
-        failures.add('$assetKey: $e');
-      }
-    }
-
-    stopwatch.stop();
-    debugPrint(
-      '[MonacoAssets] Completed: $copiedCount files copied in ${stopwatch.elapsedMilliseconds}ms',
-    );
-
-    if (copiedCount != monacoAssets.length || failures.isNotEmpty) {
-      throw StateError(
-        '[MonacoAssets] Copy incomplete ($copiedCount/${monacoAssets.length}). '
-        'Failures: ${failures.length}',
-      );
-    }
-
-    // Write sentinel file to mark successful completion
-    final sentinelFile = File(p.join(targetDir, '.monaco_complete'));
-    await sentinelFile.writeAsString(monacoVersion);
-    debugPrint(
-      '[MonacoAssets] Sentinel file written for version $monacoVersion',
-    );
   }
 
   /// Generates the HTML document that hosts the Monaco Editor.

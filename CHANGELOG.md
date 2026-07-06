@@ -3,6 +3,11 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-07-06
+
+### Fixed
+- Fixed Flutter Web WASM compatibility metadata by moving native-only Monaco asset extraction behind conditional storage helpers. Web builds no longer import `path_provider` through `MonacoAssets`, while native platforms keep the same asset extraction behavior.
+
 ## [2.2.0] - 2026-07-05
 
 ### Added
