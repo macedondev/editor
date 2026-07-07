@@ -90,6 +90,38 @@
     <div class="spinner"></div>
   </div>
   <script>
+    // Warm the browser HTTP cache with Monaco's files while the Flutter
+    // engine downloads, so the editor iframes boot from cache instead of
+    // starting a multi-megabyte download after first frame. Best-effort:
+    // any failure just means the editor downloads the files itself.
+    // low-priority fetches keep the engine download in front. The hashed
+    // editor chunk name changes with every Monaco release, so it is
+    // recovered from editor.main.js instead of hard-coded. Bodies are read
+    // to completion because the cache only commits consumed responses.
+    (function () {
+      'use strict';
+      var vs = 'assets/packages/flutter_monaco/assets/monaco/min/vs/';
+      function warm(file) {
+        return fetch(vs + file, { priority: 'low' })
+          .then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+          .catch(function () {});
+      }
+      warm('loader.js');
+      warm('editor/editor.main.css');
+      fetch(vs + 'editor/editor.main.js', { priority: 'low' })
+        .then(function (r) { return r.ok ? r.text() : ''; })
+        .then(function (src) {
+          var seen = {};
+          var re = /\.\.\/(editor\.api-[A-Za-z0-9_-]+)/g;
+          var m;
+          while ((m = re.exec(src || '')) !== null) {
+            if (!seen[m[1]]) { seen[m[1]] = true; warm(m[1] + '.js'); }
+          }
+        })
+        .catch(function () {});
+    })();
+  </script>
+  <script>
     window.addEventListener('flutter-first-frame', function () {
       var el = document.getElementById('loading');
       if (!el) return;

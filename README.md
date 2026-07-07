@@ -906,6 +906,64 @@ print('${info.fileCount} files, ${info.totalSizeMB.toStringAsFixed(1)} MB');
 await MonacoAssets.clearCache();
 ```
 
+### Web performance: precache the Monaco bundle
+
+Web platform only; on native `precache()` is simply `ensureReady()`.
+
+On Flutter Web the first (cold-cache) editor boot downloads Monaco over the
+network - dominated by one hash-named ~3.6MB chunk - and that download only
+starts when the first editor mounts. Warm the browser's HTTP cache ahead of
+time and every editor (including several mounting at once) boots from cache:
+
+```dart
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  unawaited(MonacoAssets.precache()); // fire-and-forget
+  runApp(const MyApp());
+}
+```
+
+The warmup is best-effort: if any fetch fails, the editor downloads the
+files itself exactly as before.
+
+To start the warmup even earlier - in parallel with the Flutter engine
+download itself - add this snippet to your `web/index.html` (this is what
+the [live demo](https://omar-hanafy.github.io/flutter-monaco/) ships):
+
+```html
+<script>
+  // Warm the HTTP cache with Monaco's files while the Flutter engine
+  // downloads. The hashed chunk name changes per Monaco release, so it is
+  // recovered from editor.main.js instead of hard-coded.
+  (function () {
+    'use strict';
+    var vs = 'assets/packages/flutter_monaco/assets/monaco/min/vs/';
+    function warm(file) {
+      return fetch(vs + file, { priority: 'low' })
+        .then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+        .catch(function () {});
+    }
+    warm('loader.js');
+    warm('editor/editor.main.css');
+    fetch(vs + 'editor/editor.main.js', { priority: 'low' })
+      .then(function (r) { return r.ok ? r.text() : ''; })
+      .then(function (src) {
+        var seen = {};
+        var re = /\.\.\/(editor\.api-[A-Za-z0-9_-]+)/g;
+        var m;
+        while ((m = re.exec(src || '')) !== null) {
+          if (!seen[m[1]]) { seen[m[1]] = true; warm(m[1] + '.js'); }
+        }
+      })
+      .catch(function () {});
+  })();
+</script>
+```
+
+If you deploy with a non-root `--base-href`, keep the snippet's URLs
+relative (as above) so they resolve against `<base href>` like every other
+Flutter asset.
+
 ### Web: Handling Overlays
 
 Web platform only. This does not affect native platforms.
