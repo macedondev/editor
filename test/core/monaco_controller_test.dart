@@ -48,7 +48,7 @@ void main() {
         expect(webview.hasChannel('flutterChannel'), true);
         expect(webview.initialized, true);
         expect(webview.jsEnabled, true);
-        await expectLater(controller.onReady, completes);
+        await expectLater(controller.whenReady, completes);
       });
 
       test('createForTesting with custom channel name', () async {
@@ -65,7 +65,7 @@ void main() {
         final bundle = await _createBundle(ready: false);
         bundle.controller.completeReadyForTesting();
         bundle.controller.completeReadyForTesting(); // Should not throw
-        await expectLater(bundle.controller.onReady, completes);
+        await expectLater(bundle.controller.whenReady, completes);
       });
 
       test('isReady reflects ready state', () async {
@@ -372,23 +372,29 @@ void main() {
       );
     });
 
-    group('content queuing', () {
-      test('queued setValue overwrites older value', () async {
+    group('pre-ready commands', () {
+      test('setValue calls wait for readiness and apply in order', () async {
         final bundle = await _createBundle(ready: false);
         final first = bundle.controller.setValue('A');
         final second = bundle.controller.setValue('B');
+        expect(_dispatchesOf(bundle.webview, 'document.setText'), isEmpty);
+
         bundle.controller.completeReadyForTesting();
         await Future.wait([first, second]);
 
+        // FIFO after ready: both dispatch, the newest write wins.
         final invocations = _dispatchesOf(bundle.webview, 'document.setText');
-        expect(invocations.length, 1);
-        expect(_paramsOf(invocations.single)['text'], 'B');
+        expect(invocations.length, 2);
+        expect(_paramsOf(invocations.first)['text'], 'A');
+        expect(_paramsOf(invocations.last)['text'], 'B');
       });
 
-      test('queued setLanguage overwrites older value', () async {
+      test('setLanguage calls wait for readiness and apply in order', () async {
         final bundle = await _createBundle(ready: false);
         final first = bundle.controller.setLanguage(MonacoLanguage.dart);
         final second = bundle.controller.setLanguage(MonacoLanguage.python);
+        expect(_dispatchesOf(bundle.webview, 'document.setLanguage'), isEmpty);
+
         bundle.controller.completeReadyForTesting();
         await Future.wait([first, second]);
 
@@ -396,8 +402,9 @@ void main() {
           bundle.webview,
           'document.setLanguage',
         );
-        expect(invocations.length, 1);
-        expect(_paramsOf(invocations.single)['language'], 'python');
+        expect(invocations.length, 2);
+        expect(_paramsOf(invocations.first)['language'], 'dart');
+        expect(_paramsOf(invocations.last)['language'], 'python');
       });
 
       test('setValue after ready executes immediately', () async {

@@ -85,7 +85,7 @@ class MonacoEditor extends StatefulWidget {
     this.customCss,
     this.allowCdnFonts = false,
     this.allowedConnectSources = const [],
-    this.readyTimeout,
+    this.readyTimeout = const Duration(seconds: 20),
     this.onReady,
     this.onContentChanged,
     this.onRawContentChanged,
@@ -158,7 +158,7 @@ class MonacoEditor extends StatefulWidget {
   final List<String> allowedConnectSources;
 
   /// The maximum duration to wait for the editor to initialize before showing an error.
-  final Duration? readyTimeout;
+  final Duration readyTimeout;
 
   /// Callback invoked when the editor is fully initialized and ready.
   ///
@@ -375,14 +375,22 @@ class _MonacoEditorState extends State<MonacoEditor> {
     try {
       final ownsController = widget.controller == null;
       _ownsController = ownsController;
+      // Only the internal create path carries initialValue/options into the
+      // boot command; external controllers and factories get them applied
+      // after readiness below.
+      final usedInternalCreate =
+          widget.controller == null && widget.controllerFactory == null;
       final controller =
           widget.controller ??
           await (widget.controllerFactory?.call() ??
               MonacoController.create(
                 options: widget.options,
-                customCss: widget.customCss,
-                allowCdnFonts: widget.allowCdnFonts,
-                allowedConnectSources: widget.allowedConnectSources,
+                initialText: widget.initialValue,
+                page: MonacoPageConfig(
+                  customCss: widget.customCss,
+                  allowCdnFonts: widget.allowCdnFonts,
+                  allowedConnectSources: widget.allowedConnectSources,
+                ),
                 readyTimeout: widget.readyTimeout,
               ));
 
@@ -402,7 +410,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
       }
 
       // Wait for the underlying web view to be ready.
-      await _controller!.onReady;
+      await _controller!.whenReady;
       if (!_isBootstrapCurrent(bootstrapToken)) {
         return;
       }
@@ -426,17 +434,16 @@ class _MonacoEditorState extends State<MonacoEditor> {
           debugPrint('[MonacoEditor] setHostPageBackgroundColor failed: $e');
         }
       }
-      // Ensure options are up-to-date in case they changed during bootstrap
-      if (_isBootstrapCurrent(bootstrapToken)) {
-        // We can't easily check if they differ from what we passed to create(),
-        // so we just re-apply them to be safe. This is cheap if no changes.
+      // The internal create path boots the editor with options, theme,
+      // language, and initial text already applied (two-phase boot); only
+      // externally supplied controllers need them applied here.
+      if (!usedInternalCreate && _isBootstrapCurrent(bootstrapToken)) {
         await _controller!.updateOptions(widget.options);
         await _controller!.setThemeById(widget.options.effectiveThemeId);
         await _controller!.setLanguage(widget.options.language);
-      }
-
-      if (widget.initialValue != null) {
-        await _controller!.setValue(widget.initialValue!);
+        if (widget.initialValue != null) {
+          await _controller!.setValue(widget.initialValue!);
+        }
         if (!_isBootstrapCurrent(bootstrapToken)) {
           return;
         }

@@ -35,7 +35,7 @@ void main() {
         home: Scaffold(body: MonacoEditor(controller: controller)),
       ),
     );
-    await controller.onReady;
+    await controller.whenReady;
     // Let the platform view attach and settle.
     for (var i = 0; i < 30; i++) {
       await tester.pump(const Duration(milliseconds: 50));

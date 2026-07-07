@@ -27,6 +27,13 @@ class ContractCase {
 /// subset). Every command registered by the bridge JS must have a fixture
 /// here; the gap test below enforces it in both directions.
 const List<ContractCase> contractCases = [
+  ContractCase('page.boot', {
+    'options': {'fontSize': 14, 'automaticLayout': true},
+    'text': 'void main() {}',
+    'language': 'dart',
+    'theme': 'vs-dark',
+    'scrollHandoff': {'wheel': false, 'touch': false},
+  }, responseValue: true),
   ContractCase('page.eval', {'expression': '1 + 1'}, responseValue: 2),
   ContractCase('page.setBackground', {
     'color': 'rgba(30, 30, 30, 1.0)',
@@ -302,6 +309,21 @@ void main() {
     test('core.js protocol version matches the Dart constant', () {
       final core = bridgeSource('core.js');
       expect(core, contains('var PROTOCOL_VERSION = $kMonacoProtocolVersion;'));
+    });
+
+    test('pageReady is announced by boot.js, after all registrations', () {
+      // core.js parses first; if it announced pageReady itself, Dart could
+      // dispatch page.boot while later bridge scripts are still fetching
+      // over HTTP (web) and hit "Unknown method".
+      expect(
+        bridgeSource('core.js'),
+        contains('window.FlutterMonaco.announcePageReady = function ()'),
+      );
+      expect(
+        bridgeSource('boot.js'),
+        contains('window.FlutterMonaco.announcePageReady();'),
+      );
+      expect(bridgeFileNames.last, 'boot.js');
     });
   });
 }

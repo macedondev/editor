@@ -158,13 +158,19 @@ window.__FMB = window.__FMB || {};
     return (0, eval)(params.expression);
   });
 
-  // The page shell is alive: protocol available, inline config parsed. The
-  // editor itself reports readiness separately (lifecycle 'ready').
-  window.FlutterMonaco.lifecycle('pageReady', {
-    protocolVersion: PROTOCOL_VERSION,
-    monacoVersion: page.monacoVersion || null,
-    capabilities: ['lsp'],
-  });
+  // The page shell announces readiness only once EVERY bridge module has
+  // registered its commands - boot.js, the last bridge script, calls this.
+  // Posting pageReady here at core.js parse time would let Dart dispatch
+  // page.boot into a half-parsed page (the later bridge files still travel
+  // over HTTP on web) and fail with "Unknown method". The editor itself
+  // reports readiness separately (lifecycle 'ready').
+  window.FlutterMonaco.announcePageReady = function () {
+    window.FlutterMonaco.lifecycle('pageReady', {
+      protocolVersion: PROTOCOL_VERSION,
+      monacoVersion: page.monacoVersion || null,
+      capabilities: ['lsp'],
+    });
+  };
 })();
 
 // Shared bridge infrastructure: editor accessor, mobile detection,

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter_monaco/src/core/monaco_page_config.dart';
 
 import 'package:flutter/widgets.dart';
 
@@ -137,22 +138,13 @@ abstract class PlatformWebViewController {
   /// Loads the Monaco editor HTML into the WebView.
   ///
   /// This generates platform-appropriate HTML (with correct paths and
-  /// worker shims) and loads it into the WebView. The editor is not ready
-  /// until the `onEditorReady` event is received via the `flutterChannel`.
+  /// worker shims) and loads it into the WebView. The page shell reports
+  /// `lifecycle: pageReady` through the `flutterChannel`; the editor itself
+  /// is created later by the `page.boot` protocol command.
   ///
-  /// - [customCss]: Optional CSS injected into the page (e.g., `@font-face`
-  ///   rules for custom fonts). Changes require recreating the controller.
-  /// - [allowCdnFonts]: If `true`, relaxes Content-Security-Policy to allow
-  ///   loading fonts from remote URLs. **Security note:** This enables
-  ///   network requests from the WebView.
-  /// - [allowedConnectSources]: Extra Content-Security-Policy `connect-src`
-  ///   origins (e.g. `ws://127.0.0.1:3000` for WebSocket language servers).
-  ///   Changes require recreating the controller.
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  });
+  /// [page] carries the HTML-affecting settings (custom CSS, CSP opt-ins);
+  /// changing them requires recreating the controller.
+  Future<void> load({MonacoPageConfig page = const MonacoPageConfig()});
 
   /// Sets the background color of the WebView container.
   ///

@@ -7,6 +7,7 @@ import 'dart:ui_web' as ui_web;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_monaco/src/core/monaco_assets.dart';
+import 'package:flutter_monaco/src/core/monaco_page_config.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/platform/web_interaction_coordinator.dart';
 import 'package:flutter_monaco/src/platform/web_view_controller/web_asset_resolver.dart';
@@ -193,18 +194,20 @@ class WebViewController implements PlatformWebViewController {
       debugPrint('[WebViewController] Received iframe message: $message');
     }
 
-    // Lifecycle: the protocol v3 'ready' envelope marks the editor alive.
-    // The legacy {event: 'error'} shape still comes from the inline
+    // Lifecycle: the protocol v3 'pageReady' envelope marks the page shell
+    // alive (scripts loaded, protocol available) - that is what load()
+    // waits for; the editor itself is created later by page.boot. The
+    // legacy {event: 'error'} shape still comes from the inline
     // loader-failure handler in the HTML head (which runs before core.js).
     final lifecycleName = (json != null && json['kind'] == 'lifecycle')
         ? json['name']
         : null;
-    if (message == 'ready' || lifecycleName == 'ready') {
+    if (message == 'ready' || lifecycleName == 'pageReady') {
       _isReady = true;
       if (!_readyCompleter.isCompleted) {
         _readyCompleter.complete();
       }
-      debugPrint('[WebViewController] Monaco ready!');
+      debugPrint('[WebViewController] Monaco page shell ready!');
     } else if (!_isReady &&
         (lifecycleName == 'fatal' || json?['event'] == 'error')) {
       final errorMessage =
@@ -429,11 +432,7 @@ class WebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  }) async {
+  Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) async {
     debugPrint('[WebViewController] Loading Monaco in iframe');
     await _waitForIframeAttachment();
 
@@ -451,9 +450,9 @@ class WebViewController implements PlatformWebViewController {
         isIosOrMacOS: false,
         isWeb: true,
         messageToken: _messageToken,
-        customCss: customCss,
-        allowCdnFonts: allowCdnFonts,
-        allowedConnectSources: allowedConnectSources,
+        customCss: page.customCss,
+        allowCdnFonts: page.allowCdnFonts,
+        allowedConnectSources: page.allowedConnectSources,
         bridgeBasePath: _monacoBridgeAssetUrl(),
       );
 

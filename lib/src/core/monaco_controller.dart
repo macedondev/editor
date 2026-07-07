@@ -70,18 +70,35 @@ class MonacoController {
   // Decoration tracking
   List<String> _decorationIds = const [];
 
-  // Content queuing for pre-ready calls
-  String? _queuedValue;
-  MonacoLanguage? _queuedLanguage;
-  final List<_RegisteredCompletion> _queuedCompletionSources = [];
   final Map<String, _RegisteredCompletion> _completionSources = {};
   bool _completionListenerWired = false;
+  MonacoCapabilities? _capabilities;
 
-  /// Completes when the editor is fully initialized and ready to accept commands.
-  Future<void> get onReady => _onReady.future;
+  /// Completes when the editor is fully initialized and ready to accept
+  /// commands. Completes with the boot error if initialization fails
+  /// (asset load, page load, protocol handshake, or editor creation).
+  ///
+  /// [create] returns immediately on every platform; await this future (or
+  /// use the `MonacoEditor` widget, which renders loading/error chrome) for
+  /// readiness.
+  Future<void> get whenReady => _onReady.future;
 
-  /// Returns `true` if the editor has finished initializing.
-  bool get isReady => _onReady.isCompleted;
+  /// Returns `true` if the editor has finished initializing successfully.
+  bool get isReady => _onReady.isCompleted && _readyCompletedOk;
+  bool _readyCompletedOk = false;
+
+  /// What the loaded page can do, from the protocol handshake.
+  ///
+  /// Throws [StateError] before [whenReady] completes.
+  MonacoCapabilities get capabilities {
+    final capabilities = _capabilities;
+    if (capabilities == null) {
+      throw StateError(
+        'capabilities is only available after whenReady completes.',
+      );
+    }
+    return capabilities;
+  }
 
   /// Returns `true` if the editor currently accepts user interaction.
   bool get isInteractionEnabled => _interactionEnabled;
@@ -113,31 +130,31 @@ class MonacoController {
   Stream<MonacoScrollHandoffDetails> get onScrollHandoff =>
       _onScrollHandoff.stream;
 
-  /// Creates and initializes a new [MonacoController].
+  /// Creates a new [MonacoController] and boots the editor.
   ///
-  /// This method spins up the WebView and loads the Monaco resources.
+  /// Returns immediately on every platform (the WebView is created and the
+  /// page load + boot continue in the background). Await [whenReady] before
+  /// issuing commands directly, or hand the controller to the `MonacoEditor`
+  /// widget, which renders loading and error chrome. Boot failures complete
+  /// [whenReady] with the error.
   ///
-  /// On native platforms it waits for the `ready` lifecycle signal from
-  /// JavaScript before returning. On web it returns as soon as the controller
-  /// is created and continues initialization in the background. Use [onReady]
-  /// or [isReady] to wait for readiness on web.
+  /// The editor is born configured: [options], [initialText], the language,
+  /// and the theme travel in the `page.boot` command and apply before the
+  /// first frame paints - there is no default-theme flash and no
+  /// post-ready re-apply.
   ///
-  /// Throws a [TimeoutException] if the editor does not become ready within [readyTimeout] (default 20s).
-  ///
-  /// * [options]: Initial configuration (theme, language, etc.).
-  /// * [customCss]: CSS injected into the HTML (e.g., for custom fonts).
-  /// * [allowCdnFonts]: If `true`, allows loading fonts from remote URLs (enables network requests).
-  /// * [allowedConnectSources]: Extra Content-Security-Policy `connect-src`
-  ///   origins the editor page may reach (e.g. `['ws://127.0.0.1:3000']`).
-  ///   Required for [connectLanguageServer] with an [LspWebSocketTransport];
-  ///   see that class for details. **Security note:** every listed origin
-  ///   becomes reachable from JavaScript inside the editor.
+  /// * [options]: Initial configuration (theme, language, fonts, ...).
+  /// * [initialText]: Initial document contents (never written to disk; it
+  ///   travels over the protocol).
+  /// * [page]: Page-level settings (custom CSS, CSP opt-ins). See
+  ///   [MonacoPageConfig]; changing these requires a new controller.
+  /// * [readyTimeout]: Upper bound for the whole boot (asset extraction
+  ///   excluded); on expiry [whenReady] completes with a [TimeoutException].
   static Future<MonacoController> create({
     EditorOptions? options,
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-    Duration? readyTimeout,
+    String? initialText,
+    MonacoPageConfig page = const MonacoPageConfig(),
+    Duration readyTimeout = const Duration(seconds: 20),
   }) async {
     // Ensure Monaco assets are ready
     await MonacoAssets.ensureReady();
@@ -158,73 +175,12 @@ class MonacoController {
 
       // Create controller first (before loading HTML) so widget can render.
       controller = MonacoController._(protocol, webViewController);
-
-      final readyFuture = (() async {
-        try {
-          await webViewController.load(
-            customCss: customCss,
-            allowCdnFonts: allowCdnFonts,
-            allowedConnectSources: allowedConnectSources,
-          );
-          debugPrint(
-            '[MonacoController] Loading HTML (Platform: ${kIsWeb ? 'Web' : defaultTargetPlatform.name})',
-          );
-
-          // Wait for editor ready signal with configurable timeout
-          await protocol.editorReady.timeout(
-            readyTimeout ?? const Duration(seconds: 20),
-            onTimeout: () => throw TimeoutException(
-              'Monaco Editor did not report ready in ${readyTimeout?.inSeconds ?? 20} seconds.',
-            ),
-          );
-
-          // Mark ready
-          if (!controller!._onReady.isCompleted) {
-            controller._onReady.complete();
-          }
-
-          // Apply initial options if provided
-          if (options != null) {
-            await controller.updateOptions(options);
-            await controller.setThemeById(options.effectiveThemeId);
-            await controller.setLanguage(options.language);
-          }
-
-          // Apply any queued content
-          if (controller._queuedValue != null) {
-            await controller.setValue(controller._queuedValue!);
-            controller._queuedValue = null;
-          }
-          if (controller._queuedLanguage != null) {
-            await controller.setLanguage(controller._queuedLanguage!);
-            controller._queuedLanguage = null;
-          }
-
-          // Register any queued completion sources
-          for (final entry in controller._queuedCompletionSources) {
-            await controller._registerCompletionSourceInternal(entry);
-          }
-          controller._queuedCompletionSources.clear();
-        } catch (e, st) {
-          // Only complete _onReady with error on web, where we return the
-          // controller before readyFuture completes. On native, we await
-          // readyFuture and throw before returning, so no one listens to
-          // _onReady - completing it with an error would be unhandled.
-          if (kIsWeb &&
-              controller != null &&
-              !controller._onReady.isCompleted) {
-            controller._onReady.completeError(e, st);
-          }
-          rethrow;
-        }
-      })();
-
-      if (kIsWeb) {
-        unawaited(readyFuture.catchError((Object _, StackTrace _) {}));
-      } else {
-        await readyFuture;
-      }
-
+      controller._startBoot(
+        options: options,
+        initialText: initialText,
+        page: page,
+        readyTimeout: readyTimeout,
+      );
       return controller;
     } catch (_) {
       // Clean up resources on failure
@@ -236,6 +192,62 @@ class MonacoController {
       }
       rethrow;
     }
+  }
+
+  /// Runs the two-phase boot: load page, await pageReady, dispatch
+  /// page.boot, await editor ready. Uniform on all platforms; failures land
+  /// in [whenReady].
+  void _startBoot({
+    required EditorOptions? options,
+    required String? initialText,
+    required MonacoPageConfig page,
+    required Duration readyTimeout,
+  }) {
+    final bootOptions = options ?? const EditorOptions();
+    // Boot failures must reach callers through [whenReady] (and the commands
+    // gated on it), never as an unhandled zone error when nobody awaits it.
+    _onReady.future.ignore();
+    unawaited(() async {
+      try {
+        await () async {
+          await _webViewController.load(page: page);
+          debugPrint(
+            '[MonacoController] Page loading (Platform: '
+            '${kIsWeb ? 'Web' : defaultTargetPlatform.name})',
+          );
+
+          final handshake = await _protocol.pageReady;
+          _capabilities = MonacoCapabilities.fromHandshake(handshake);
+
+          // Boot the editor with the merged initial state; the response
+          // acknowledges acceptance, the ready lifecycle follows creation.
+          await _protocol.invoke('page.boot', {
+            'options': bootOptions.toMonacoOptions(),
+            'text': initialText ?? '',
+            'language': bootOptions.language.id,
+            'theme': bootOptions.effectiveThemeId,
+            'scrollHandoff': const {'wheel': false, 'touch': false},
+          }, timeout: null);
+
+          await _protocol.editorReady;
+        }().timeout(
+          readyTimeout,
+          onTimeout: () => throw TimeoutException(
+            'Monaco Editor did not report ready in '
+            '${readyTimeout.inSeconds} seconds.',
+          ),
+        );
+
+        _readyCompletedOk = true;
+        if (!_onReady.isCompleted) {
+          _onReady.complete();
+        }
+      } catch (e, st) {
+        if (!_onReady.isCompleted) {
+          _onReady.completeError(e, st);
+        }
+      }
+    }());
   }
 
   /// Create a controller for tests without touching assets or platform views.
@@ -285,6 +297,7 @@ class MonacoController {
         'name': 'ready',
       }),
     );
+    _readyCompletedOk = true;
     if (!_onReady.isCompleted) {
       _onReady.complete();
     }
@@ -310,19 +323,9 @@ class MonacoController {
 
   /// Switches the editor's syntax highlighting language.
   ///
-  /// If the editor is not yet ready, the language is queued and applied upon initialization.
+  /// Waits for editor readiness; calls issued before ready apply in call
+  /// order once the editor exists (last write wins).
   Future<void> setLanguage(MonacoLanguage language) async {
-    if (!_onReady.isCompleted) {
-      _queuedLanguage = language;
-      if (kIsWeb) return;
-      await _ensureReady();
-      if (_queuedLanguage == language) {
-        // Only use queued value if it hasn't been overwritten
-        _queuedLanguage = null;
-      } else {
-        return; // A newer language was queued, skip this one
-      }
-    }
     await _invoke('document.setLanguage', {'language': language.id});
   }
 
@@ -539,12 +542,6 @@ class MonacoController {
     );
     _completionSources[providerId] = entry;
 
-    if (!_onReady.isCompleted) {
-      // Queue for registration when ready - don't block widget rendering
-      _queuedCompletionSources.add(entry);
-      return providerId;
-    }
-
     await _registerCompletionSourceInternal(entry);
     return providerId;
   }
@@ -588,13 +585,6 @@ class MonacoController {
   /// Unregisters a previously registered completion source.
   Future<void> unregisterCompletionSource(String id) async {
     _completionSources.remove(id);
-    // Also remove from queue if it was pending registration
-    _queuedCompletionSources.removeWhere((e) => e.id == id);
-
-    if (!_onReady.isCompleted) {
-      // Not registered on JS side yet, just return
-      return;
-    }
     await _invoke('completions.unregister', {'id': id});
   }
 
@@ -981,20 +971,11 @@ class MonacoController {
 
   /// Replaces the entire content of the editor.
   ///
-  /// If the editor is not yet ready, the value is queued and applied immediately
-  /// after initialization.
+  /// Waits for editor readiness; calls issued before ready apply in call
+  /// order once the editor exists (last write wins). Prefer the
+  /// `initialText` parameter of [create] for the first contents - it rides
+  /// the boot command and paints in the first frame.
   Future<void> setValue(String value) async {
-    if (!_onReady.isCompleted) {
-      _queuedValue = value;
-      if (kIsWeb) return;
-      await _ensureReady();
-      if (_queuedValue == value) {
-        // Only use queued value if it hasn't been overwritten
-        _queuedValue = null;
-      } else {
-        return; // A newer value was queued, skip this one
-      }
-    }
     await _invoke('document.setText', {'uri': null, 'text': value});
   }
 

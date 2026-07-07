@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
+import 'package:flutter_monaco/src/core/monaco_page_config.dart';
 
 /// Fallback stub implementation for unsupported platforms.
 ///
@@ -88,11 +89,7 @@ class WebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  }) {
+  Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) {
     throw UnsupportedError('WebView not supported on this platform');
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter_monaco/src/core/monaco_page_config.dart';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_monaco/src/platform/platform_webview_interface.dart';
@@ -86,16 +87,8 @@ class WebViewController implements PlatformWebViewController {
   Future<void> initialize() => _controller.initialize();
 
   @override
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  }) {
-    return _controller.load(
-      customCss: customCss,
-      allowCdnFonts: allowCdnFonts,
-      allowedConnectSources: allowedConnectSources,
-    );
+  Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) {
+    return _controller.load(page: page);
   }
 
   @override

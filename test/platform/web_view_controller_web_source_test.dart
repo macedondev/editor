@@ -52,12 +52,13 @@ void main() {
   test('web error messages fail the current load attempt', () {
     final source = webControllerSource();
 
-    // Readiness rides the protocol v3 lifecycle envelope.
+    // Load-readiness rides the protocol v3 'pageReady' lifecycle envelope
+    // (editor readiness is MonacoProtocol's concern, not the web view's).
     expect(source, contains("json['kind'] == 'lifecycle'"));
-    expect(source, contains("lifecycleName == 'ready'"));
-    // Failures before ready must fail the in-flight load attempt: lifecycle
-    // fatals, plus the legacy {event:'error'} shape still posted by the
-    // inline loader-failure handler in the HTML head (it runs before
+    expect(source, contains("lifecycleName == 'pageReady'"));
+    // Failures before pageReady must fail the in-flight load attempt:
+    // lifecycle fatals, plus the legacy {event:'error'} shape still posted
+    // by the inline loader-failure handler in the HTML head (it runs before
     // core.js exists).
     expect(source, contains('!_isReady'));
     expect(source, contains("lifecycleName == 'fatal'"));

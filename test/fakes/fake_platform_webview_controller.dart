@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_monaco/src/core/monaco_page_config.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 
 /// Matcher function type for determining if a script should trigger an action.
@@ -112,20 +113,39 @@ class FakePlatformWebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  }) async {
+  Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) async {
     if (disposed) {
       throw StateError('Cannot load file on disposed controller');
     }
-    final connectSources = allowedConnectSources.isEmpty
+    final connectSources = page.allowedConnectSources.isEmpty
         ? ''
-        : ':${allowedConnectSources.join(',')}';
-    loadedFiles.add('LOAD_FILE:$customCss:$allowCdnFonts$connectSources');
-    executed.add('LOAD_FILE:$customCss:$allowCdnFonts$connectSources');
+        : ':${page.allowedConnectSources.join(',')}';
+    loadedFiles.add(
+      'LOAD_FILE:${page.customCss}:${page.allowCdnFonts}$connectSources',
+    );
+    executed.add(
+      'LOAD_FILE:${page.customCss}:${page.allowCdnFonts}$connectSources',
+    );
+    if (emitPageReadyOnLoad) {
+      scheduleMicrotask(() {
+        tryEmitToChannel(
+          'flutterChannel',
+          jsonEncode({
+            'v': 3,
+            'kind': 'lifecycle',
+            'name': 'pageReady',
+            'protocolVersion': 3,
+            'monacoVersion': 'test',
+            'capabilities': ['lsp'],
+          }),
+        );
+      });
+    }
   }
+
+  /// When true (default), load() emits a pageReady lifecycle envelope like a
+  /// real page shell, letting the boot flow proceed to page.boot.
+  bool emitPageReadyOnLoad = true;
 
   @override
   Future<void> setBackgroundColor(Color color) async {
@@ -218,6 +238,7 @@ class FakePlatformWebViewController implements PlatformWebViewController {
           id,
           _CommandInjection.success(methodMatch: method, value: result),
         );
+        _maybeEmitReadyAfterBoot(method);
         return;
       }
     }
@@ -226,6 +247,18 @@ class FakePlatformWebViewController implements PlatformWebViewController {
       id,
       _CommandInjection.success(methodMatch: method, isUndefined: true),
     );
+    _maybeEmitReadyAfterBoot(method);
+  }
+
+  /// Like a real page: the editor reports ready after page.boot lands.
+  void _maybeEmitReadyAfterBoot(String method) {
+    if (method != 'page.boot') return;
+    scheduleMicrotask(() {
+      tryEmitToChannel(
+        'flutterChannel',
+        jsonEncode({'v': 3, 'kind': 'lifecycle', 'name': 'ready'}),
+      );
+    });
   }
 
   /// Extracts the dispatch payload from [script], or null when the script is

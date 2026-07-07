@@ -1,14 +1,33 @@
-// flutter_monaco bridge - boot orchestration. The stats emitter and event
-// wiring are ported verbatim from the 2.3.0 generated page; lifecycle and
-// event posts ride the protocol v3 envelope (see core.js).
+// flutter_monaco bridge - boot orchestration (protocol v3 two-phase boot).
+// The stats emitter and event wiring are ported verbatim from the 2.3.0
+// generated page; the editor is created from the page.boot command's
+// parameters so the first painted frame already uses the requested options,
+// text, language, and theme (no markdown/vs-dark flash).
 /* eslint-disable */
 'use strict';
 window.__FMB = window.__FMB || {};
 
-// Boot orchestration: requires editor.main, wires stats/event emitters,
-// runs the bridge installers in the original 2.3.0 execution order, and
-// creates the editor.
 (function () {
+  // page.boot arrives from Dart after lifecycle:pageReady. Editor creation
+  // needs BOTH editor.main loaded AND the boot parameters; whichever finishes
+  // last triggers the create.
+  var bootResolve = null;
+  var bootPromise = new Promise(function (resolve) { bootResolve = resolve; });
+  var booted = false;
+
+  window.FlutterMonaco.register('page.boot', function (params) {
+    if (booted) {
+      throw new Error('page.boot may only be dispatched once per page.');
+    }
+    booted = true;
+    bootResolve(params || {});
+    return true;
+  });
+
+  // All bridge scripts have parsed and every command (including page.boot
+  // above) is registered - only now is it safe for Dart to dispatch.
+  window.FlutterMonaco.announcePageReady();
+
   function _startMonaco() {
       console.log('[Monaco HTML] Attempting to require editor.main...');
       try {
@@ -66,18 +85,44 @@ window.__FMB = window.__FMB || {};
               FMB.scrollHandoff(ctx);
               FMB.lsp(ctx);
 
+              // Boot-requested scroll handoff sources (off by default; the
+              // module installs listeners only for enabled sources).
+              var bootScrollHandoff = (window.__FM_BOOT || {}).scrollHandoff || {};
+              if (bootScrollHandoff.wheel || bootScrollHandoff.touch) {
+                window.flutterMonaco.setScrollHandoff({
+                  wheel: !!bootScrollHandoff.wheel,
+                  touch: !!bootScrollHandoff.touch,
+                });
+              }
+
               window.FlutterMonaco.lifecycle('ready');
               console.log('[Monaco] Editor is ready and the Flutter bridge is installed.');
             });
 
-            monaco.editor.create(document.getElementById('editor-container'), {
-              value: '// Monaco Editor is ready',
-              language: 'markdown',
-              theme: 'vs-dark',
-              automaticLayout: true,
-              wordWrap: 'on',
-              padding: { top: 10 },
-              minimap: { enabled: false }
+            bootPromise.then(function (params) {
+              window.__FM_BOOT = params;
+              // The editor is born configured: sparse Monaco options from
+              // Dart, plus the initial text/language/theme, in one create.
+              var options = Object.assign({}, params.options || {});
+              options.value = typeof params.text === 'string' ? params.text : '';
+              options.language = params.language || 'plaintext';
+              options.theme = params.theme || 'vs';
+              if (options.automaticLayout === undefined) {
+                options.automaticLayout = true;
+              }
+              monaco.editor.create(
+                document.getElementById('editor-container'),
+                options
+              );
+            }).catch(function (e) {
+              console.error('[Monaco] FATAL: editor creation failed. Error:', e);
+              window.FlutterMonaco.lifecycle('fatal', {
+                error: {
+                  name: e && e.name ? String(e.name) : 'Error',
+                  message: 'Editor creation failed: ' + (e && e.message ? e.message : e),
+                  stack: e && e.stack ? String(e.stack) : null,
+                },
+              });
             });
           },
           function (error) {

@@ -79,17 +79,9 @@ abstract class WebViewController implements PlatformWebViewController {
   ///   extracted assets
   ///
   /// Returns the absolute path to the generated HTML file.
-  Future<String> _ensureHtmlFile({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  }) async {
+  Future<String> _ensureHtmlFile(MonacoPageConfig page) async {
     final htmlFilePath = await MonacoAssets.indexHtmlPath(
-      cacheKey: Object.hash(
-        customCss,
-        allowCdnFonts,
-        Object.hashAll(allowedConnectSources),
-      ),
+      cacheKey: page.hashCode,
     );
 
     final htmlFile = File(htmlFilePath);
@@ -108,9 +100,9 @@ abstract class WebViewController implements PlatformWebViewController {
         absoluteVsPath,
         isWindows: true,
         isIosOrMacOS: false,
-        customCss: customCss,
-        allowCdnFonts: allowCdnFonts,
-        allowedConnectSources: allowedConnectSources,
+        customCss: page.customCss,
+        allowCdnFonts: page.allowCdnFonts,
+        allowedConnectSources: page.allowedConnectSources,
         bridgeBasePath: bridgeBase,
       );
     } else {
@@ -119,9 +111,9 @@ abstract class WebViewController implements PlatformWebViewController {
         p.join('min', 'vs'),
         isWindows: false,
         isIosOrMacOS: Platform.isIOS || Platform.isMacOS,
-        customCss: customCss,
-        allowCdnFonts: allowCdnFonts,
-        allowedConnectSources: allowedConnectSources,
+        customCss: page.customCss,
+        allowCdnFonts: page.allowCdnFonts,
+        allowedConnectSources: page.allowedConnectSources,
       );
     }
 
@@ -351,16 +343,8 @@ class FlutterWebViewController extends WebViewController {
   }
 
   @override
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  }) async {
-    final htmlFilePath = await _ensureHtmlFile(
-      customCss: customCss,
-      allowCdnFonts: allowCdnFonts,
-      allowedConnectSources: allowedConnectSources,
-    );
+  Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) async {
+    final htmlFilePath = await _ensureHtmlFile(page);
     await _controller.loadFile(htmlFilePath);
   }
 
@@ -493,16 +477,8 @@ class WindowsWebViewController extends WebViewController {
   }
 
   @override
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  }) async {
-    final htmlFilePath = await _ensureHtmlFile(
-      customCss: customCss,
-      allowCdnFonts: allowCdnFonts,
-      allowedConnectSources: allowedConnectSources,
-    );
+  Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) async {
+    final htmlFilePath = await _ensureHtmlFile(page);
     await _controller.loadUrl(Uri.file(htmlFilePath).toString());
   }
 
