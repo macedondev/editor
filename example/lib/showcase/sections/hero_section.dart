@@ -51,17 +51,11 @@ class HeroSection extends StatelessWidget {
                             : headlineTop)
                         .copyWith(color: c.textPrimary),
               ),
-              ShaderMask(
-                shaderCallback: (bounds) => accentGradient.createShader(bounds),
-                blendMode: BlendMode.srcIn,
-                child: Text(
-                  'inside your Flutter app.',
-                  style:
-                      (headlineSize != null
-                              ? headlineTop.copyWith(fontSize: headlineSize)
-                              : headlineTop)
-                          .copyWith(color: Colors.white),
-                ),
+              _GradientHeadline(
+                text: 'inside your Flutter app.',
+                style: headlineSize != null
+                    ? headlineTop.copyWith(fontSize: headlineSize)
+                    : headlineTop,
               ),
               const SizedBox(height: Insets.lg),
               ConstrainedBox(
@@ -211,6 +205,45 @@ class _EyebrowPill extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Paints [text] with [accentGradient] applied directly to the glyphs.
+///
+/// This intentionally avoids a [ShaderMask] with [BlendMode.srcIn]: on the
+/// CanvasKit web renderer that composite leaks the masked (white) child
+/// through at anti-aliased glyph edges, showing white specks inside the
+/// gradient text. A `foreground` shader has no separate child layer to leak,
+/// so the artifact cannot occur. The gradient is mapped across the text's
+/// measured bounds so it stays consistent whether the headline renders on one
+/// line or wraps.
+class _GradientHeadline extends StatelessWidget {
+  const _GradientHeadline({required this.text, required this.style});
+
+  final String text;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    final textScaler = MediaQuery.textScalerOf(context);
+    final direction = Directionality.of(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: direction,
+          textScaler: textScaler,
+        )..layout(maxWidth: constraints.maxWidth);
+        final rect = Offset.zero & painter.size;
+        return Text(
+          text,
+          textScaler: textScaler,
+          style: style.copyWith(
+            foreground: Paint()..shader = accentGradient.createShader(rect),
+          ),
+        );
+      },
     );
   }
 }
