@@ -1,17 +1,13 @@
 import 'package:flutter_monaco/src/core/monaco_assets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Source-level tests for the edge scroll handoff JS module inside the
-/// generated Monaco host page. These assert the contract Dart depends on:
-/// the toggle entry point, listener registration flags, input guards, and
-/// the bridge event shape.
+import '../helpers/bridge_sources.dart';
+
+/// Source-level tests for the edge scroll handoff JS bridge module. These
+/// assert the contract Dart depends on: the toggle entry point, listener
+/// registration flags, input guards, and the bridge event shape.
 void main() {
-  final html = MonacoAssets.generateIndexHtml('min/vs');
-  final webHtml = MonacoAssets.generateIndexHtml(
-    'http://localhost/assets/monaco/min/vs',
-    isWeb: true,
-    messageToken: 'token-1',
-  );
+  final html = bridgeSource('scroll-handoff.js');
 
   group('generated scroll handoff module', () {
     test('defines the flutterMonaco.setScrollHandoff toggle exactly once', () {
@@ -20,11 +16,17 @@ void main() {
         'window.flutterMonaco.setScrollHandoff'.allMatches(html).length,
         1,
       );
-      // Present on every platform variant, including web.
-      expect(
-        'window.flutterMonaco.setScrollHandoff'.allMatches(webHtml).length,
-        1,
-      );
+      // The module script is referenced on every platform variant.
+      for (final pageHtml in [
+        MonacoAssets.generateIndexHtml('min/vs'),
+        MonacoAssets.generateIndexHtml(
+          'http://localhost/assets/monaco/min/vs',
+          isWeb: true,
+          messageToken: 'token-1',
+        ),
+      ]) {
+        expect(pageHtml, contains('scroll-handoff.js'));
+      }
     });
 
     test('wheel listener is capture-phase and non-passive', () {
@@ -81,16 +83,6 @@ void main() {
       final touchRegion = html.substring(start, end);
       expect(touchRegion, contains('onDidChangeCursorSelection'));
       expect(touchRegion, contains('gesture.cancelled = true'));
-    });
-
-    test('htmlGenerationVersion accounts for the bridge change', () {
-      expect(
-        MonacoAssets.htmlGenerationVersion,
-        greaterThanOrEqualTo(4),
-        reason:
-            'generateIndexHtml output changed for scroll handoff; cached '
-            'HTML from older package versions must be regenerated',
-      );
     });
   });
 }

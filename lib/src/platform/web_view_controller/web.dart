@@ -29,6 +29,19 @@ String _monacoVsAssetUrl() {
   return resolveWebAssetUrl(web.document.baseURI, assetUrl);
 }
 
+/// Resolves the bundled bridge JavaScript directory URL on Flutter Web.
+///
+/// Same resolution rules as [_monacoVsAssetUrl]: the bridge files are plain
+/// Flutter assets served from the host origin, so `script-src 'self'` admits
+/// them and the blob-URL iframe (which inherits the creator's origin) can
+/// load them via `<script src>`.
+String _monacoBridgeAssetUrl() {
+  final assetUrl = ui_web.assetManager.getAssetUrl(
+    '${MonacoAssets.assetBaseDir}/bridge',
+  );
+  return resolveWebAssetUrl(web.document.baseURI, assetUrl);
+}
+
 /// WebView implementation for Flutter Web using an iframe.
 ///
 /// On web platforms, native WebViews aren't available, so Monaco is hosted
@@ -428,6 +441,7 @@ class WebViewController implements PlatformWebViewController {
         customCss: customCss,
         allowCdnFonts: allowCdnFonts,
         allowedConnectSources: allowedConnectSources,
+        bridgeBasePath: _monacoBridgeAssetUrl(),
       );
 
       final blobUrl = web.URL.createObjectURL(

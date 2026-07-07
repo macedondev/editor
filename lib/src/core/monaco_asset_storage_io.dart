@@ -43,6 +43,51 @@ Future<void> ensureMonacoAssetsReady({
   );
 }
 
+/// Rewrites the bridge JavaScript files in the native asset cache.
+///
+/// Unlike the sentinel-guarded `min/` tree, the bridge files are small and
+/// are rewritten unconditionally on every launch, so upgrading the package
+/// can never leave a stale JS bridge next to a current Dart side.
+Future<void> refreshMonacoBridgeAssets({
+  required String assetBaseDir,
+  required String cacheSubDir,
+  required String monacoVersion,
+}) async {
+  final targetDir = await monacoAssetCacheDir(
+    assetBaseDir: assetBaseDir,
+    cacheSubDir: cacheSubDir,
+    monacoVersion: monacoVersion,
+  );
+
+  final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+  final bridgeAssets = manifest
+      .listAssets()
+      .where((key) => key.startsWith('$assetBaseDir/bridge/'))
+      .where((key) => !key.endsWith('.DS_Store'))
+      .toList();
+
+  if (bridgeAssets.isEmpty) {
+    // Mirrors the `min/` copy behavior: in a consuming app the manifest
+    // always lists the bridge, but the package's own test harness keys
+    // assets without the `packages/flutter_monaco/` prefix and finds none.
+    debugPrint(
+      '[MonacoAssets] No bridge assets under $assetBaseDir/bridge/ in the '
+      'asset manifest; skipping bridge refresh.',
+    );
+    return;
+  }
+
+  for (final assetKey in bridgeAssets) {
+    final relativePath = assetKey.substring('$assetBaseDir/'.length);
+    final targetFile = File(p.join(targetDir, relativePath));
+    await targetFile.parent.create(recursive: true);
+    final bytes = await rootBundle.load(assetKey);
+    await targetFile.writeAsBytes(bytes.buffer.asUint8List());
+  }
+
+  debugPrint('[MonacoAssets] Bridge refreshed (${bridgeAssets.length} files)');
+}
+
 /// Returns the native cache directory used for extracted Monaco assets.
 Future<String> monacoAssetCacheDir({
   required String assetBaseDir,

@@ -1,50 +1,56 @@
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../helpers/bridge_sources.dart';
+
 void main() {
-  group('generateIndexHtml LSP bridge', () {
+  group('LSP bridge assets', () {
     test(
       'bundled Monaco version is 0.55.1 (first version with monaco.lsp)',
       () {
         expect(MonacoAssets.monacoVersion, '0.55.1');
-        expect(MonacoAssets.htmlGenerationVersion, greaterThanOrEqualTo(4));
       },
     );
 
-    test('installs the flutterMonaco.lsp namespace', () {
+    test('generated html references the LSP bridge script', () {
       final html = MonacoAssets.generateIndexHtml('min/vs');
+      expect(html, contains('lsp.js'));
+    });
 
-      expect(html, contains('window.flutterMonaco.lsp'));
-      expect(html, contains('deliverServerMessage'));
-      expect(html, contains('disconnectAll'));
-      expect(html, contains('monaco.lsp.MonacoLspClient'));
-      expect(html, contains('monaco.lsp.WebSocketTransport.connectTo'));
+    test('installs the flutterMonaco.lsp namespace', () {
+      final lsp = bridgeSource('lsp.js');
+
+      expect(lsp, contains('window.flutterMonaco.lsp'));
+      expect(lsp, contains('deliverServerMessage'));
+      expect(lsp, contains('disconnectAll'));
+      expect(lsp, contains('monaco.lsp.MonacoLspClient'));
+      expect(lsp, contains('monaco.lsp.WebSocketTransport.connectTo'));
     });
 
     test('acknowledges optional server refresh requests', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+      final lsp = bridgeSource('lsp.js');
 
       // Monaco 0.55.1 answers these with method-not-found, which kills
       // servers like pyright via an unhandled rejection; the bridge must
       // register benign handlers instead.
-      expect(html, contains('workspace/diagnostic/refresh'));
-      expect(html, contains('workspace/semanticTokens/refresh'));
-      expect(html, contains('workspace/codeLens/refresh'));
-      expect(html, contains('registerBenignRefreshHandlers'));
+      expect(lsp, contains('workspace/diagnostic/refresh'));
+      expect(lsp, contains('workspace/semanticTokens/refresh'));
+      expect(lsp, contains('workspace/codeLens/refresh'));
+      expect(lsp, contains('registerBenignRefreshHandlers'));
     });
 
     test('installs the async invocation envelope', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+      final core = bridgeSource('core.js');
 
-      expect(html, contains('window.flutterMonacoInvokeAsync'));
-      expect(html, contains("event: 'invokeResult'"));
+      expect(core, contains('window.flutterMonacoInvokeAsync'));
+      expect(core, contains("event: 'invokeResult'"));
     });
 
     test('prefers monaco.json with a legacy namespace fallback', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+      final api = bridgeSource('editor-api.js');
 
-      expect(html, contains("typeof monaco.json !== 'undefined'"));
-      expect(html, contains('monaco.languages && monaco.languages.json'));
+      expect(api, contains("typeof monaco.json !== 'undefined'"));
+      expect(api, contains('monaco.languages && monaco.languages.json'));
     });
 
     test('default CSP stays locked down', () {

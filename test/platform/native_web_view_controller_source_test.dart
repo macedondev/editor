@@ -18,7 +18,9 @@ void main() {
       final baseFocusStart = source.indexOf(
         '@override\n  Future<NativeFocusResult> requestNativeFocus() async {',
       );
-      final baseFocusEnd = source.indexOf('/// Generates and caches');
+      final baseFocusEnd = source.indexOf(
+        '/// Generates the Monaco editor HTML file',
+      );
       expect(baseFocusStart, isNonNegative);
       expect(baseFocusEnd, greaterThan(baseFocusStart));
 

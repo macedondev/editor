@@ -59,6 +59,7 @@ flutter:
     - assets/github.svg
     - pubspec.yaml
     - assets/monaco/
+    - assets/monaco/bridge/
     - assets/monaco/min/
     - assets/monaco/min/vs/
     - assets/monaco/min/vs/assets/

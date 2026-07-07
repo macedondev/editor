@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
+import '../helpers/bridge_sources.dart';
+
 class _FakePathProviderPlatform extends PathProviderPlatform {
   _FakePathProviderPlatform(this.baseDir);
 
@@ -94,8 +96,8 @@ void main() {
       expect(html, isNot(contains('@media (pointer: coarse)')));
     });
 
-    test('generated html includes tap-gated mobile gesture focus bridge', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+    test('bridge includes tap-gated mobile gesture focus bridge', () {
+      final html = allBridgeSources();
 
       expect(html, contains('const isMobileInputPlatform = () =>'));
       expect(html, contains("navigator.platform === 'MacIntel'"));
@@ -169,8 +171,8 @@ void main() {
       expect(html, isNot(contains('monacoGestureDebug')));
     });
 
-    test('generated html keeps desktop preventScroll focus retry', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+    test('bridge keeps desktop preventScroll focus retry', () {
+      final html = allBridgeSources();
 
       expect(html, contains('if (isMobileInputPlatform())'));
       expect(html, contains('focusEditorTextAreaNow();'));
@@ -199,13 +201,15 @@ void main() {
       },
     );
 
-    test('web html includes the visual viewport keyboard fit module', () {
-      final html = MonacoAssets.generateIndexHtml(
+    test('web html references the visual viewport keyboard fit module', () {
+      final webHtml = MonacoAssets.generateIndexHtml(
         'https://example.com/assets/monaco/min/vs',
         isWeb: true,
         messageToken: 'token',
       );
+      expect(webHtml, contains('viewport-fit.js'));
 
+      final html = bridgeSource('viewport-fit.js');
       expect(html, contains('__flutterMonacoViewportFitBound'));
       expect(html, contains('const applyViewportFit = () =>'));
       expect(html, contains('const scheduleViewportFit = () =>'));
@@ -219,11 +223,7 @@ void main() {
     });
 
     test('viewport fit pins only while the visual viewport is constrained', () {
-      final html = MonacoAssets.generateIndexHtml(
-        'https://example.com/assets/monaco/min/vs',
-        isWeb: true,
-        messageToken: 'token',
-      );
+      final html = bridgeSource('viewport-fit.js');
 
       // The pin exists for keyboard/caret-pan states. Without this gate, an
       // editor half-scrolled off inside a scrollable Flutter page gets pinned
@@ -237,11 +237,7 @@ void main() {
     test(
       'parent-side listeners are self-detaching and centrally detachable',
       () {
-        final html = MonacoAssets.generateIndexHtml(
-          'https://example.com/assets/monaco/min/vs',
-          isWeb: true,
-          messageToken: 'token',
-        );
+        final html = allBridgeSources();
 
         // Removing the iframe fires no pagehide, so raw addEventListener on a
         // parent object would root the dead document (and Monaco) in the host
@@ -301,8 +297,7 @@ void main() {
       ]) {
         expect(html, isNot(contains('touch-action: none')));
         expect(html, isNot(contains('overscroll-behavior')));
-        expect(html, isNot(contains('applyViewportFit')));
-        expect(html, isNot(contains('__flutterMonacoViewportFitBound')));
+        expect(html, isNot(contains('viewport-fit.js')));
       }
     });
   });

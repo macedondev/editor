@@ -64,17 +64,19 @@ abstract class WebViewController implements PlatformWebViewController {
   @override
   Future<void> releaseNativeFocus() async {}
 
-  /// Generates and caches the Monaco editor HTML file for native platforms.
+  /// Generates the Monaco editor HTML file for native platforms.
   ///
-  /// This method:
-  /// 1. Computes a cache key from [customCss] and [allowCdnFonts]
-  /// 2. Returns the cached file path if it already exists
-  /// 3. Generates platform-specific HTML with correct asset paths
-  /// 4. Writes the HTML to the cache directory
+  /// The file is rewritten on every load: it is KB-sized, and always
+  /// rewriting makes stale-page bugs structurally impossible (the 2.x
+  /// exists-check fast path required a manual cache-bust constant). The
+  /// [customCss]/[allowCdnFonts]/[allowedConnectSources] tuple still keys the
+  /// file name so differently configured editors in one app do not clobber
+  /// each other's page while running.
   ///
   /// **Platform differences:**
   /// - Windows uses absolute `file://` paths since HTML is loaded via URL
-  /// - macOS/iOS uses relative paths since HTML is in the same directory
+  /// - macOS/iOS/Android use relative paths since HTML sits next to the
+  ///   extracted assets
   ///
   /// Returns the absolute path to the generated HTML file.
   Future<String> _ensureHtmlFile({
@@ -84,21 +86,13 @@ abstract class WebViewController implements PlatformWebViewController {
   }) async {
     final htmlFilePath = await MonacoAssets.indexHtmlPath(
       cacheKey: Object.hash(
-        MonacoAssets.htmlGenerationVersion,
         customCss,
         allowCdnFonts,
         Object.hashAll(allowedConnectSources),
       ),
     );
 
-    // Use cache key in filename to avoid conflicts.
     final htmlFile = File(htmlFilePath);
-
-    // Skip if file already exists (cached).
-    if (htmlFile.existsSync()) {
-      debugPrint('[MonacoAssets] Using cached HTML file: ${htmlFile.path}');
-      return htmlFilePath;
-    }
 
     // Generate platform-specific HTML
     String htmlContent;
@@ -109,6 +103,7 @@ abstract class WebViewController implements PlatformWebViewController {
       // Windows needs absolute paths since we load from file://
       final vsPath = p.join(targetDir, 'min', 'vs');
       final absoluteVsPath = Uri.file(vsPath).toString();
+      final bridgeBase = Uri.file(p.join(targetDir, 'bridge')).toString();
       htmlContent = MonacoAssets.generateIndexHtml(
         absoluteVsPath,
         isWindows: true,
@@ -116,6 +111,7 @@ abstract class WebViewController implements PlatformWebViewController {
         customCss: customCss,
         allowCdnFonts: allowCdnFonts,
         allowedConnectSources: allowedConnectSources,
+        bridgeBasePath: bridgeBase,
       );
     } else {
       // macOS uses relative paths since HTML is in the same directory

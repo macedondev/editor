@@ -6,6 +6,14 @@ Future<void> ensureMonacoAssetsReady({
   required String monacoVersion,
 }) async {}
 
+/// Web bridge refresh is a no-op: bridge files are served directly as
+/// Flutter assets, so they can never go stale relative to the Dart side.
+Future<void> refreshMonacoBridgeAssets({
+  required String assetBaseDir,
+  required String cacheSubDir,
+  required String monacoVersion,
+}) async {}
+
 /// Returns the browser-visible Monaco asset directory.
 Future<String> monacoAssetCacheDir({
   required String assetBaseDir,
