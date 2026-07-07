@@ -336,6 +336,10 @@ class _DiffCard extends StatelessWidget {
                 padding: MonacoPadding(top: 12, bottom: 12),
               ),
               diffOptions: const MonacoDiffOptions(renderSideBySide: true),
+              // Edge scroll handoff: once the diff hits its vertical scroll
+              // edge, the wheel keeps scrolling the page instead of dying
+              // over the editor.
+              scrollHandoff: const MonacoScrollHandoff.edge(),
               onReady: onReady,
             ),
           ),

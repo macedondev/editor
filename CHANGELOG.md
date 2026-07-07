@@ -3,6 +3,14 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-07-07
+
+### Added
+- **Edge scroll handoff for the diff editor.** `MonacoDiffEditor.scrollHandoff` takes the same `MonacoScrollHandoff` configuration as `MonacoEditor`: wheel or trackpad input over either pane keeps scrolling the diff until it reaches its vertical scroll edge, then unconsumed deltas are forwarded to the configured `ScrollController` or the nearest enclosing vertical scrollable, so the surrounding page keeps scrolling instead of dying over the editor. Headless integrations get the same building blocks as the single editor: `MonacoDiffController.onScrollHandoff` and `MonacoDiffController.setScrollHandoffSources`.
+
+### Fixed
+- **Multi-document: the boot document no longer dies on the first `activateDocument`.** Monaco's standalone editor takes ownership of a model created implicitly from the `value`/`language` create options and disposes it on the first `setModel`; the boot page now creates the initial model explicitly, so switching documents and back preserves the original document.
+
 ## [3.0.0] - 2026-07-07
 
 A ground-up rebuild of the package's spine - one wire protocol, a document/editor split, sparse options, typed errors and events - while keeping the battle-tested platform engineering (LSP, focus recovery, mobile web survival kit, scroll handoff, web overlay stack) intact. The README's "Migrating from 2.x to 3.0" section carries the complete symbol-level migration table; the highlights are below.

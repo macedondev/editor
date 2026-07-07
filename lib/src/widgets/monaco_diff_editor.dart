@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_monaco/src/widgets/monaco_status_bar.dart';
+import 'package:flutter_monaco/src/widgets/scroll_handoff_driver.dart';
 
 /// A widget that renders a Monaco diff editor (original vs modified).
 ///
@@ -33,6 +34,7 @@ class MonacoDiffEditor extends StatefulWidget {
     this.diffOptions = const MonacoDiffOptions(),
     this.page = const MonacoPageConfig(),
     this.readyTimeout = const Duration(seconds: 20),
+    this.scrollHandoff = const MonacoScrollHandoff.disabled(),
     this.onReady,
     this.onError,
     this.loadingBuilder,
@@ -73,6 +75,17 @@ class MonacoDiffEditor extends StatefulWidget {
   /// widget owns it.
   final MonacoPageConfig page;
 
+  /// How scroll input the diff editor cannot consume is handed to the
+  /// Flutter host. Defaults to [MonacoScrollHandoff.disabled].
+  ///
+  /// When set to [MonacoScrollHandoff.edge], wheel or trackpad input over
+  /// either pane keeps scrolling the diff until it reaches its vertical
+  /// scroll edge; unconsumed deltas are then forwarded to
+  /// [MonacoScrollHandoff.controller] or the nearest enclosing vertical
+  /// scrollable, so the surrounding page continues scrolling. Identical
+  /// semantics to `MonacoEditor.scrollHandoff`.
+  final MonacoScrollHandoff scrollHandoff;
+
   /// The maximum duration to wait for the diff editor to initialize.
   final Duration readyTimeout;
 
@@ -108,6 +121,20 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
   int _bootstrapSeq = 0;
   MonacoTheme? _appliedResolvedTheme;
   bool _bootstrappedOnce = false;
+
+  /// Applies forwarded scroll deltas to the configured Flutter target
+  /// (shared with `MonacoEditor`).
+  late final ScrollHandoffDriver _scrollHandoffDriver = ScrollHandoffDriver(
+    config: () => widget.scrollHandoff,
+    context: () => context,
+    isMounted: () => mounted,
+  );
+  StreamSubscription<MonacoScrollHandoffDetails>? _scrollHandoffSub;
+
+  /// The handoff sources last pushed to the diff page, so config rebuilds
+  /// only produce bridge traffic when the effective sources change.
+  bool _syncedWheelSource = false;
+  bool _syncedTouchSource = false;
 
   /// The texts/language last pushed to (or booted into) the controller, so
   /// prop changes that land during the connecting window are re-applied at
@@ -151,6 +178,13 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
       _teardown(disposeOldController: true);
       _bootstrap();
       return;
+    }
+
+    if (widget.scrollHandoff != oldWidget.scrollHandoff) {
+      // Identity compare is enough: the sync method dedupes against the
+      // last pushed source flags, so rebuilds with equivalent configs are
+      // free.
+      _syncScrollHandoffSources();
     }
 
     if (_connectionState != _DiffConnectionState.ready || _controller == null) {
@@ -274,6 +308,9 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
         }
       }
 
+      _wireScrollHandoff();
+      _syncScrollHandoffSources();
+
       setState(() => _connectionState = _DiffConnectionState.ready);
       // Content props may have changed while the boot was in flight;
       // re-apply the delta now that didUpdateWidget can no longer see it.
@@ -321,6 +358,30 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
     );
   }
 
+  /// Subscribes the shared driver to the controller's handoff stream.
+  void _wireScrollHandoff() {
+    _scrollHandoffSub?.cancel();
+    _scrollHandoffSub = _controller!.onScrollHandoff.listen(
+      _scrollHandoffDriver.handle,
+    );
+  }
+
+  /// Pushes the desired handoff sources to the diff page when they differ
+  /// from what was last pushed. A disabled config therefore produces no
+  /// bridge traffic at all.
+  void _syncScrollHandoffSources() {
+    final controller = _controller;
+    if (controller == null) return;
+    final wheel = widget.scrollHandoff.wheelSourceEnabled;
+    final touch = widget.scrollHandoff.touchSourceEnabled;
+    if (wheel == _syncedWheelSource && touch == _syncedTouchSource) return;
+    _syncedWheelSource = wheel;
+    _syncedTouchSource = touch;
+    _ignoreAsync(
+      controller.setScrollHandoffSources(wheel: wheel, touch: touch),
+    );
+  }
+
   void _ignoreAsync(Future<void> future) {
     unawaited(
       future.catchError((Object e, StackTrace st) {
@@ -346,8 +407,21 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
   }
 
   void _teardown({required bool disposeOldController}) {
+    _scrollHandoffSub?.cancel();
+    _scrollHandoffSub = null;
+    final controller = _controller;
+    if (controller != null &&
+        !disposeOldController &&
+        (_syncedWheelSource || _syncedTouchSource)) {
+      // The external controller outlives this widget: stop the page from
+      // posting handoff events nobody consumes.
+      _ignoreAsync(controller.setScrollHandoffSources());
+    }
+    _syncedWheelSource = false;
+    _syncedTouchSource = false;
+    _scrollHandoffDriver.clearPending();
     if (disposeOldController) {
-      _controller?.dispose();
+      controller?.dispose();
     }
     _controller = null;
     _appliedResolvedTheme = null;

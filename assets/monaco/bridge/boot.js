@@ -48,6 +48,40 @@ window.__FMB = window.__FMB || {};
                 var diffCtx = {};
                 (window.__FMB || {}).diffApi(diffCtx);
                 diffCtx.bootDiff(params);
+                // Edge scroll handoff on diff pages: the modified editor is
+                // the vertical scroll master (side-by-side panes are
+                // height-aligned by Monaco's alignment zones, and inline
+                // mode renders inside the modified editor), while the
+                // accepted wheel region covers both panes of the pair.
+                diffCtx.E = function () {
+                  return window.diffEditor.getModifiedEditor();
+                };
+                diffCtx.post = function (name, data) {
+                  window.FlutterMonaco.emit(name, data);
+                };
+                diffCtx.handoffScope = {
+                  regionRoot: function () {
+                    var d = window.diffEditor;
+                    return d.getContainerDomNode
+                      ? d.getContainerDomNode()
+                      : document.getElementById('editor-container');
+                  },
+                  editorDoms: function () {
+                    var d = window.diffEditor;
+                    return [
+                      d.getOriginalEditor().getDomNode(),
+                      d.getModifiedEditor().getDomNode(),
+                    ];
+                  },
+                };
+                (window.__FMB || {}).scrollHandoff(diffCtx);
+                var diffScrollHandoff = (params || {}).scrollHandoff || {};
+                if (diffScrollHandoff.wheel || diffScrollHandoff.touch) {
+                  window.flutterMonaco.setScrollHandoff({
+                    wheel: !!diffScrollHandoff.wheel,
+                    touch: !!diffScrollHandoff.touch,
+                  });
+                }
                 window.FlutterMonaco.lifecycle('ready');
                 console.log('[Monaco] Diff Editor is ready and the Flutter bridge is installed.');
                 return;
