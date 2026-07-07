@@ -84,7 +84,7 @@ class MonacoEditor extends StatefulWidget {
     this.initialSelection,
     this.autofocus = false,
     this.page = const MonacoPageConfig(),
-    this.readyTimeout = const Duration(seconds: 20),
+    this.readyTimeout = MonacoDefaults.readyTimeout,
     this.onReady,
     this.onError,
     this.onContentChanged,
@@ -141,7 +141,14 @@ class MonacoEditor extends StatefulWidget {
   /// triggers a full reload of the editor.
   final MonacoPageConfig page;
 
-  /// The maximum duration to wait for the editor to initialize before showing an error.
+  /// The maximum duration to wait for the editor to initialize before
+  /// showing an error.
+  ///
+  /// Defaults to [MonacoDefaults.readyTimeout]: 20s on native platforms
+  /// (local assets, so expiry means a hung boot) and 90s on web, where the
+  /// cold-cache first load must download the multi-megabyte editor bundle
+  /// and is bound by bandwidth, not by a hang. Hard failures surface
+  /// immediately regardless of this deadline.
   final Duration readyTimeout;
 
   /// Callback invoked when the editor is fully initialized and ready.

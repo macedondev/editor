@@ -3,6 +3,11 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-07-07
+
+### Fixed
+- **Web: flaky "Monaco Editor did not report ready in 20 seconds" on cold-cache first loads.** The default `readyTimeout` was a fixed 20 seconds on every platform, but on web the first (uncached) visit must download the multi-megabyte Monaco bundle over the network - a bandwidth-bound wait, not a hang - so slow connections and just-deployed sites (invalidated CDN caches) tripped the deadline mid-download; a retry then succeeded from the warm browser cache. The default is now platform-aware via `MonacoDefaults.readyTimeout` (20s on native, 90s on web). Hard failures (missing assets, script errors) still surface immediately on every platform; the deadline only backstops silent stalls. The web timeout message now also explains the slow-connection case. Explicitly passed `readyTimeout` values behave exactly as before.
+
 ## [3.1.0] - 2026-07-07
 
 ### Added

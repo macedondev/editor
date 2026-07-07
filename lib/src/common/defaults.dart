@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_monaco/src/options/editor_options.dart';
 import 'package:flutter_monaco/src/options/language.dart';
 import 'package:flutter_monaco/src/options/option_enums.dart';
@@ -31,6 +32,19 @@ abstract final class MonacoDefaults {
     cursorStyle: CursorStyle.line,
     padding: MonacoPadding(top: 10),
   );
+
+  /// Boot deadline applied when the caller leaves `readyTimeout` unset.
+  ///
+  /// Native platforms load Monaco from local files, so 20 seconds only
+  /// trips on a genuinely hung boot. On web the first (cold-cache) visit
+  /// must download the multi-megabyte editor bundle over the network -
+  /// bandwidth-bound, not hang-bound - so the backstop is far more
+  /// generous there. Hard failures (missing assets, script errors) are
+  /// reported immediately through the page's error handlers on every
+  /// platform; this deadline only catches silent stalls.
+  static const Duration readyTimeout = kIsWeb
+      ? Duration(seconds: 90)
+      : Duration(seconds: 20);
 
   /// Document language used when none is configured.
   static const MonacoLanguage language = MonacoLanguage.markdown;
