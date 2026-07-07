@@ -3,6 +3,14 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-07-07
+
+### Added
+- **`MonacoAssets.precache()`: warm Monaco before the first editor mounts.** On web it fetches the AMD loader, `editor.main.js`/`.css`, and the hash-named editor chunk (~3.6MB, discovered from `editor.main.js` at runtime so it survives Monaco upgrades) into the browser's HTTP cache; the first editor boot is then served from cache instead of starting a multi-megabyte download at mount time. Best-effort and boot-path-untouched: a failed warmup just means the editor downloads the files itself as before. On native platforms it is equivalent to `ensureReady()` (asset extraction). Fire-and-forget from `main()` is the intended use. The README's new "Web performance" section also documents an `index.html` snippet (used by the live demo) that starts the warmup in parallel with the Flutter engine download itself.
+
+### Notes
+- Investigated the suspected duplicate bundle download when several editors boot at once on web: with the HTTP cache enabled, browsers coalesce the concurrent identical requests (verified in Chromium - the second iframe's request completes with zero bytes on the wire), so no boot-path serialization was added. Precaching additionally guarantees single-download behavior on any browser.
+
 ## [3.1.1] - 2026-07-07
 
 ### Fixed

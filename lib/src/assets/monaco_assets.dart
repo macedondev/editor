@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_monaco/src/assets/asset_diagnostics.dart';
 import 'package:flutter_monaco/src/assets/asset_storage.dart';
+import 'package:flutter_monaco/src/assets/web_precache_stub.dart'
+    if (dart.library.js_interop) 'package:flutter_monaco/src/assets/web_precache_web.dart';
 
 /// The Flutter asset path where Monaco Editor files are bundled.
 ///
@@ -135,6 +137,42 @@ class MonacoAssets {
     }
 
     return completer.future;
+  }
+
+  /// Prepares this platform so the first editor boots as fast as possible.
+  ///
+  /// On **native** platforms this is [ensureReady]: Monaco's files are
+  /// extracted from the app bundle to local storage (and any extraction
+  /// error propagates, exactly as from [ensureReady]).
+  ///
+  /// On **web** it additionally warms the browser's HTTP cache with the
+  /// files the boot will request - the AMD loader, `editor.main.js`/`.css`,
+  /// and the hash-named editor chunk (~3.6MB) that dominates a cold first
+  /// load. The warmup is best-effort and never throws: if any fetch fails,
+  /// the boot simply downloads those files itself as usual. When several
+  /// editors boot at once they all hit the warmed cache, so the bundle is
+  /// downloaded once no matter how many editors mount.
+  ///
+  /// Call it early - fire-and-forget from `main()` is the intended use, so
+  /// the download overlaps app startup instead of starting when the first
+  /// editor mounts:
+  ///
+  /// ```dart
+  /// void main() {
+  ///   WidgetsFlutterBinding.ensureInitialized();
+  ///   unawaited(MonacoAssets.precache());
+  ///   runApp(const MyApp());
+  /// }
+  /// ```
+  ///
+  /// For web apps that want the warmup to start even before the Flutter
+  /// engine downloads, see the "Web performance" section of the README for
+  /// an equivalent `index.html` snippet.
+  static Future<void> precache() async {
+    await ensureReady();
+    if (kIsWeb) {
+      await precacheMonacoWebAssets();
+    }
   }
 
   /// Returns typed diagnostics about the extracted Monaco assets.
