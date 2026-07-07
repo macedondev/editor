@@ -48,6 +48,40 @@ window.__FMB = window.__FMB || {};
                 var diffCtx = {};
                 (window.__FMB || {}).diffApi(diffCtx);
                 diffCtx.bootDiff(params);
+                // Edge scroll handoff on diff pages: the modified editor is
+                // the vertical scroll master (side-by-side panes are
+                // height-aligned by Monaco's alignment zones, and inline
+                // mode renders inside the modified editor), while the
+                // accepted wheel region covers both panes of the pair.
+                diffCtx.E = function () {
+                  return window.diffEditor.getModifiedEditor();
+                };
+                diffCtx.post = function (name, data) {
+                  window.FlutterMonaco.emit(name, data);
+                };
+                diffCtx.handoffScope = {
+                  regionRoot: function () {
+                    var d = window.diffEditor;
+                    return d.getContainerDomNode
+                      ? d.getContainerDomNode()
+                      : document.getElementById('editor-container');
+                  },
+                  editorDoms: function () {
+                    var d = window.diffEditor;
+                    return [
+                      d.getOriginalEditor().getDomNode(),
+                      d.getModifiedEditor().getDomNode(),
+                    ];
+                  },
+                };
+                (window.__FMB || {}).scrollHandoff(diffCtx);
+                var diffScrollHandoff = (params || {}).scrollHandoff || {};
+                if (diffScrollHandoff.wheel || diffScrollHandoff.touch) {
+                  window.flutterMonaco.setScrollHandoff({
+                    wheel: !!diffScrollHandoff.wheel,
+                    touch: !!diffScrollHandoff.touch,
+                  });
+                }
                 window.FlutterMonaco.lifecycle('ready');
                 console.log('[Monaco] Diff Editor is ready and the Flutter bridge is installed.');
                 return;
@@ -139,12 +173,19 @@ window.__FMB = window.__FMB || {};
               // The editor is born configured: sparse Monaco options from
               // Dart, plus the initial text/language/theme, in one create.
               var options = Object.assign({}, params.options || {});
-              options.value = typeof params.text === 'string' ? params.text : '';
-              options.language = params.language || 'plaintext';
               options.theme = params.theme || 'vs';
               if (options.automaticLayout === undefined) {
                 options.automaticLayout = true;
               }
+              // The boot document is created explicitly, NOT via the
+              // value/language create options: a standalone editor owns an
+              // implicitly created model and DISPOSES it on the first
+              // setModel (docs.activate), which would kill the boot
+              // document in multi-document use.
+              options.model = monaco.editor.createModel(
+                typeof params.text === 'string' ? params.text : '',
+                params.language || 'plaintext'
+              );
               monaco.editor.create(
                 document.getElementById('editor-container'),
                 options

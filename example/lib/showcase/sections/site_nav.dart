@@ -5,6 +5,7 @@ import '../state/showcase_controller.dart';
 import '../theme/showcase_text.dart';
 import '../theme/showcase_tokens.dart';
 import '../util/links.dart';
+import '../widgets/gradient_button.dart';
 import '../widgets/theme_toggle.dart';
 
 /// The sticky top navigation bar.
@@ -14,11 +15,13 @@ class SiteNav extends StatelessWidget {
     required this.controller,
     required this.onTapFeatures,
     required this.onTapPlayground,
+    required this.onTapRebuild,
   });
 
   final ShowcaseController controller;
   final VoidCallback onTapFeatures;
   final VoidCallback onTapPlayground;
+  final VoidCallback onTapRebuild;
 
   static const double height = 64;
 
@@ -42,9 +45,11 @@ class SiteNav extends StatelessWidget {
           _Logo(versionLabel: metadata.versionLabel),
           const Spacer(),
           if (!compact) ...[
-            _NavLink(label: 'Features', onTap: onTapFeatures),
-            const SizedBox(width: Insets.lg),
             _NavLink(label: 'Playground', onTap: onTapPlayground),
+            const SizedBox(width: Insets.lg),
+            _NavLink(label: "What's new", onTap: onTapRebuild),
+            const SizedBox(width: Insets.lg),
+            _NavLink(label: 'Features', onTap: onTapFeatures),
             const SizedBox(width: Insets.lg),
           ],
           ThemeToggle(controller: controller),
@@ -159,29 +164,38 @@ class _PubButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final child = Container(
-      width: compact ? 40 : null,
-      height: compact ? 40 : null,
-      padding: compact
-          ? EdgeInsets.zero
-          : const EdgeInsets.symmetric(horizontal: Insets.lg, vertical: 9),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        gradient: accentGradient,
-        borderRadius: BorderRadius.circular(Radii.sm),
-      ),
-      child: compact
-          ? const Icon(Icons.open_in_new_rounded, color: Colors.white, size: 18)
-          : Text(
-              'Get it on pub.dev',
-              style: ShowcaseText.small.copyWith(color: Colors.white),
-            ),
-    );
+    // Desktop: the shared CTA at its dense size, so it stays in scale with the
+    // rest of the nav row (and inherits its hover lift/glow).
+    if (!compact) {
+      return GradientButton(
+        label: 'Get it on pub.dev',
+        onPressed: () => openUrl(url),
+        dense: true,
+      );
+    }
+    // Mobile: an icon-only square that matches the 36px tap target of the
+    // adjacent theme toggle.
     return Tooltip(
       message: 'pub.dev',
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
-        child: GestureDetector(onTap: () => openUrl(url), child: child),
+        child: GestureDetector(
+          onTap: () => openUrl(url),
+          child: Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              gradient: accentGradient,
+              borderRadius: BorderRadius.circular(Radii.sm),
+            ),
+            child: const Icon(
+              Icons.open_in_new_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+          ),
+        ),
       ),
     );
   }

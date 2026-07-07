@@ -5,9 +5,14 @@
 'use strict';
 window.__FMB = window.__FMB || {};
 
-// Edge scroll handoff module. VERBATIM PORT.
+// Edge scroll handoff module. VERBATIM PORT, extended for diff pages:
+// ctx.handoffScope (optional) widens the accepted wheel region to a set of
+// editor DOM nodes under one region root, while ctx.E stays the vertical
+// scroll master whose metrics gate the handoff. Without a scope the region
+// is exactly the single editor, byte-for-byte the 2.3.0 behavior.
 window.__FMB.scrollHandoff = function (ctx) {
   const { E, post } = ctx;
+  const handoffScope = ctx.handoffScope || null;
                 // Edge scroll handoff (opt-in): forward scroll deltas the
                 // editor cannot consume to Flutter, which applies them to a
                 // host scrollable. Sources are toggled from Dart through
@@ -77,9 +82,21 @@ window.__FMB.scrollHandoff = function (ctx) {
                     if (!editorDom) return false;
                     let el = target;
                     if (el && el.nodeType !== 1) el = el.parentElement;
-                    if (!el || !el.closest || !editorDom.contains(el)) return false;
+                    if (!el || !el.closest) return false;
+                    // Diff pages accept both panes under the diff container;
+                    // single-editor pages keep the exact 2.3.0 region (the
+                    // one editor's DOM).
+                    const regionRoot = handoffScope && handoffScope.regionRoot
+                      ? handoffScope.regionRoot()
+                      : editorDom;
+                    if (!regionRoot || !regionRoot.contains(el)) return false;
                     if (el.closest(HANDOFF_BLOCKED_WIDGETS)) return false;
-                    if (el.closest('.monaco-editor') !== editorDom) return false;
+                    const ownerDoms = handoffScope && handoffScope.editorDoms
+                      ? handoffScope.editorDoms()
+                      : [editorDom];
+                    if (ownerDoms.indexOf(el.closest('.monaco-editor')) === -1) {
+                      return false;
+                    }
                     const scrollable = el.closest('.monaco-scrollable-element');
                     if (scrollable && !scrollable.classList.contains('editor-scrollable')) {
                       return false;
@@ -248,6 +265,9 @@ window.__FMB.scrollHandoff = function (ctx) {
                     handoffState.touchGesture = null;
                   };
 
+                  // Diff pages never run core.js, so the legacy namespace
+                  // object may not exist yet.
+                  window.flutterMonaco = window.flutterMonaco || {};
                   window.flutterMonaco.setScrollHandoff = function (cfg) {
                     const wheel = !!(cfg && cfg.wheel);
                     const touch = !!(cfg && cfg.touch);

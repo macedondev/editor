@@ -47,13 +47,26 @@ class DemoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       home: Scaffold(
         body: MonacoEditor(
-          options: EditorOptions(
-            language: MonacoLanguage.dart,
-            theme: MonacoTheme.vsDark,
-          ),
+          options: const EditorOptions(language: MonacoLanguage.dart),
+          onReady: (controller) async {
+            // Dart-defined editor action, bound to Cmd/Ctrl+S (new in 3.0).
+            await controller.addAction(
+              MonacoActionDescriptor(
+                id: const MonacoAction('app.save'),
+                label: 'Save',
+                keybindings: const [
+                  MonacoKeybinding(key: MonacoKey.keyS, ctrlCmd: true),
+                ],
+              ),
+              () async {
+                final text = await controller.document.getText();
+                debugPrint('saved ${text.length} chars');
+              },
+            );
+          },
         ),
       ),
     );
@@ -287,9 +300,10 @@ String _jsonSample(ShowcaseMetadata metadata) {
   return '${encoder.convert({
     'name': metadata.packageName,
     'version': metadata.version,
+    'monaco': metadata.monacoVersion,
     'description': metadata.productSummary,
     'platforms': [for (final platform in metadata.platforms) platform.id],
-    'features': {'typedLanguages': metadata.typedLanguageCount, 'playgroundLanguages': kPlaygroundLanguages.length, 'themes': metadata.showcasedThemeCount, 'intelliSense': true, 'diagnostics': true},
+    'features': {'typedLanguages': metadata.typedLanguageCount, 'playgroundLanguages': kPlaygroundLanguages.length, 'themes': metadata.showcasedThemeCount, 'diffEditor': true, 'customActions': true, 'lsp': true, 'intelliSense': true, 'diagnostics': true},
     if (metadata.publishedAt != null) 'publishedAt': metadata.publishedAt!.toUtc().toIso8601String(),
   })}\n';
 }
@@ -303,9 +317,18 @@ String _markdownSample(ShowcaseMetadata metadata) =>
 ## Current package data
 
 - **Version** - ${metadata.versionLabel}
+- **Monaco** - ${metadata.monacoVersion}
 - **Platforms** - ${metadata.platformSummary}
 - **Languages** - ${metadata.typedLanguageCount} typed entries
 - **Theming** - ${metadata.showcasedThemeCount} demo themes
+
+## New in 3.0
+
+- One request-correlated wire protocol on every platform
+- `controller.document` - documents split from the editor, like Monaco itself
+- `MonacoDiffEditor` - side-by-side and inline diffs
+- `controller.addAction` - Dart actions with real keybindings
+- Sparse `EditorOptions` - update one field without resetting the rest
 
 ```dart
 MonacoEditor(

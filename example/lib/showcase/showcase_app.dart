@@ -7,6 +7,7 @@ import 'sections/features_section.dart';
 import 'sections/get_started_section.dart';
 import 'sections/hero_section.dart';
 import 'sections/playground_section.dart';
+import 'sections/rebuild_section.dart';
 import 'sections/site_footer.dart';
 import 'sections/site_nav.dart';
 import 'state/showcase_controller.dart';
@@ -28,11 +29,13 @@ class _ShowcaseAppState extends State<ShowcaseApp> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _featuresKey = GlobalKey();
   final GlobalKey _playgroundKey = GlobalKey();
+  final GlobalKey _rebuildKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
     _controller.onRequestScrollToPlayground = () => _scrollTo(_playgroundKey);
+    _controller.onRequestScrollToDiff = () => _scrollTo(_rebuildKey);
     unawaited(_controller.loadMetadata());
   }
 
@@ -74,6 +77,7 @@ class _ShowcaseAppState extends State<ShowcaseApp> {
                   controller: _controller,
                   onTapFeatures: () => _scrollTo(_featuresKey),
                   onTapPlayground: () => _scrollTo(_playgroundKey),
+                  onTapRebuild: () => _scrollTo(_rebuildKey),
                 ),
                 Expanded(
                   child: SingleChildScrollView(
@@ -89,6 +93,7 @@ class _ShowcaseAppState extends State<ShowcaseApp> {
                           controller: _controller,
                           routeObserver: _routeObserver,
                         ),
+                        RebuildSection(key: _rebuildKey, metadata: metadata),
                         FeaturesSection(
                           key: _featuresKey,
                           controller: _controller,

@@ -38,7 +38,9 @@ class HeroSection extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _EyebrowPill(
-                text: '${metadata.versionLabel} - ${metadata.sourceLabel}',
+                text:
+                    '${metadata.versionLabel} - Monaco '
+                    '${metadata.monacoVersion}',
               ),
               const SizedBox(height: Insets.lg),
               Text(
@@ -121,7 +123,9 @@ class _LiveFacts extends StatelessWidget {
         Icons.translate_rounded,
         '${metadata.typedLanguageCount} typed languages',
       ),
-      (Icons.palette_outlined, '${metadata.showcasedThemeCount} demo themes'),
+      (Icons.devices_rounded, '${metadata.platforms.length} platforms'),
+      (Icons.difference_outlined, 'Diff editor'),
+      (Icons.hub_outlined, 'LSP client'),
       if (metadata.downloadCount30Days != null)
         (
           Icons.download_rounded,

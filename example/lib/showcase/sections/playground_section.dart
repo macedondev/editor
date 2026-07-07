@@ -93,9 +93,17 @@ class _EditorCard extends StatelessWidget {
         children: [
           _Toolbar(controller: controller),
           Divider(height: 1, color: c.border),
+          if (controller.tabs.isNotEmpty) ...[
+            _DocTabs(controller: controller),
+            Divider(height: 1, color: c.border),
+          ],
           // Keep the iframe-backed HtmlElementView as a direct sized child.
           // In the web showcase, Stack/Positioned.fill collapses its DOM rect.
+          // The key sits on the Column child: when the tab strip appears
+          // above, reconciliation must match this subtree by key or the
+          // editor is disposed and rebooted.
           SizedBox(
+            key: const ValueKey('showcase-playground-editor-box'),
             height: editorHeight,
             child: MonacoEditor(
               key: const ValueKey('showcase-playground-editor'),
@@ -103,6 +111,10 @@ class _EditorCard extends StatelessWidget {
               initialText: controller.initialValue,
               page: const MonacoPageConfig(customCss: kEditorCustomCss),
               backgroundColor: const Color(0xFF0D1117),
+              // Edge scroll handoff: once the editor hits its scroll edge,
+              // the wheel keeps scrolling the page (and the event feed shows
+              // the MonacoScrollHandoffEvent doing it).
+              scrollHandoff: const MonacoScrollHandoff.edge(),
               onReady: controller.attachEditor,
             ),
           ),
@@ -113,6 +125,7 @@ class _EditorCard extends StatelessWidget {
             ),
           if (controller.hint != null)
             _HintBanner(hint: controller.hint!, onClose: controller.reset),
+          if (controller.eventFeedOpen) _EventFeedPanel(controller: controller),
           Divider(height: 1, color: c.border),
           _LiveStatsBar(controller: controller),
         ],
@@ -507,6 +520,21 @@ class _DemosRow extends StatelessWidget {
           runSpacing: Insets.sm,
           children: [
             _DemoButton(
+              icon: Icons.keyboard_command_key_rounded,
+              label: 'Custom action (Ctrl/Cmd+S)',
+              onTap: controller.runCustomActionDemo,
+            ),
+            _DemoButton(
+              icon: Icons.tab_rounded,
+              label: 'Multi-document',
+              onTap: controller.runMultiDocumentDemo,
+            ),
+            _DemoButton(
+              icon: Icons.podcasts_rounded,
+              label: 'Event stream',
+              onTap: controller.runEventsDemo,
+            ),
+            _DemoButton(
               icon: Icons.auto_awesome_outlined,
               label: 'IntelliSense',
               onTap: controller.runIntelliSenseDemo,
@@ -623,6 +651,14 @@ class _LiveStatsBar extends StatelessWidget {
 
   final ShowcaseController controller;
 
+  /// The right-hand slot: live handshake data once the editor is up
+  /// (Monaco + protocol version straight from `controller.capabilities`).
+  String get _handshakeLabel {
+    final caps = controller.capabilities;
+    if (caps == null) return 'Monaco ${MonacoAssets.monacoVersion}';
+    return 'Monaco ${caps.monacoVersion} · protocol v${caps.protocolVersion}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.showcaseColors;
@@ -643,13 +679,13 @@ class _LiveStatsBar extends StatelessWidget {
             const SizedBox(width: Insets.md),
           ],
           const Spacer(),
-          Text(right, style: style),
+          Text(right, style: style, overflow: TextOverflow.ellipsis),
         ],
       ),
     );
 
     if (stats == null) {
-      return bar(const ['Ready when the editor loads'], 'UTF-8');
+      return bar(const ['Ready when the editor loads'], _handshakeLabel);
     }
 
     return ValueListenableBuilder<MonacoLiveStats>(
@@ -658,11 +694,209 @@ class _LiveStatsBar extends StatelessWidget {
         final cursor = value.cursorPosition;
         return bar([
           'Ln ${cursor != null ? '${cursor.line}:${cursor.column}' : '1:1'}',
-          '${value.lineCount} lines',
+          // Stats arrive with the first edit/cursor event; hide the
+          // zero-valued placeholder until then.
+          if (value.lineCount > 0) '${value.lineCount} lines',
           if (value.selectedCharacters > 0)
             '${value.selectedCharacters} selected',
-        ], (value.language ?? controller.language).id.toUpperCase());
+          (value.language ?? controller.language).id.toUpperCase(),
+        ], _handshakeLabel);
       },
+    );
+  }
+}
+
+class _DocTabs extends StatelessWidget {
+  const _DocTabs({required this.controller});
+
+  final ShowcaseController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.showcaseColors;
+    return Container(
+      width: double.infinity,
+      color: c.surfaceAlt,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ValueListenableBuilder<Set<String>>(
+          valueListenable: controller.dirtyDocs,
+          builder: (context, dirty, _) {
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final (index, tab) in controller.tabs.indexed)
+                  _DocTab(
+                    label: tab.label,
+                    active: index == controller.activeTab,
+                    dirty: dirty.contains(tab.uri?.toString()),
+                    closable: index > 0,
+                    onTap: () => controller.activateTab(index),
+                    onClose: () => controller.closeTab(index),
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _DocTab extends StatelessWidget {
+  const _DocTab({
+    required this.label,
+    required this.active,
+    required this.dirty,
+    required this.closable,
+    required this.onTap,
+    required this.onClose,
+  });
+
+  final String label;
+  final bool active;
+  final bool dirty;
+  final bool closable;
+  final VoidCallback onTap;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.showcaseColors;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: Insets.md,
+            vertical: Insets.sm,
+          ),
+          decoration: BoxDecoration(
+            color: active ? c.surface : Colors.transparent,
+            border: Border(
+              top: BorderSide(
+                width: 2,
+                color: active ? ShowcaseColors.accentBlue : Colors.transparent,
+              ),
+              right: BorderSide(color: c.border),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: ShowcaseText.monoLabel.copyWith(
+                  color: active ? c.textPrimary : c.textSecondary,
+                ),
+              ),
+              if (dirty) ...[
+                const SizedBox(width: 6),
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: const BoxDecoration(
+                    color: ShowcaseColors.accentCyan,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ],
+              if (closable) ...[
+                const SizedBox(width: 6),
+                InkWell(
+                  onTap: onClose,
+                  child: Icon(Icons.close, size: 13, color: c.textFaint),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EventFeedPanel extends StatelessWidget {
+  const _EventFeedPanel({required this.controller});
+
+  final ShowcaseController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.showcaseColors;
+    return Container(
+      width: double.infinity,
+      color: c.surfaceAlt,
+      padding: const EdgeInsets.symmetric(
+        horizontal: Insets.md,
+        vertical: Insets.sm,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.podcasts_rounded,
+                size: 14,
+                color: ShowcaseColors.accentBlue,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'controller.events - sealed MonacoEvent union, live',
+                style: ShowcaseText.label.copyWith(color: c.textSecondary),
+              ),
+              const Spacer(),
+              InkWell(
+                onTap: controller.closeEventFeed,
+                child: Icon(Icons.close, size: 15, color: c.textSecondary),
+              ),
+            ],
+          ),
+          const SizedBox(height: Insets.sm),
+          ValueListenableBuilder<List<ShowcaseEventEntry>>(
+            valueListenable: controller.eventLog,
+            builder: (context, entries, _) {
+              if (entries.isEmpty) {
+                return Text(
+                  'Waiting for events - type or select in the editor.',
+                  style: ShowcaseText.monoSm.copyWith(color: c.textFaint),
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final entry in entries)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Row(
+                        children: [
+                          Text(
+                            entry.type,
+                            style: ShowcaseText.monoSm.copyWith(
+                              color: ShowcaseColors.accentCyan,
+                            ),
+                          ),
+                          const SizedBox(width: Insets.sm),
+                          Expanded(
+                            child: Text(
+                              entry.detail,
+                              overflow: TextOverflow.ellipsis,
+                              style: ShowcaseText.monoSm.copyWith(
+                                color: c.textSecondary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 }

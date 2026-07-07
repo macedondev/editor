@@ -265,6 +265,38 @@ class MonacoDiffController {
     await _invoke('diff.revealPreviousChange', {});
   }
 
+  /// Unconsumed scroll intents reported by the diff page (edge scroll
+  /// handoff). Emits only while a source is enabled through
+  /// [setScrollHandoffSources]; malformed payloads are dropped silently.
+  ///
+  /// The vertical scroll master is the modified editor (both panes are
+  /// height-aligned), and the wheel region covers both panes. See
+  /// [MonacoScrollHandoffDetails] for the delta conventions.
+  Stream<MonacoScrollHandoffDetails> get onScrollHandoff => _protocol.events
+      .where((event) => event.name == 'scrollHandoff')
+      .map(
+        (event) => MonacoScrollHandoffDetails.tryParse(
+          Map<String, dynamic>.from(event.data),
+        ),
+      )
+      .where((details) => details != null)
+      .cast<MonacoScrollHandoffDetails>();
+
+  /// Enables or disables edge scroll handoff sources inside the diff page.
+  ///
+  /// Identical contract to `MonacoController.setScrollHandoffSources`: an
+  /// enabled source installs the matching DOM listeners and posts
+  /// `scrollHandoff` events (surfaced through [onScrollHandoff]) for deltas
+  /// the diff editor cannot consume; disabling removes the listeners again.
+  /// `MonacoDiffEditor` calls this automatically from its `scrollHandoff`
+  /// configuration.
+  Future<void> setScrollHandoffSources({
+    bool wheel = false,
+    bool touch = false,
+  }) async {
+    await _invoke('page.setScrollHandoff', {'wheel': wheel, 'touch': touch});
+  }
+
   /// Releases the WebView and fails all in-flight commands.
   void dispose() {
     if (_disposed) return;

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_monaco/flutter_monaco.dart';
 
 import '../data/showcase_metadata.dart';
 import '../state/showcase_controller.dart';
 import '../theme/showcase_text.dart';
 import '../theme/showcase_tokens.dart';
+import '../util/links.dart';
 import '../widgets/feature_card.dart';
 import '../widgets/section_container.dart';
 
@@ -31,23 +31,41 @@ class FeaturesSection extends StatelessWidget {
 
     final cards = <FeatureCard>[
       FeatureCard(
-        icon: Icons.translate_rounded,
-        title: '${metadata.typedLanguageCount} typed languages',
+        icon: Icons.difference_outlined,
+        title: 'Diff editor',
         body:
-            'Syntax highlighting for Dart, TypeScript, Python, Rust, Go, '
-            'SQL and more - switch instantly.',
-        snippet: 'controller.setLanguage(MonacoLanguage.rust);',
-        onTry: () => _go(() => controller.setLanguage(MonacoLanguage.rust)),
+            'Side-by-side or inline diffs with revert arrows and change '
+            'navigation - new in 3.0.',
+        snippet: 'MonacoDiffEditor(original: a, modified: b)',
+        tryLabel: 'See it live',
+        onTry: controller.scrollToDiff,
       ),
       FeatureCard(
-        icon: Icons.palette_outlined,
-        title: 'Theming',
+        icon: Icons.keyboard_command_key_rounded,
+        title: 'Custom actions & keybindings',
         body:
-            '${metadata.builtInThemeCount} built-in themes, plus custom token '
-            'colors with defineTheme.',
-        snippet: 'controller.defineTheme(midnightTheme);',
-        onTry: () =>
-            _go(() => controller.setPlaygroundTheme(PlaygroundTheme.midnight)),
+            'Register Dart callbacks as real editor actions - Cmd/Ctrl+S '
+            'save hooks, command palette, context menu. New in 3.0.',
+        snippet: 'controller.addAction(descriptor, onSave);',
+        onTry: () => _go(controller.runCustomActionDemo),
+      ),
+      FeatureCard(
+        icon: Icons.tab_rounded,
+        title: 'Multi-document editing',
+        body:
+            'Documents are first-class handles with their own undo stacks, '
+            'languages, and dirty state - switch without losing anything.',
+        snippet: 'final doc = await controller.openDocument(...);',
+        onTry: () => _go(controller.runMultiDocumentDemo),
+      ),
+      FeatureCard(
+        icon: Icons.podcasts_rounded,
+        title: 'Typed event stream',
+        body:
+            'One sealed MonacoEvent union for content, selection, and focus '
+            '- with structured change ranges, not full-text pulls.',
+        snippet: 'controller.events.listen((event) { ... });',
+        onTry: () => _go(controller.runEventsDemo),
       ),
       FeatureCard(
         icon: Icons.auto_awesome_outlined,
@@ -55,6 +73,16 @@ class FeaturesSection extends StatelessWidget {
         body: 'Plug in static or async completion providers for any language.',
         snippet: 'controller.registerStaticCompletions(...);',
         onTry: () => _go(controller.runIntelliSenseDemo),
+      ),
+      FeatureCard(
+        icon: Icons.hub_outlined,
+        title: 'Language Server Protocol',
+        body:
+            'Connect real language servers over WebSocket, stdio, or a '
+            'custom transport - diagnostics, hover, rename, and more.',
+        snippet: 'controller.connectLanguageServer(...);',
+        tryLabel: 'See the example',
+        onTry: () => openUrl(Links.lspExample),
       ),
       FeatureCard(
         icon: Icons.fact_check_outlined,
@@ -73,13 +101,15 @@ class FeaturesSection extends StatelessWidget {
         onTry: () => _go(controller.runMarkersDemo),
       ),
       FeatureCard(
-        icon: Icons.terminal_rounded,
-        title: 'Full controller API',
+        icon: Icons.palette_outlined,
+        title: 'Theming, ${metadata.typedLanguageCount} languages',
         body:
-            'documents, edits, find/replace, custom actions, live stats and '
-            'more.',
-        snippet: 'final code = await controller.document.getText();',
-        onTry: () => _go(controller.runDecorationsDemo),
+            '${metadata.builtInThemeCount} built-in themes plus custom token '
+            'colors via defineTheme; ${metadata.typedLanguageCount} typed '
+            'language ids, open to custom ones.',
+        snippet: 'controller.defineTheme(midnightTheme);',
+        onTry: () =>
+            _go(() => controller.setPlaygroundTheme(PlaygroundTheme.midnight)),
       ),
     ];
 
@@ -96,8 +126,8 @@ class FeaturesSection extends StatelessWidget {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 620),
             child: Text(
-              'A typed Dart API over the full Monaco surface - drive any of '
-              'these on the live ${metadata.versionLabel} editor below.',
+              'A typed Dart API over the full Monaco surface - every card '
+              'drives the live ${metadata.versionLabel} playground editor.',
               style: ShowcaseText.bodyLg.copyWith(color: c.textSecondary),
             ),
           ),

@@ -80,5 +80,35 @@ void main() {
         expect(boot, contains(call), reason: 'boot.js lacks $call');
       }
     });
+
+    test('diff boot wires edge scroll handoff over both panes', () {
+      // The diff path drives the handoff module with the modified editor as
+      // the vertical scroll master and a scope that accepts both panes.
+      final boot = bridgeSource('boot.js');
+      for (final marker in [
+        'diffCtx.bootDiff(params)',
+        'window.diffEditor.getModifiedEditor()',
+        'diffCtx.handoffScope',
+        '.scrollHandoff(diffCtx)',
+      ]) {
+        expect(boot, contains(marker), reason: 'boot.js lacks $marker');
+      }
+
+      final handoff = bridgeSource('scroll-handoff.js');
+      for (final marker in [
+        'ctx.handoffScope || null',
+        'handoffScope.regionRoot',
+        'handoffScope.editorDoms',
+        // Diff pages never run core.js, so the module must create the
+        // legacy namespace before assigning the toggle onto it.
+        'window.flutterMonaco = window.flutterMonaco || {}',
+      ]) {
+        expect(
+          handoff,
+          contains(marker),
+          reason: 'scroll-handoff.js lacks $marker',
+        );
+      }
+    });
   });
 }

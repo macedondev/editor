@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_monaco/src/widgets/monaco_status_bar.dart';
+import 'package:flutter_monaco/src/widgets/scroll_handoff_driver.dart';
 
 /// An enumeration representing the connection state of the Monaco Editor.
 enum _ConnectionState {
@@ -276,10 +276,13 @@ class _MonacoEditorState extends State<MonacoEditor> {
   /// native input-ready.
   bool _monacoReportsFocused = false;
 
-  /// Scroll handoff deltas accumulated between frames (wheel semantics:
-  /// positive scrolls down). Applied once per frame to the resolved target.
-  double _pendingScrollHandoffDelta = 0;
-  bool _scrollHandoffFrameScheduled = false;
+  /// Applies forwarded scroll deltas to the configured Flutter target
+  /// (shared with `MonacoDiffEditor`).
+  late final ScrollHandoffDriver _scrollHandoffDriver = ScrollHandoffDriver(
+    config: () => widget.scrollHandoff,
+    context: () => context,
+    isMounted: () => mounted,
+  );
 
   /// The handoff sources last pushed to the editor page, so config rebuilds
   /// only produce bridge traffic when the effective sources change.
@@ -587,7 +590,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _streamSubscriptions.add(focusSub);
 
     final scrollHandoffSub = _controller!.onScrollHandoff.listen(
-      _handleScrollHandoff,
+      _scrollHandoffDriver.handle,
     );
     _streamSubscriptions.add(scrollHandoffSub);
 
@@ -635,70 +638,6 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _ignoreAsync(
       controller.setScrollHandoffSources(wheel: wheel, touch: touch),
     );
-  }
-
-  void _handleScrollHandoff(MonacoScrollHandoffDetails details) {
-    final config = widget.scrollHandoff;
-    if (!config.isEnabled) return;
-    final sourceEnabled = switch (details.source) {
-      MonacoScrollHandoffSource.wheel => config.desktopWheel,
-      MonacoScrollHandoffSource.touch => config.mobileTouch,
-    };
-    if (!sourceEnabled) return;
-
-    // The callback sees every raw delta; coalescing below only affects the
-    // built-in parent scrolling.
-    final onHandoff = config.onHandoff;
-    if (onHandoff != null && onHandoff(details)) return;
-
-    if (details.deltaY == 0) return;
-    _pendingScrollHandoffDelta += details.deltaY;
-    _scheduleScrollHandoffFlush();
-  }
-
-  /// Coalesces high-frequency bridge deltas into one scroll application per
-  /// frame so trackpad streams cannot flood the scroll position.
-  void _scheduleScrollHandoffFlush() {
-    if (_scrollHandoffFrameScheduled) return;
-    _scrollHandoffFrameScheduled = true;
-    SchedulerBinding.instance.scheduleFrameCallback((_) {
-      _scrollHandoffFrameScheduled = false;
-      final delta = _pendingScrollHandoffDelta;
-      _pendingScrollHandoffDelta = 0;
-      if (!mounted || delta == 0) return;
-      _applyScrollHandoffDelta(delta);
-    });
-  }
-
-  void _applyScrollHandoffDelta(double delta) {
-    final config = widget.scrollHandoff;
-    if (!config.isEnabled) return;
-    for (final position in _resolveScrollHandoffPositions(config)) {
-      // Mirror Scrollable's own wheel handling: pointerScroll clamps,
-      // fires the correct notifications, and lets NestedScrollView
-      // positions coordinate; reversed axes flip the delta sign.
-      final directional = axisDirectionIsReversed(position.axisDirection)
-          ? -delta
-          : delta;
-      if (directional == 0) continue;
-      position.pointerScroll(directional);
-    }
-  }
-
-  List<ScrollPosition> _resolveScrollHandoffPositions(
-    MonacoScrollHandoff config,
-  ) {
-    final explicit = config.controller;
-    if (explicit != null) {
-      if (!explicit.hasClients) return const [];
-      return explicit.positions
-          .where((position) => position.axis == Axis.vertical)
-          .toList();
-    }
-    if (!config.useNearestScrollable) return const [];
-    final position = Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
-    if (position == null) return const [];
-    return [position];
   }
 
   /// Wires only the content changed listener, allowing it to be updated separately.
@@ -770,7 +709,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     }
     _syncedWheelSource = false;
     _syncedTouchSource = false;
-    _pendingScrollHandoffDelta = 0;
+    _scrollHandoffDriver.clearPending();
     _appliedResolvedTheme = null;
     if (disposeOldController) {
       controller?.dispose();

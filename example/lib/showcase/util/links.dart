@@ -13,6 +13,8 @@ abstract final class Links {
       'https://github.com/omar-hanafy/flutter_monaco/blob/main/CHANGELOG.md';
   static const String license =
       'https://github.com/omar-hanafy/flutter_monaco/blob/main/LICENSE';
+  static const String lspExample =
+      'https://github.com/omar-hanafy/flutter_monaco/blob/main/example/lib/lsp_example.dart';
   static const String portfolio = 'https://omar-hanafy.github.io';
   static const String buyMeACoffee = 'https://www.buymeacoffee.com/omar.hanafy';
 }

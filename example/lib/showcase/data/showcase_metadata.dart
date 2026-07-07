@@ -51,6 +51,7 @@ class ShowcaseMetadata {
     required this.flutterConstraint,
     this.publishedAt,
     this.repositoryUpdatedAt,
+    this.latestPubVersion,
     this.likeCount,
     this.downloadCount30Days,
     this.pubPointsGranted,
@@ -64,7 +65,7 @@ class ShowcaseMetadata {
 
   static const fallback = ShowcaseMetadata(
     packageName: _packageName,
-    version: '2.0.0',
+    version: '3.1.0',
     description:
         "Integrate Monaco Editor (VS Code's editor) in Flutter apps with "
         'syntax highlighting, themes, IntelliSense, and a full Dart API.',
@@ -103,6 +104,11 @@ class ShowcaseMetadata {
   final String flutterConstraint;
   final DateTime? publishedAt;
   final DateTime? repositoryUpdatedAt;
+
+  /// The latest version published on pub.dev, which can trail [version]
+  /// (the bundled build this page actually runs) around a release.
+  final String? latestPubVersion;
+
   final int? likeCount;
   final int? downloadCount30Days;
   final int? pubPointsGranted;
@@ -117,6 +123,10 @@ class ShowcaseMetadata {
   int get builtInThemeCount => MonacoTheme.builtIn.length;
   int get showcasedThemeCount => PlaygroundThemeCount.total;
 
+  /// The Monaco Editor version bundled by the package (single source: the
+  /// package's own constant, so it tracks package upgrades automatically).
+  String get monacoVersion => MonacoAssets.monacoVersion;
+
   String get versionLabel => 'v$version';
   String get sourceLabel => hasLivePubDev ? 'Live pub.dev' : 'Bundled pubspec';
 
@@ -125,12 +135,18 @@ class ShowcaseMetadata {
 
   String get productSummary =>
       "Integrate Monaco Editor (VS Code's editor) in Flutter apps. "
-      '$typedLanguageCount typed language entries, ${platforms.length} '
-      'supported platforms, theming, IntelliSense, and a full Dart API.';
+      'One typed API across ${platforms.length} platforms: documents, '
+      'a live diff editor, Dart-defined actions with keybindings, LSP, '
+      'IntelliSense, and $typedLanguageCount typed language ids.';
 
   String get publishedLabel {
     final date = publishedAt;
     if (date == null) return 'Bundled version';
+    final pub = latestPubVersion;
+    if (pub != null && pub != version) {
+      // Around a release the running build can be ahead of pub.dev.
+      return 'v$pub on pub.dev · ${formatShortDate(date)}';
+    }
     return 'Published ${formatShortDate(date)}';
   }
 
@@ -164,6 +180,7 @@ class ShowcaseMetadata {
     String? flutterConstraint,
     DateTime? publishedAt,
     DateTime? repositoryUpdatedAt,
+    String? latestPubVersion,
     int? likeCount,
     int? downloadCount30Days,
     int? pubPointsGranted,
@@ -191,6 +208,7 @@ class ShowcaseMetadata {
       flutterConstraint: flutterConstraint ?? this.flutterConstraint,
       publishedAt: publishedAt ?? this.publishedAt,
       repositoryUpdatedAt: repositoryUpdatedAt ?? this.repositoryUpdatedAt,
+      latestPubVersion: latestPubVersion ?? this.latestPubVersion,
       likeCount: likeCount ?? this.likeCount,
       downloadCount30Days: downloadCount30Days ?? this.downloadCount30Days,
       pubPointsGranted: pubPointsGranted ?? this.pubPointsGranted,
@@ -332,12 +350,14 @@ ShowcaseMetadata parsePubDevPackage(
 }) {
   final latest = packageJson['latest'];
   if (latest is! Map<String, Object?>) return base;
-  final pubspec = latest['pubspec'];
-  final published = _date(latest['published']);
-  final metadata = pubspec is Map
-      ? _metadataFromPubspecMap(pubspec, base: base)
-      : base;
-  return metadata.copyWith(publishedAt: published, hasLivePubDev: true);
+  // The bundled pubspec describes the build actually running on this page,
+  // so pub.dev contributes provenance and live stats only - never the
+  // version/description of a possibly different published release.
+  return base.copyWith(
+    publishedAt: _date(latest['published']),
+    latestPubVersion: _string(latest['version']),
+    hasLivePubDev: true,
+  );
 }
 
 ShowcaseMetadata _metadataFromPubspecMap(
