@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
+import 'package:flutter_monaco/src/widgets/monaco_status_bar.dart';
 
 /// An enumeration representing the connection state of the Monaco Editor.
 enum _ConnectionState {
@@ -285,10 +286,35 @@ class _MonacoEditorState extends State<MonacoEditor> {
   bool _syncedWheelSource = false;
   bool _syncedTouchSource = false;
 
+  /// The theme most recently pushed to the editor, so ambient brightness
+  /// changes (D27) only produce bridge traffic when the resolved theme
+  /// actually flips.
+  MonacoTheme? _appliedResolvedTheme;
+
+  bool _bootstrappedOnce = false;
+
   @override
-  void initState() {
-    super.initState();
-    _bootstrap();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The first bootstrap runs here, not in initState: resolving a null
+    // options.theme (D27) reads Theme.of(context), which the framework
+    // forbids before initState completes.
+    if (!_bootstrappedOnce) {
+      _bootstrappedOnce = true;
+      _bootstrap();
+      return;
+    }
+    // D27: a null options.theme follows the surrounding brightness, so an
+    // ambient Theme change (e.g. the platform dark-mode toggle) re-resolves
+    // it. An explicit theme never reacts to brightness.
+    if (widget.options.theme != null) return;
+    if (_connectionState != _ConnectionState.ready || _controller == null) {
+      return;
+    }
+    final resolved = _resolveTheme();
+    if (resolved == _appliedResolvedTheme) return;
+    _appliedResolvedTheme = resolved;
+    _ignoreAsync(_controller!.setTheme(resolved));
   }
 
   @override
@@ -337,7 +363,9 @@ class _MonacoEditorState extends State<MonacoEditor> {
         _ignoreAsync(_controller!.updateOptions(diff));
       }
       if (widget.options.theme != oldWidget.options.theme) {
-        _ignoreAsync(_controller!.setTheme(_resolveTheme()));
+        final resolvedTheme = _resolveTheme();
+        _appliedResolvedTheme = resolvedTheme;
+        _ignoreAsync(_controller!.setTheme(resolvedTheme));
       }
       final language = widget.options.language;
       if (language != null && language != oldWidget.options.language) {
@@ -376,11 +404,13 @@ class _MonacoEditorState extends State<MonacoEditor> {
       // after readiness below.
       final usedInternalCreate =
           widget.controller == null && widget.controllerFactory == null;
+      final bootTheme = _resolveTheme();
+      _appliedResolvedTheme = bootTheme;
       final controller =
           widget.controller ??
           await (widget.controllerFactory?.call() ??
               MonacoController.create(
-                options: widget.options.copyWith(theme: _resolveTheme()),
+                options: widget.options.copyWith(theme: bootTheme),
                 initialText: widget.initialText,
                 page: widget.page,
                 readyTimeout: widget.readyTimeout,
@@ -431,7 +461,9 @@ class _MonacoEditorState extends State<MonacoEditor> {
       // externally supplied controllers need them applied here.
       if (!usedInternalCreate && _isBootstrapCurrent(bootstrapToken)) {
         await _controller!.updateOptions(widget.options);
-        await _controller!.setTheme(_resolveTheme());
+        final resolvedTheme = _resolveTheme();
+        _appliedResolvedTheme = resolvedTheme;
+        await _controller!.setTheme(resolvedTheme);
         final language = widget.options.language;
         if (language != null) {
           await _controller!.document.setLanguage(language);
@@ -739,6 +771,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _syncedWheelSource = false;
     _syncedTouchSource = false;
     _pendingScrollHandoffDelta = 0;
+    _appliedResolvedTheme = null;
     if (disposeOldController) {
       controller?.dispose();
     }
@@ -768,12 +801,13 @@ class _MonacoEditorState extends State<MonacoEditor> {
     if (_controller == null) {
       if (_connectionState == _ConnectionState.error) {
         return widget.errorBuilder?.call(context, _error!, _stack) ??
-            _DefaultError(
+            MonacoDefaultError(
               error: _error!,
               onRetry: _ownsController ? _bootstrap : null,
             );
       }
-      return widget.loadingBuilder?.call(context) ?? const _DefaultLoading();
+      return widget.loadingBuilder?.call(context) ??
+          const MonacoDefaultLoading();
     }
 
     // On mobile, let the WebView own the full tap-to-keyboard chain.
@@ -830,7 +864,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
           webView,
           Positioned.fill(
             child:
-                widget.loadingBuilder?.call(context) ?? const _DefaultLoading(),
+                widget.loadingBuilder?.call(context) ??
+                const MonacoDefaultLoading(),
           ),
         ],
       );
@@ -843,7 +878,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
           Positioned.fill(
             child:
                 widget.errorBuilder?.call(context, _error!, _stack) ??
-                _DefaultError(
+                MonacoDefaultError(
                   error: _error!,
                   onRetry: _ownsController ? _bootstrap : null,
                 ),
@@ -870,7 +905,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
                 widget.statusBarBuilder!(context, stats),
           )
         else
-          _MonacoStatusBar(controller: _controller!),
+          MonacoStatusBar(controller: _controller!),
       ],
     );
   }
@@ -880,135 +915,5 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _webFocusNode.dispose();
     _teardown(disposeOldController: _ownsController);
     super.dispose();
-  }
-}
-
-// -----------------------------------------------------------------------------
-// DEFAULT UI COMPONENTS
-// -----------------------------------------------------------------------------
-
-/// The default status bar, optimized to only rebuild when stats change.
-class _MonacoStatusBar extends StatelessWidget {
-  const _MonacoStatusBar({required this.controller});
-
-  final MonacoController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MonacoEditorTheme.of(context);
-    final style =
-        theme.statusBarTextStyle ??
-        Theme.of(context).textTheme.bodySmall ??
-        const TextStyle(fontSize: 12);
-
-    return ValueListenableBuilder<MonacoLiveStats>(
-      valueListenable: controller.stats,
-      builder: (context, stats, _) {
-        final language = stats.language;
-        final entries = [
-          if (stats.cursorPosition != null)
-            'Ln ${stats.cursorPosition!.line}, Col '
-                '${stats.cursorPosition!.column}',
-          'Ch ${stats.charCount}',
-          if (stats.selectedLines > 0) 'Sel Ln ${stats.selectedLines}',
-          if (stats.selectedCharacters > 0)
-            'Sel Ch ${stats.selectedCharacters}',
-          if (language != null) language.label ?? language.id,
-        ].where((s) => s.isNotEmpty).toList();
-
-        return Container(
-          padding:
-              theme.statusBarPadding ??
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          decoration: BoxDecoration(
-            color: theme.statusBarBackgroundColor,
-            border: Border(
-              top: BorderSide(
-                color:
-                    theme.statusBarBorderColor ??
-                    Theme.of(context).dividerColor,
-                width: 0.5,
-              ),
-            ),
-          ),
-          child: Wrap(
-            alignment: WrapAlignment.end,
-            spacing: theme.statusBarSpacing ?? 16,
-            runSpacing: 4,
-            children: [for (final entry in entries) Text(entry, style: style)],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _DefaultLoading extends StatelessWidget {
-  const _DefaultLoading();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MonacoEditorTheme.of(context);
-    return ColoredBox(
-      color: theme.loadingBackgroundColor ?? Colors.transparent,
-      child: Center(
-        child: SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(
-            strokeWidth: 3,
-            color: theme.loadingIndicatorColor,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DefaultError extends StatelessWidget {
-  const _DefaultError({required this.error, this.onRetry});
-
-  final Object error;
-  final VoidCallback? onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final materialTheme = Theme.of(context);
-    final theme = MonacoEditorTheme.of(context);
-    final titleStyle =
-        theme.errorTitleStyle ?? materialTheme.textTheme.titleMedium;
-    final style = theme.errorMessageStyle ?? materialTheme.textTheme.bodyMedium;
-
-    return ColoredBox(
-      color: theme.errorBackgroundColor ?? Colors.transparent,
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.error_outline,
-                color: theme.errorIconColor ?? materialTheme.colorScheme.error,
-                size: 36,
-              ),
-              const SizedBox(height: 16),
-              Text('Failed to Initialize Editor', style: titleStyle),
-              const SizedBox(height: 8),
-              Text('$error', textAlign: TextAlign.center, style: style),
-              if (onRetry != null) ...[
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Retry'),
-                  style: theme.retryButtonStyle,
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

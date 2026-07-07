@@ -1529,5 +1529,81 @@ void main() {
         },
       );
     });
+    group('ambient theme (D27)', () {
+      List<Object?> themeDispatches(FakePlatformWebViewController webview) {
+        return webview.dispatched
+            .where((d) => d['method'] == 'editor.setTheme')
+            .map((d) => (d['params']! as Map<String, Object?>)['theme'])
+            .toList();
+      }
+
+      Widget wrapWithBrightness(Brightness brightness, Widget child) {
+        return MaterialApp(
+          theme: ThemeData(brightness: brightness),
+          home: Scaffold(body: child),
+        );
+      }
+
+      testWidgets('null theme follows ambient brightness changes', (
+        tester,
+      ) async {
+        final bundle = await _createBundle();
+        Future<MonacoController> factory() async => bundle.controller;
+
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.light,
+            MonacoEditor(controllerFactory: factory),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).last, 'vs');
+
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.dark,
+            MonacoEditor(controllerFactory: factory),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).last, 'vs-dark');
+
+        // Same brightness again: deduped, no extra bridge traffic.
+        final dispatchCount = themeDispatches(bundle.webview).length;
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.dark,
+            MonacoEditor(controllerFactory: factory),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).length, dispatchCount);
+      });
+
+      testWidgets('explicit theme never reacts to brightness', (tester) async {
+        final bundle = await _createBundle();
+        Future<MonacoController> factory() async => bundle.controller;
+        const options = EditorOptions(theme: MonacoTheme.vsDark);
+
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.light,
+            MonacoEditor(controllerFactory: factory, options: options),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).last, 'vs-dark');
+        final dispatchCount = themeDispatches(bundle.webview).length;
+
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.dark,
+            MonacoEditor(controllerFactory: factory, options: options),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).length, dispatchCount);
+      });
+    });
   });
 }
