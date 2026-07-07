@@ -3,7 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
-import 'package:flutter_monaco/src/core/monaco_page_config.dart';
+import 'package:flutter_monaco/src/common/monaco_page_config.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 
 /// Matcher function type for determining if a script should trigger an action.

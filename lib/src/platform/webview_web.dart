@@ -6,11 +6,12 @@ import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_monaco/src/core/monaco_assets.dart';
-import 'package:flutter_monaco/src/core/monaco_page_config.dart';
+import 'package:flutter_monaco/src/assets/html_builder.dart';
+import 'package:flutter_monaco/src/assets/monaco_assets.dart';
+import 'package:flutter_monaco/src/common/monaco_page_config.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/platform/web_interaction_coordinator.dart';
-import 'package:flutter_monaco/src/platform/web_view_controller/web_asset_resolver.dart';
+import 'package:flutter_monaco/src/platform/web_asset_resolver.dart';
 import 'package:web/web.dart' as web;
 
 /// Resolves the bundled Monaco `vs/` directory URL on Flutter Web.
@@ -25,7 +26,7 @@ import 'package:web/web.dart' as web;
 /// blob-URL iframe that hosts Monaco (see issue #14).
 String _monacoVsAssetUrl() {
   final assetUrl = ui_web.assetManager.getAssetUrl(
-    '${MonacoAssets.assetBaseDir}/min/vs',
+    '$monacoAssetBaseDir/min/vs',
   );
   return resolveWebAssetUrl(web.document.baseURI, assetUrl);
 }
@@ -38,7 +39,7 @@ String _monacoVsAssetUrl() {
 /// load them via `<script src>`.
 String _monacoBridgeAssetUrl() {
   final assetUrl = ui_web.assetManager.getAssetUrl(
-    '${MonacoAssets.assetBaseDir}/bridge',
+    '$monacoAssetBaseDir/bridge',
   );
   return resolveWebAssetUrl(web.document.baseURI, assetUrl);
 }
@@ -82,8 +83,8 @@ String _monacoBridgeAssetUrl() {
 /// activeElement, no key event can reach Flutter at all.
 ///
 /// See also:
-/// - [MonacoAssets.generateIndexHtml] for HTML generation with web-specific
-///   worker shims.
+/// - `buildMonacoIndexHtml` (html_builder.dart) for HTML generation with
+///   web-specific worker shims.
 /// - [native.dart] for native platform implementations.
 class WebViewController implements PlatformWebViewController {
   /// Monotonic per-controller counter mixed into [_viewId].
@@ -444,16 +445,15 @@ class WebViewController implements PlatformWebViewController {
       _isReady = false;
       _readyCompleter = Completer<void>();
 
-      final html = MonacoAssets.generateIndexHtml(
-        vsPath,
-        isWindows: false,
-        isIosOrMacOS: false,
+      final html = buildMonacoIndexHtml(
+        vsPath: vsPath,
+        bridgeBase: _monacoBridgeAssetUrl(),
+        monacoVersion: MonacoAssets.monacoVersion,
         isWeb: true,
         messageToken: _messageToken,
         customCss: page.customCss,
         allowCdnFonts: page.allowCdnFonts,
         allowedConnectSources: page.allowedConnectSources,
-        bridgeBasePath: _monacoBridgeAssetUrl(),
       );
 
       final blobUrl = web.URL.createObjectURL(

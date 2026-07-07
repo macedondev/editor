@@ -1,7 +1,8 @@
 import 'dart:io';
 
-import 'package:flutter_monaco/src/core/monaco_assets.dart';
+import 'package:flutter_monaco/src/assets/monaco_assets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/generate_index_html.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
@@ -41,8 +42,8 @@ void main() {
     test('ensureReady extracts assets and writes sentinel', () async {
       await MonacoAssets.ensureReady();
       final info = await MonacoAssets.assetInfo();
-      expect(info['exists'], true);
-      final targetDir = info['path'] as String;
+      expect(info.exists, true);
+      final targetDir = info.path;
       final sentinel = File(p.join(targetDir, '.monaco_complete'));
       expect(sentinel.existsSync(), true);
       expect(sentinel.readAsStringSync().trim(), MonacoAssets.monacoVersion);
@@ -51,14 +52,14 @@ void main() {
     test('ensureReady is re-entrant', () async {
       await Future.wait(List.generate(5, (_) => MonacoAssets.ensureReady()));
       final info = await MonacoAssets.assetInfo();
-      expect(info['exists'], true);
-      final targetDir = info['path'] as String;
+      expect(info.exists, true);
+      final targetDir = info.path;
       expect(Directory(targetDir).existsSync(), true);
     });
 
     test('version mismatch forces re-extract', () async {
       final info = await MonacoAssets.assetInfo();
-      final targetDir = info['path'] as String;
+      final targetDir = info.path;
       final loader = File(p.join(targetDir, 'min', 'vs', 'loader.js'));
       await loader.parent.create(recursive: true);
       await loader.writeAsString('');
@@ -71,14 +72,14 @@ void main() {
     test('clearCache removes assets and resets caches', () async {
       await MonacoAssets.ensureReady();
       final infoBefore = await MonacoAssets.assetInfo();
-      expect(infoBefore['exists'], true);
+      expect(infoBefore.exists, true);
       await MonacoAssets.clearCache();
       final infoAfter = await MonacoAssets.assetInfo();
-      expect(infoAfter['exists'], false);
+      expect(infoAfter.exists, false);
     });
 
     test('generated html includes mobile viewport metadata', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+      final html = generateIndexHtml('min/vs');
 
       expect(html, contains('name="viewport"'));
       expect(
@@ -90,7 +91,7 @@ void main() {
     });
 
     test('generated html does not override Monaco inputarea layout', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+      final html = generateIndexHtml('min/vs');
 
       expect(html, isNot(contains('.monaco-editor .inputarea')));
       expect(html, isNot(contains('@media (pointer: coarse)')));
@@ -190,7 +191,7 @@ void main() {
     test(
       'web html statically contains touch pans inside the editor document',
       () {
-        final html = MonacoAssets.generateIndexHtml(
+        final html = generateIndexHtml(
           'https://example.com/assets/monaco/min/vs',
           isWeb: true,
           messageToken: 'token',
@@ -202,7 +203,7 @@ void main() {
     );
 
     test('web html references the visual viewport keyboard fit module', () {
-      final webHtml = MonacoAssets.generateIndexHtml(
+      final webHtml = generateIndexHtml(
         'https://example.com/assets/monaco/min/vs',
         isWeb: true,
         messageToken: 'token',
@@ -270,10 +271,7 @@ void main() {
     test(
       'apple worker shim emits escaped newlines inside JS string literals',
       () {
-        final html = MonacoAssets.generateIndexHtml(
-          'min/vs',
-          isIosOrMacOS: true,
-        );
+        final html = generateIndexHtml('min/vs', isIosOrMacOS: true);
 
         // The escape must reach JavaScript as the two characters backslash-n.
         expect(html, contains(r'''};\n" +'''));
@@ -288,12 +286,9 @@ void main() {
 
     test('native html does not opt into web scroll containment', () {
       for (final html in [
-        MonacoAssets.generateIndexHtml('min/vs'),
-        MonacoAssets.generateIndexHtml('min/vs', isIosOrMacOS: true),
-        MonacoAssets.generateIndexHtml(
-          r'file:///C:/monaco/min/vs',
-          isWindows: true,
-        ),
+        generateIndexHtml('min/vs'),
+        generateIndexHtml('min/vs', isIosOrMacOS: true),
+        generateIndexHtml(r'file:///C:/monaco/min/vs', isWindows: true),
       ]) {
         expect(html, isNot(contains('touch-action: none')));
         expect(html, isNot(contains('overscroll-behavior')));

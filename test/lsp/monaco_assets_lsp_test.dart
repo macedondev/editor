@@ -1,5 +1,6 @@
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/generate_index_html.dart';
 
 import '../helpers/bridge_sources.dart';
 
@@ -13,7 +14,7 @@ void main() {
     );
 
     test('generated html references the LSP bridge script', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+      final html = generateIndexHtml('min/vs');
       expect(html, contains('lsp.js'));
     });
 
@@ -76,14 +77,14 @@ void main() {
     });
 
     test('default CSP stays locked down', () {
-      final html = MonacoAssets.generateIndexHtml('min/vs');
+      final html = generateIndexHtml('min/vs');
 
       expect(html, contains("connect-src 'self' blob:;"));
       expect(html, isNot(contains('ws://')));
     });
 
     test('allowedConnectSources extends connect-src only', () {
-      final html = MonacoAssets.generateIndexHtml(
+      final html = generateIndexHtml(
         'min/vs',
         allowedConnectSources: ['ws://127.0.0.1:3000', 'wss://lsp.example.com'],
       );
@@ -107,10 +108,7 @@ void main() {
         'ws://x<script>',
       ]) {
         expect(
-          () => MonacoAssets.generateIndexHtml(
-            'min/vs',
-            allowedConnectSources: [malicious],
-          ),
+          () => generateIndexHtml('min/vs', allowedConnectSources: [malicious]),
           throwsArgumentError,
           reason: 'should reject: $malicious',
         );
@@ -118,7 +116,7 @@ void main() {
     });
 
     test('ignores blank entries in allowedConnectSources', () {
-      final html = MonacoAssets.generateIndexHtml(
+      final html = generateIndexHtml(
         'min/vs',
         allowedConnectSources: ['', '  '],
       );

@@ -66,9 +66,10 @@ export 'src/common/exceptions.dart'
         MonacoJavaScriptError,
         MonacoProtocolError,
         MonacoTimeoutError;
-export 'src/core/monaco_assets.dart' show MonacoAssets;
-export 'src/core/monaco_controller.dart' show MonacoController;
-export 'src/core/monaco_page_config.dart'
+export 'src/assets/asset_diagnostics.dart' show MonacoAssetDiagnostics;
+export 'src/assets/monaco_assets.dart' show MonacoAssets;
+export 'src/editor/controller.dart' show MonacoController;
+export 'src/common/monaco_page_config.dart'
     show MonacoCapabilities, MonacoPageConfig;
 export 'src/editor/completions.dart'
     show CompletionProvider, MonacoCompletionRegistration;

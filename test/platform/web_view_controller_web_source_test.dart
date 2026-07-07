@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   String webControllerSource() =>
-      File('lib/src/platform/web_view_controller/web.dart').readAsStringSync();
+      File('lib/src/platform/webview_web.dart').readAsStringSync();
 
   test('web focus handler only amplifies Monaco focus on desktop', () {
     final source = webControllerSource();

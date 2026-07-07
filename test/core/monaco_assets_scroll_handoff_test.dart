@@ -1,5 +1,5 @@
-import 'package:flutter_monaco/src/core/monaco_assets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/generate_index_html.dart';
 
 import '../helpers/bridge_sources.dart';
 
@@ -18,8 +18,8 @@ void main() {
       );
       // The module script is referenced on every platform variant.
       for (final pageHtml in [
-        MonacoAssets.generateIndexHtml('min/vs'),
-        MonacoAssets.generateIndexHtml(
+        generateIndexHtml('min/vs'),
+        generateIndexHtml(
           'http://localhost/assets/monaco/min/vs',
           isWeb: true,
           messageToken: 'token-1',

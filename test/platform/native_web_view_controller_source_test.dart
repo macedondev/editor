@@ -13,7 +13,7 @@ void main() {
 
   group('Dart platform controllers', () {
     test('base controller keeps native focus a documented no-op', () {
-      final source = read('lib/src/platform/web_view_controller/native.dart');
+      final source = read('lib/src/platform/webview_native.dart');
 
       final baseFocusStart = source.indexOf(
         '@override\n  Future<NativeFocusResult> requestNativeFocus() async {',
@@ -33,21 +33,15 @@ void main() {
     test(
       'macOS handoff goes through the flutter_monaco/native_focus channel',
       () {
-        final source = read('lib/src/platform/web_view_controller/native.dart');
+        final source = read('lib/src/platform/webview_native.dart');
 
         final flutterClassStart = source.indexOf(
           'class FlutterWebViewController',
         );
-        final windowsClassStart = source.indexOf(
-          'class WindowsWebViewController',
-        );
         expect(flutterClassStart, isNonNegative);
-        expect(windowsClassStart, greaterThan(flutterClassStart));
-
-        final flutterClassBlock = source.substring(
-          flutterClassStart,
-          windowsClassStart,
-        );
+        // WindowsWebViewController lives in its own part file
+        // (webview_windows.dart), so this class runs to end-of-file here.
+        final flutterClassBlock = source.substring(flutterClassStart);
         expect(flutterClassBlock, contains("'flutter_monaco/native_focus'"));
         expect(flutterClassBlock, contains("'focusWebView'"));
         expect(flutterClassBlock, contains("'hasNativeFocus'"));
@@ -62,7 +56,7 @@ void main() {
     );
 
     test('Windows handoff still moves real Win32 focus', () {
-      final source = read('lib/src/platform/web_view_controller/native.dart');
+      final source = read('lib/src/platform/webview_windows.dart');
 
       final windowsClassStart = source.indexOf(
         'class WindowsWebViewController',

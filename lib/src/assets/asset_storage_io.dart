@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_monaco/src/assets/asset_diagnostics.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -117,7 +118,7 @@ Future<String> monacoAssetHtmlPath({
 }
 
 /// Returns diagnostics for the extracted native Monaco asset cache.
-Future<Map<String, dynamic>> monacoAssetInfo({
+Future<MonacoAssetDiagnostics> monacoAssetInfo({
   required String assetBaseDir,
   required String cacheSubDir,
   required String monacoVersion,
@@ -130,7 +131,11 @@ Future<Map<String, dynamic>> monacoAssetInfo({
   final directory = Directory(targetDir);
 
   if (!directory.existsSync()) {
-    return {'exists': false, 'path': targetDir, 'version': monacoVersion};
+    return MonacoAssetDiagnostics(
+      exists: false,
+      path: targetDir,
+      monacoVersion: monacoVersion,
+    );
   }
 
   var fileCount = 0;
@@ -149,15 +154,14 @@ Future<Map<String, dynamic>> monacoAssetInfo({
     }
   }
 
-  return {
-    'exists': true,
-    'path': targetDir,
-    'version': monacoVersion,
-    'fileCount': fileCount,
-    'totalSize': totalSize,
-    'totalSizeMB': (totalSize / 1024 / 1024).toStringAsFixed(2),
-    'generatedHtmlCount': generatedHtmlCount,
-  };
+  return MonacoAssetDiagnostics(
+    exists: true,
+    path: targetDir,
+    monacoVersion: monacoVersion,
+    fileCount: fileCount,
+    totalSizeBytes: totalSize,
+    generatedHtmlCount: generatedHtmlCount,
+  );
 }
 
 /// Deletes the native Monaco asset cache directory when present.

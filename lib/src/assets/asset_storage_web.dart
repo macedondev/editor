@@ -1,3 +1,5 @@
+import 'package:flutter_monaco/src/assets/asset_diagnostics.dart';
+
 /// Web asset setup is a no-op because Flutter serves package assets directly.
 Future<void> ensureMonacoAssetsReady({
   required String assetBaseDir,
@@ -33,19 +35,19 @@ Future<String> monacoAssetHtmlPath({
   return 'assets/$assetBaseDir/index.html';
 }
 
-/// Returns web diagnostics for the package-served Monaco assets.
-Future<Map<String, dynamic>> monacoAssetInfo({
+/// Returns web diagnostics for the package-served Monaco assets. Assets are
+/// served directly by the web server (no extraction), so the file counts
+/// stay zero.
+Future<MonacoAssetDiagnostics> monacoAssetInfo({
   required String assetBaseDir,
   required String cacheSubDir,
   required String monacoVersion,
 }) async {
-  return {
-    'exists': true,
-    'path': 'assets/$assetBaseDir',
-    'version': monacoVersion,
-    'platform': 'web',
-    'note': 'Assets served directly from web server, no extraction needed.',
-  };
+  return MonacoAssetDiagnostics(
+    exists: true,
+    path: 'assets/$assetBaseDir',
+    monacoVersion: monacoVersion,
+  );
 }
 
 /// Web cache clearing is a no-op because assets are served by Flutter.

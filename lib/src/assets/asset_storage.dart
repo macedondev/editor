@@ -5,5 +5,4 @@
 /// `path_provider`, so they use the stub implementation.
 library;
 
-export 'monaco_asset_storage_web.dart'
-    if (dart.library.io) 'monaco_asset_storage_io.dart';
+export 'asset_storage_web.dart' if (dart.library.io) 'asset_storage_io.dart';
