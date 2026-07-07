@@ -846,7 +846,7 @@ void main() {
 
       testWidgets('onLiveStats receives updates', (tester) async {
         final bundle = await _createBundle();
-        final stats = <LiveStats>[];
+        final stats = <MonacoLiveStats>[];
 
         await tester.pumpWidget(
           _wrap(
@@ -859,7 +859,7 @@ void main() {
         await tester.pump();
 
         expect(stats.length, 1);
-        expect(stats.first.lineCount.value, 10);
+        expect(stats.first.lineCount, 10);
       });
     });
 
@@ -883,7 +883,7 @@ void main() {
         await tester.pump();
         await tester.pump();
 
-        expect(find.text('Ln 5:10'), findsOneWidget);
+        expect(find.text('Ln 5, Col 10'), findsOneWidget);
         expect(find.text('Ch 100'), findsOneWidget);
       });
 
@@ -894,7 +894,7 @@ void main() {
             MonacoEditor(
               controller: bundle.controller,
               statusBarBuilder: (context, stats) =>
-                  Text('Lines: ${stats.lineCount.value}'),
+                  Text('Lines: ${stats.lineCount}'),
             ),
           ),
         );
@@ -949,7 +949,7 @@ void main() {
         );
         final decoration = container.decoration! as BoxDecoration;
         expect(decoration.color, Colors.black);
-        expect(find.text('Ln 2:3'), findsOneWidget);
+        expect(find.text('Ln 2, Col 3'), findsOneWidget);
       });
 
       testWidgets('status bar hidden when showStatusBar false', (tester) async {

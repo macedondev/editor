@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:convert_object/convert_object.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_monaco/src/common/exceptions.dart';
 import 'package:flutter_monaco/src/lsp/lsp_transport.dart';
@@ -364,7 +363,10 @@ class MonacoLspManager {
         break;
       case 'closed':
       case 'failed':
-        final errorInfo = tryConvertToMap<String, dynamic>(json['error']);
+        final rawError = json['error'];
+        final errorInfo = rawError is Map
+            ? Map<String, dynamic>.from(rawError)
+            : null;
         final error = errorInfo == null
             ? null
             : MonacoJavaScriptError.fromJson(
@@ -380,7 +382,10 @@ class MonacoLspManager {
     if (connection == null || connection._finalized) return;
     final transport = connection.transport;
     if (transport is! LspBridgedTransport) return;
-    final message = tryConvertToMap<String, Object?>(json['message']);
+    final rawMessage = json['message'];
+    final message = rawMessage is Map
+        ? Map<String, Object?>.from(rawMessage)
+        : null;
     if (message == null) return;
     try {
       transport.toServer(message);

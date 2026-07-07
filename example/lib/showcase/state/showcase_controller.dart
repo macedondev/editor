@@ -22,13 +22,13 @@ enum PlaygroundTheme {
     PlaygroundTheme.midnight => 'Midnight (custom)',
   };
 
-  /// The Monaco theme id to apply via [MonacoController.setThemeById].
-  String get monacoId => switch (this) {
-    PlaygroundTheme.dark => MonacoTheme.vsDark.id,
-    PlaygroundTheme.light => MonacoTheme.vs.id,
-    PlaygroundTheme.hcDark => MonacoTheme.hcBlack.id,
-    PlaygroundTheme.hcLight => MonacoTheme.hcLight.id,
-    PlaygroundTheme.midnight => kMidnightThemeId,
+  /// The Monaco theme to apply via [MonacoController.setTheme].
+  MonacoTheme get monacoTheme => switch (this) {
+    PlaygroundTheme.dark => MonacoTheme.vsDark,
+    PlaygroundTheme.light => MonacoTheme.vs,
+    PlaygroundTheme.hcDark => MonacoTheme.hcBlack,
+    PlaygroundTheme.hcLight => MonacoTheme.hcLight,
+    PlaygroundTheme.midnight => const MonacoTheme(kMidnightThemeId),
   };
 
   bool get isDark =>
@@ -96,7 +96,7 @@ class ShowcaseController extends ChangeNotifier {
 
   /// Live editor stats (cursor, line/char counts). Null until the editor is
   /// attached.
-  ValueListenable<LiveStats>? get liveStats => _editor?.liveStats;
+  ValueListenable<MonacoLiveStats>? get liveStats => _editor?.stats;
 
   /// Stable options used to create the editor widget. Computed once.
   late final EditorOptions initialEditorOptions = _buildOptions();
@@ -109,13 +109,12 @@ class ShowcaseController extends ChangeNotifier {
     language: _language,
     theme: _playgroundTheme.isDark ? MonacoTheme.vsDark : MonacoTheme.vs,
     fontSize: _fontSize,
-    wordWrap: _wordWrap,
-    minimap: _minimap,
-    lineNumbers: _lineNumbers,
+    wordWrap: _wordWrap ? MonacoWordWrap.on : MonacoWordWrap.off,
+    minimap: MonacoMinimapOptions(enabled: _minimap),
+    lineNumbers: _lineNumbers ? MonacoLineNumbers.on : MonacoLineNumbers.off,
     readOnly: _readOnly,
-    automaticLayout: true,
     scrollBeyondLastLine: false,
-    padding: const {'top': 16, 'bottom': 16},
+    padding: const MonacoPadding(top: 16, bottom: 16),
   );
 
   /// Called from [MonacoEditor.onReady]: registers the custom theme and
@@ -130,7 +129,7 @@ class ShowcaseController extends ChangeNotifier {
         triggerCharacters: const ['.'],
         items: kDemoCompletions,
       );
-      await controller.setThemeById(_playgroundTheme.monacoId);
+      await controller.setTheme(_playgroundTheme.monacoTheme);
     } catch (e) {
       debugPrint('[ShowcaseController] attachEditor failed: $e');
     }
@@ -180,7 +179,7 @@ class ShowcaseController extends ChangeNotifier {
   }
 
   void _applyTheme() {
-    _editor?.setThemeById(_playgroundTheme.monacoId);
+    _editor?.setTheme(_playgroundTheme.monacoTheme);
   }
 
   // --- Language ---
@@ -238,9 +237,9 @@ class ShowcaseController extends ChangeNotifier {
 
   // --- Quick actions ---
 
-  void format() => _editor?.format();
-  void find() => _editor?.find();
-  void foldAll() => _editor?.foldAll();
+  void format() => _editor?.executeAction(MonacoAction.formatDocument);
+  void find() => _editor?.executeAction(MonacoAction.find);
+  void foldAll() => _editor?.executeAction(MonacoAction.foldAll);
 
   Future<String> currentValue() async => await _editor?.getValue() ?? '';
 
@@ -301,7 +300,7 @@ class ShowcaseController extends ChangeNotifier {
   Future<void> runDecorationsDemo() async {
     final editor = _editor;
     if (editor == null) return;
-    final lineCount = editor.liveStats.value.lineCount.value;
+    final lineCount = editor.stats.value.lineCount;
     if (lineCount <= 0) return;
     final targets = <int>[
       1,

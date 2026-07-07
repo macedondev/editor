@@ -34,10 +34,8 @@ class _MultiEditorExampleState extends State<MultiEditorExample> {
         options: const EditorOptions(
           language: MonacoLanguage.dart,
           theme: MonacoTheme.vsDark,
-          fontSize: 14,
-          wordWrap: false,
-          minimap: true,
-          automaticLayout: true,
+          wordWrap: MonacoWordWrap.off,
+          minimap: MonacoMinimapOptions(enabled: true),
         ),
       );
       await _leftController!.setValue(_dartCode);
@@ -51,10 +49,8 @@ class _MultiEditorExampleState extends State<MultiEditorExample> {
         options: const EditorOptions(
           language: MonacoLanguage.javascript,
           theme: MonacoTheme.vs,
-          fontSize: 14,
-          wordWrap: false,
-          minimap: true,
-          automaticLayout: true,
+          wordWrap: MonacoWordWrap.off,
+          minimap: MonacoMinimapOptions(enabled: true),
         ),
       );
       await _rightController!.setValue(_jsCode);
@@ -69,10 +65,7 @@ class _MultiEditorExampleState extends State<MultiEditorExample> {
           language: MonacoLanguage.markdown,
           theme: MonacoTheme.vsDark,
           fontSize: 15,
-          wordWrap: true,
-          minimap: false,
-          automaticLayout: true,
-          lineNumbers: false,
+          lineNumbers: MonacoLineNumbers.off,
         ),
       );
       await _bottomController!.setValue(_markdownContent);
@@ -150,9 +143,9 @@ class _MultiEditorExampleState extends State<MultiEditorExample> {
             tooltip: 'Sync Themes',
             onSelected: (theme) async {
               await Future.wait([
-                _leftController!.setTheme(MonacoTheme.fromId(theme)),
-                _rightController!.setTheme(MonacoTheme.fromId(theme)),
-                _bottomController!.setTheme(MonacoTheme.fromId(theme)),
+                _leftController!.setTheme(MonacoTheme(theme)),
+                _rightController!.setTheme(MonacoTheme(theme)),
+                _bottomController!.setTheme(MonacoTheme(theme)),
               ]);
             },
             itemBuilder: (context) => [
@@ -295,15 +288,16 @@ class _MultiEditorExampleState extends State<MultiEditorExample> {
           ),
           const Spacer(),
           // Live stats
-          ValueListenableBuilder<LiveStats>(
-            valueListenable: controller.liveStats,
+          ValueListenableBuilder<MonacoLiveStats>(
+            valueListenable: controller.stats,
             builder: (context, stats, _) {
+              final language = stats.language;
               return Row(
                 children: [
-                  if (stats.language != null) ...[
+                  if (language != null) ...[
                     Chip(
                       label: Text(
-                        stats.language!,
+                        language.label ?? language.id,
                         style: const TextStyle(fontSize: 10),
                       ),
                       padding: EdgeInsets.zero,
@@ -313,13 +307,13 @@ class _MultiEditorExampleState extends State<MultiEditorExample> {
                     const SizedBox(width: 8),
                   ],
                   Text(
-                    'L:${stats.lineCount.value} C:${stats.charCount.value}',
+                    'L:${stats.lineCount} C:${stats.charCount}',
                     style: TextStyle(fontSize: 11, color: color),
                   ),
                   if (stats.hasSelection) ...[
                     const SizedBox(width: 8),
                     Text(
-                      'Sel:${stats.selectedCharacters.value}',
+                      'Sel:${stats.selectedCharacters}',
                       style: TextStyle(
                         fontSize: 11,
                         color: color,

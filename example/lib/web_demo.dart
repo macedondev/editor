@@ -662,7 +662,9 @@ MonacoEditor(
             value: _minimap,
             onChanged: (val) {
               setState(() => _minimap = val);
-              _controller?.updateOptions(EditorOptions(minimap: val));
+              _controller?.updateOptions(
+                EditorOptions(minimap: MonacoMinimapOptions(enabled: val)),
+              );
             },
           ),
           const SizedBox(width: 8),
@@ -674,7 +676,11 @@ MonacoEditor(
             value: _wordWrap,
             onChanged: (val) {
               setState(() => _wordWrap = val);
-              _controller?.updateOptions(EditorOptions(wordWrap: val));
+              _controller?.updateOptions(
+                EditorOptions(
+                  wordWrap: val ? MonacoWordWrap.on : MonacoWordWrap.off,
+                ),
+              );
             },
           ),
 
@@ -684,7 +690,8 @@ MonacoEditor(
           IconButton(
             icon: const Icon(Icons.format_align_left, size: 20),
             tooltip: 'Format Code',
-            onPressed: () => _controller?.format(),
+            onPressed: () =>
+                _controller?.executeAction(MonacoAction.formatDocument),
             color: Colors.white70,
           ),
           IconButton(
@@ -962,9 +969,8 @@ MonacoEditor(
         language: file.language,
         theme: _currentTheme,
         fontSize: _fontSize,
-        wordWrap: _wordWrap,
-        minimap: _minimap,
-        automaticLayout: true,
+        wordWrap: _wordWrap ? MonacoWordWrap.on : MonacoWordWrap.off,
+        minimap: MonacoMinimapOptions(enabled: _minimap),
       ),
       backgroundColor: const Color(0xFF1E1E1E),
       onReady: _onEditorReady,
@@ -1054,10 +1060,13 @@ MonacoEditor(
       child: Row(
         children: [
           if (_controller != null)
-            ValueListenableBuilder<LiveStats>(
-              valueListenable: _controller!.liveStats,
+            ValueListenableBuilder<MonacoLiveStats>(
+              valueListenable: _controller!.stats,
               builder: (context, stats, _) {
-                final pos = stats.cursorPosition?.label ?? '1:1';
+                final cursor = stats.cursorPosition;
+                final pos = cursor != null
+                    ? '${cursor.line}:${cursor.column}'
+                    : '1:1';
                 return Text(
                   'Ln $pos',
                   style: const TextStyle(color: Colors.white, fontSize: 12),

@@ -54,8 +54,8 @@ class MonacoController {
 
   /// Real-time statistics from the editor, updated on every cursor/content
   /// change via the `stats` protocol event.
-  final ValueNotifier<LiveStats> _liveStats = ValueNotifier(
-    LiveStats.defaults(),
+  final ValueNotifier<MonacoLiveStats> _liveStats = ValueNotifier(
+    const MonacoLiveStats(),
   );
 
   // Event streams
@@ -103,8 +103,8 @@ class MonacoController {
   /// Returns `true` if the editor currently accepts user interaction.
   bool get isInteractionEnabled => _interactionEnabled;
 
-  /// Exposes real-time statistics (cursor position, selection, line count).
-  ValueNotifier<LiveStats> get liveStats => _liveStats;
+  /// Real-time statistics (cursor position, selection, line count).
+  ValueListenable<MonacoLiveStats> get stats => _liveStats;
 
   /// Stream emitting `true` (flush) or `false` (partial) when content changes.
   Stream<bool> get onContentChanged => _onContentChanged.stream;
@@ -204,7 +204,12 @@ class MonacoController {
     required MonacoPageConfig page,
     required Duration readyTimeout,
   }) {
-    final bootOptions = options ?? const EditorOptions();
+    // Curated defaults under the caller's sparse options (caller wins).
+    // A null theme falls back to the dark default here; the MonacoEditor
+    // widget resolves it from the surrounding Flutter brightness instead.
+    final bootOptions = MonacoDefaults.editorOptions.merge(options);
+    final bootLanguage = bootOptions.language ?? MonacoDefaults.language;
+    final bootTheme = bootOptions.theme ?? MonacoDefaults.darkTheme;
     // Boot failures must reach callers through [whenReady] (and the commands
     // gated on it), never as an unhandled zone error when nobody awaits it.
     _onReady.future.ignore();
@@ -225,8 +230,8 @@ class MonacoController {
           await _protocol.invoke('page.boot', {
             'options': bootOptions.toMonacoOptions(),
             'text': initialText ?? '',
-            'language': bootOptions.language.id,
-            'theme': bootOptions.effectiveThemeId,
+            'language': bootLanguage.id,
+            'theme': bootTheme.id,
             'scrollHandoff': const {'wheel': false, 'touch': false},
           }, timeout: null);
 
@@ -349,26 +354,20 @@ class MonacoController {
 
   /// Changes the editor's color theme.
   ///
-  /// Waits for the editor to be ready before applying.
+  /// Accepts both built-in themes ([MonacoTheme.vsDark], ...) and custom
+  /// ids previously registered with [defineTheme]:
+  /// `setTheme(MonacoTheme('app-dark'))`. Throws an [ArgumentError] when
+  /// the id is empty so callers don't silently activate Monaco's
+  /// empty-string fallback. Waits for the editor to be ready.
   Future<void> setTheme(MonacoTheme theme) async {
-    await setThemeById(theme.id);
-  }
-
-  /// Changes the editor's color theme using a raw Monaco theme identifier.
-  ///
-  /// Accepts both built-in Monaco theme ids and custom theme ids previously
-  /// registered with [defineTheme] or [defineThemeFromJson]. Throws an
-  /// [ArgumentError] when [themeId] is empty so callers don't silently
-  /// activate Monaco's empty-string fallback.
-  Future<void> setThemeById(String themeId) async {
-    if (themeId.trim().isEmpty) {
+    if (theme.id.trim().isEmpty) {
       throw ArgumentError.value(
-        themeId,
-        'themeId',
-        'themeId must be a non-empty string',
+        theme.id,
+        'theme',
+        'theme id must be a non-empty string',
       );
     }
-    await _invoke('editor.setTheme', {'theme': themeId});
+    await _invoke('editor.setTheme', {'theme': theme.id});
   }
 
   /// Returns the Monaco theme id currently active in the editor.
@@ -384,32 +383,24 @@ class MonacoController {
 
   /// Registers or replaces a custom Monaco theme.
   ///
-  /// After registration, activate the theme by calling
-  /// [setThemeById]([MonacoThemeDefinition.id]) or setting
-  /// [EditorOptions.themeId].
-  ///
-  /// Use [defineThemeFromJson] when the theme data only exists in raw
-  /// Monaco-shaped JSON.
+  /// After registration, activate the theme with
+  /// `setTheme(MonacoTheme(theme.id))` or by setting
+  /// [EditorOptions.theme]. For theme data that only exists as raw
+  /// Monaco-shaped JSON, build the definition with
+  /// [MonacoThemeDefinition.fromMonacoThemeData]. Throws an
+  /// [ArgumentError] when the id is empty.
   Future<void> defineTheme(MonacoThemeDefinition theme) async {
-    await defineThemeFromJson(theme.id, theme.toMonacoThemeData());
-  }
-
-  /// Registers or replaces a Monaco theme from raw Monaco-shaped JSON.
-  ///
-  /// This is an escape hatch for Monaco theme fields not yet modeled by
-  /// [MonacoThemeDefinition]. Prefer [defineTheme] for type safety. Throws
-  /// an [ArgumentError] when [id] is empty.
-  ///
-  /// [data] must follow Monaco's `IStandaloneThemeData` shape.
-  Future<void> defineThemeFromJson(String id, Map<String, Object?> data) async {
-    if (id.trim().isEmpty) {
+    if (theme.id.trim().isEmpty) {
       throw ArgumentError.value(
-        id,
-        'id',
+        theme.id,
+        'theme',
         'theme id must be a non-empty string',
       );
     }
-    await _invoke('editor.defineTheme', {'id': id, 'data': data});
+    await _invoke('editor.defineTheme', {
+      'id': theme.id,
+      'data': theme.toMonacoThemeData(),
+    });
   }
 
   /// Sets the background color of the native WebView container.
@@ -587,9 +578,14 @@ class MonacoController {
     await _invoke('completions.unregister', {'id': id});
   }
 
-  /// Execute an editor action
-  Future<void> executeAction(String actionId, [dynamic args]) async {
-    await _invoke('editor.executeAction', {'actionId': actionId, 'args': args});
+  /// Runs a Monaco editor action, e.g.
+  /// `executeAction(MonacoAction.formatDocument)`. Custom command ids run
+  /// via `MonacoAction('my.command')`.
+  Future<void> executeAction(MonacoAction action, [dynamic args]) async {
+    await _invoke('editor.executeAction', {
+      'actionId': action.id,
+      'args': args,
+    });
   }
 
   /// Whether a Flutter text input (TextField, CupertinoTextField,
@@ -822,51 +818,6 @@ class MonacoController {
     await _invoke('page.setScrollHandoff', {'wheel': wheel, 'touch': touch});
   }
 
-  /// Format the document
-  Future<void> format() => executeAction(MonacoAction.formatDocument);
-
-  /// Open find dialog
-  Future<void> find() => executeAction(MonacoAction.find);
-
-  /// Open replace dialog
-  Future<void> replace() => executeAction(MonacoAction.startFindReplaceAction);
-
-  /// Toggle word wrap
-  Future<void> toggleWordWrap() => executeAction(MonacoAction.toggleWordWrap);
-
-  /// Select all content
-  Future<void> selectAll() => executeAction(MonacoAction.selectAll);
-
-  /// Undo last action
-  Future<void> undo() => executeAction(MonacoAction.undo);
-
-  /// Redo last undone action
-  Future<void> redo() => executeAction(MonacoAction.redo);
-
-  /// Cut selected text
-  Future<void> cut() => executeAction(MonacoAction.clipboardCutAction);
-
-  /// Copy selected text
-  Future<void> copy() => executeAction(MonacoAction.clipboardCopyAction);
-
-  /// Paste from clipboard
-  Future<void> paste() => executeAction(MonacoAction.clipboardPasteAction);
-
-  /// Fold all foldable regions in the current model.
-  Future<void> foldAll() => executeAction(MonacoAction.foldAll);
-
-  /// Unfold all foldable regions in the current model.
-  Future<void> unfoldAll() => executeAction(MonacoAction.unfoldAll);
-
-  /// Toggle line comments on the current selection.
-  Future<void> toggleLineComment() => executeAction(MonacoAction.commentLine);
-
-  /// Indent the current selection or active line.
-  Future<void> indentLines() => executeAction(MonacoAction.indentLines);
-
-  /// Outdent the current selection or active line.
-  Future<void> outdentLines() => executeAction(MonacoAction.outdentLines);
-
   // --- EVENT HANDLING ---
 
   /// Wire up protocol event listeners.
@@ -875,7 +826,7 @@ class MonacoController {
       switch (event.name) {
         case 'stats':
           try {
-            _liveStats.value = LiveStats.fromJson(
+            _liveStats.value = MonacoLiveStats.fromJson(
               Map<String, dynamic>.from(event.data),
             );
           } catch (e) {
@@ -1369,11 +1320,6 @@ class MonacoController {
 
   // --- ADDITIONAL HELPER METHODS ---
 
-  /// Get editor statistics from the live stats stream
-  LiveStats getStatistics() {
-    return _liveStats.value;
-  }
-
   /// Whether the document changed since the last [markSaved].
   ///
   /// Throws a [MonacoException] on failure.
@@ -1431,25 +1377,25 @@ class MonacoController {
     }
   }
 
-  /// Get multiple editor properties at once
+  /// Returns a full editor snapshot.
   Future<EditorState> getEditorState() async {
     final content = await getValue();
     final selection = await getSelection();
     final cursorPosition = await getCursorPosition();
     final lineCount = await getLineCount();
-    final hasChanges = await hasUnsavedChanges();
-    final stats = getStatistics(); // Now synchronous
+    final isDirty = await hasUnsavedChanges();
+    final theme = await getThemeId();
+    final liveStats = stats.value;
 
     return EditorState(
       content: content,
       selection: selection,
       cursorPosition: cursorPosition,
       lineCount: lineCount,
-      hasUnsavedChanges: hasChanges,
-      language: stats.language,
-      theme: null,
-      // Would need a separate API call to get theme
-      stats: stats,
+      isDirty: isDirty,
+      language: liveStats.language,
+      theme: theme == null ? null : MonacoTheme(theme),
+      stats: liveStats,
     );
   }
 

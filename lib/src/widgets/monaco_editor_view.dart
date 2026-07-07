@@ -202,7 +202,7 @@ class MonacoEditor extends StatefulWidget {
   final VoidCallback? onBlur;
 
   /// Callback for receiving real-time editor statistics (cursor position, line count).
-  final ValueChanged<LiveStats>? onLiveStats;
+  final ValueChanged<MonacoLiveStats>? onLiveStats;
 
   /// Builder for the widget displayed while the editor is initializing.
   ///
@@ -219,7 +219,7 @@ class MonacoEditor extends StatefulWidget {
   final bool showStatusBar;
 
   /// Builder for a custom status bar widget.
-  final Widget Function(BuildContext context, LiveStats stats)?
+  final Widget Function(BuildContext context, MonacoLiveStats stats)?
   statusBarBuilder;
 
   /// The background color of the WebView container.
@@ -355,9 +355,12 @@ class _MonacoEditorState extends State<MonacoEditor> {
     // If options change, apply them to the existing controller.
     if (widget.options != oldWidget.options) {
       _ignoreAsync(_controller!.updateOptions(widget.options));
-      // Explicitly update theme and language as they require separate bridge calls.
-      _ignoreAsync(_controller!.setThemeById(widget.options.effectiveThemeId));
-      _ignoreAsync(_controller!.setLanguage(widget.options.language));
+      // Theme and language require separate bridge calls.
+      _ignoreAsync(_controller!.setTheme(_resolveTheme()));
+      final language = widget.options.language;
+      if (language != null) {
+        _ignoreAsync(_controller!.setLanguage(language));
+      }
     }
 
     if (widget.backgroundColor != oldWidget.backgroundColor &&
@@ -395,7 +398,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
           widget.controller ??
           await (widget.controllerFactory?.call() ??
               MonacoController.create(
-                options: widget.options,
+                options: widget.options.copyWith(theme: _resolveTheme()),
                 initialText: widget.initialValue,
                 page: MonacoPageConfig(
                   customCss: widget.customCss,
@@ -450,8 +453,11 @@ class _MonacoEditorState extends State<MonacoEditor> {
       // externally supplied controllers need them applied here.
       if (!usedInternalCreate && _isBootstrapCurrent(bootstrapToken)) {
         await _controller!.updateOptions(widget.options);
-        await _controller!.setThemeById(widget.options.effectiveThemeId);
-        await _controller!.setLanguage(widget.options.language);
+        await _controller!.setTheme(_resolveTheme());
+        final language = widget.options.language;
+        if (language != null) {
+          await _controller!.setLanguage(language);
+        }
         if (widget.initialValue != null) {
           await _controller!.setValue(widget.initialValue!);
         }
@@ -501,6 +507,17 @@ class _MonacoEditorState extends State<MonacoEditor> {
         defaultTargetPlatform == TargetPlatform.iOS;
   }
 
+  /// Resolves the effective theme: an explicit [MonacoEditor.options] theme
+  /// always wins; a null theme follows the surrounding Flutter brightness.
+  MonacoTheme _resolveTheme() {
+    final explicit = widget.options.theme;
+    if (explicit != null) return explicit;
+    final brightness = mounted ? Theme.of(context).brightness : Brightness.dark;
+    return brightness == Brightness.dark
+        ? MonacoDefaults.darkTheme
+        : MonacoDefaults.lightTheme;
+  }
+
   /// Subscribes to all relevant event streams from the controller.
   void _wireListeners() {
     if (_controller == null) return;
@@ -531,9 +548,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
     );
     _streamSubscriptions.add(scrollHandoffSub);
 
-    _statsListener = () =>
-        widget.onLiveStats?.call(_controller!.liveStats.value);
-    _controller!.liveStats.addListener(_statsListener!);
+    _statsListener = () => widget.onLiveStats?.call(_controller!.stats.value);
+    _controller!.stats.addListener(_statsListener!);
   }
 
   void _ignoreAsync(Future<void> future) {
@@ -692,7 +708,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _contentDebounceTimer = null;
 
     if (_controller != null && _statsListener != null) {
-      _controller!.liveStats.removeListener(_statsListener!);
+      _controller!.stats.removeListener(_statsListener!);
       _statsListener = null;
     }
   }
@@ -836,8 +852,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
       children: [
         Expanded(child: content),
         if (widget.statusBarBuilder != null)
-          ValueListenableBuilder<LiveStats>(
-            valueListenable: _controller!.liveStats,
+          ValueListenableBuilder<MonacoLiveStats>(
+            valueListenable: _controller!.stats,
             builder: (context, stats, _) =>
                 widget.statusBarBuilder!(context, stats),
           )
@@ -873,17 +889,19 @@ class _MonacoStatusBar extends StatelessWidget {
         Theme.of(context).textTheme.bodySmall ??
         const TextStyle(fontSize: 12);
 
-    return ValueListenableBuilder<LiveStats>(
-      valueListenable: controller.liveStats,
+    return ValueListenableBuilder<MonacoLiveStats>(
+      valueListenable: controller.stats,
       builder: (context, stats, _) {
+        final language = stats.language;
         final entries = [
-          if (stats.cursorPosition != null) 'Ln ${stats.cursorPosition!.label}',
-          'Ch ${stats.charCount.value}',
-          if (stats.selectedLines.value > 0)
-            'Sel Ln ${stats.selectedLines.value}',
-          if (stats.selectedCharacters.value > 0)
-            'Sel Ch ${stats.selectedCharacters.value}',
-          if (stats.language != null) stats.language!,
+          if (stats.cursorPosition != null)
+            'Ln ${stats.cursorPosition!.line}, Col '
+                '${stats.cursorPosition!.column}',
+          'Ch ${stats.charCount}',
+          if (stats.selectedLines > 0) 'Sel Ln ${stats.selectedLines}',
+          if (stats.selectedCharacters > 0)
+            'Sel Ch ${stats.selectedCharacters}',
+          if (language != null) language.label ?? language.id,
         ].where((s) => s.isNotEmpty).toList();
 
         return Container(

@@ -100,7 +100,7 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
           ? MonacoTheme.vsDark
           : MonacoTheme.vs,
       fontSize: 13,
-      minimap: longContent,
+      minimap: MonacoMinimapOptions(enabled: longContent),
       scrollBeyondLastLine: longContent && _scrollBeyondLastLine,
     );
   }

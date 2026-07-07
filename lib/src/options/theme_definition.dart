@@ -1,13 +1,13 @@
-import 'package:flutter_monaco/src/models/monaco_enums.dart';
+import 'package:flutter_monaco/src/options/option_enums.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
-part 'monaco_theme_definition.freezed.dart';
+part 'theme_definition.freezed.dart';
 
 /// A typed Dart representation of Monaco's `IStandaloneThemeData`.
 ///
-/// Register definitions with [MonacoController.defineTheme] and select them
-/// via [MonacoController.setThemeById] or by setting [EditorOptions.themeId]
-/// to the definition's [id].
+/// Register definitions with `MonacoController.defineTheme` and select them
+/// via `setTheme(MonacoTheme(id))` or by setting `EditorOptions.theme` to
+/// the definition's [id].
 ///
 /// Mirrors the Monaco editor theme schema while keeping the surface
 /// idiomatic for Dart callers: an enum [base], strongly-typed [rules], and a
@@ -22,7 +22,7 @@ sealed class MonacoThemeDefinition with _$MonacoThemeDefinition {
     required String id,
 
     /// Built-in Monaco base theme used as the starting point.
-    required MonacoTheme base,
+    required MonacoBaseTheme base,
 
     /// Whether Monaco should inherit unspecified rules from [base].
     @Default(true) bool inherit,
@@ -41,27 +41,60 @@ sealed class MonacoThemeDefinition with _$MonacoThemeDefinition {
 
   /// Creates a definition from JSON produced by [toJson].
   ///
-  /// Requires a non-empty `id` field. Raw Monaco `IStandaloneThemeData`
+  /// Requires a non-empty `id` and a valid built-in `base` id; throws
+  /// [FormatException] otherwise. Raw Monaco `IStandaloneThemeData`
   /// payloads (which don't carry the registration id) should be loaded via
   /// [MonacoThemeDefinition.fromMonacoThemeData].
   factory MonacoThemeDefinition.fromJson(Map<String, dynamic> json) {
     final id = json['id'];
     if (id is! String || id.isEmpty) {
-      throw ArgumentError.value(
-        id,
-        'id',
-        'MonacoThemeDefinition id must be a non-empty string',
+      throw const FormatException(
+        'MonacoThemeDefinition.fromJson: "id" must be a non-empty string',
+      );
+    }
+
+    final rawBase = json['base'];
+    MonacoBaseTheme? base;
+    if (rawBase is String) {
+      for (final candidate in MonacoBaseTheme.values) {
+        if (candidate.id == rawBase) {
+          base = candidate;
+          break;
+        }
+      }
+    }
+    if (base == null) {
+      throw FormatException(
+        'MonacoThemeDefinition.fromJson: unknown "base" value $rawBase '
+        '(expected one of: '
+        '${MonacoBaseTheme.values.map((e) => e.id).join(', ')})',
       );
     }
 
     final rawRules = json['rules'];
+    if (rawRules != null && rawRules is! List) {
+      throw const FormatException(
+        'MonacoThemeDefinition.fromJson: "rules" must be a list',
+      );
+    }
     final rules = rawRules is List
-        ? rawRules.whereType<Map>().map((entry) {
+        ? rawRules.map((entry) {
+            if (entry is! Map) {
+              throw FormatException(
+                'MonacoThemeDefinition.fromJson: rule entries must be maps, '
+                'got $entry',
+              );
+            }
             return MonacoThemeRule.fromJson(Map<String, dynamic>.from(entry));
           }).toList()
         : const <MonacoThemeRule>[];
 
     final rawColors = json['colors'];
+    if (rawColors != null && rawColors is! Map) {
+      throw const FormatException(
+        'MonacoThemeDefinition.fromJson: "colors" must be a map',
+      );
+    }
     final colors = rawColors is Map
         ? rawColors.map(
             (key, value) => MapEntry(key.toString(), value.toString()),
@@ -69,18 +102,25 @@ sealed class MonacoThemeDefinition with _$MonacoThemeDefinition {
         : const <String, String>{};
 
     final rawEncoded = json['encodedTokensColors'];
+    if (rawEncoded != null && rawEncoded is! List) {
+      throw const FormatException(
+        'MonacoThemeDefinition.fromJson: "encodedTokensColors" must be a list',
+      );
+    }
     final encodedTokensColors = rawEncoded is List
         ? rawEncoded.map((value) => value.toString()).toList()
         : null;
 
     final rawInherit = json['inherit'];
+    if (rawInherit != null && rawInherit is! bool) {
+      throw const FormatException(
+        'MonacoThemeDefinition.fromJson: "inherit" must be a bool',
+      );
+    }
 
     return MonacoThemeDefinition(
       id: id,
-      base: MonacoTheme.fromId(
-        json['base']?.toString(),
-        orElse: MonacoTheme.vsDark,
-      ),
+      base: base,
       inherit: rawInherit is bool ? rawInherit : true,
       rules: rules,
       colors: colors,
@@ -153,14 +193,12 @@ sealed class MonacoThemeRule with _$MonacoThemeRule {
   ///
   /// Monaco accepts an empty [token] string as the default-rule selector
   /// (applied when no more-specific rule matches), so the empty case is
-  /// allowed here too.
+  /// allowed here too. Throws [FormatException] on a non-string token.
   factory MonacoThemeRule.fromJson(Map<String, dynamic> json) {
     final token = json['token'];
     if (token is! String) {
-      throw ArgumentError.value(
-        token,
-        'token',
-        'MonacoThemeRule token must be a string',
+      throw FormatException(
+        'MonacoThemeRule.fromJson: "token" must be a string, got $token',
       );
     }
     return MonacoThemeRule(

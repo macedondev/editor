@@ -141,7 +141,7 @@ void main() {
 
           final joined = bundle.webview.executed.join('\n');
           for (final id in ids) {
-            expect(joined.contains(id), true, reason: 'missing $id');
+            expect(joined.contains(id.id), true, reason: 'missing ${id.id}');
           }
         },
       );
@@ -154,7 +154,7 @@ void main() {
         );
 
         await expectLater(
-          () => bundle.controller.executeAction('whatever'),
+          () => bundle.controller.executeAction(const MonacoAction('whatever')),
           throwsA(
             isA<MonacoJavaScriptError>()
                 .having((e) => e.operation, 'operation', 'editor.executeAction')
@@ -169,7 +169,7 @@ void main() {
         final bundle = await _createBundle();
         const theme = MonacoThemeDefinition(
           id: 'app-dark',
-          base: MonacoTheme.vsDark,
+          base: MonacoBaseTheme.vsDark,
           rules: [MonacoThemeRule(token: 'comment', foreground: '6A9955')],
           colors: {'editor.background': '#101010'},
         );
@@ -185,14 +185,17 @@ void main() {
         expect(invocation, contains('"editor.background"'));
       });
 
-      test('defineThemeFromJson forwards raw data unchanged', () async {
+      test('defineTheme forwards raw Monaco theme data loaded via '
+          'fromMonacoThemeData', () async {
         final bundle = await _createBundle();
-        await bundle.controller.defineThemeFromJson('raw-id', const {
-          'base': 'vs',
-          'inherit': false,
-          'rules': <Map<String, Object?>>[],
-          'colors': {'editor.background': '#FFFFFF'},
-        });
+        await bundle.controller.defineTheme(
+          MonacoThemeDefinition.fromMonacoThemeData('raw-id', const {
+            'base': 'vs',
+            'inherit': false,
+            'rules': <Map<String, Object?>>[],
+            'colors': {'editor.background': '#FFFFFF'},
+          }),
+        );
 
         final invocation = bundle.webview
             .scriptsContaining('editor.defineTheme')
@@ -202,19 +205,36 @@ void main() {
         expect(invocation, contains('"#FFFFFF"'));
       });
 
-      test('setThemeById rejects empty ids', () async {
+      test('setTheme rejects empty ids', () async {
         final bundle = await _createBundle();
         expect(
-          () => bundle.controller.setThemeById('   '),
+          () => bundle.controller.setTheme(const MonacoTheme('   ')),
           throwsA(isA<ArgumentError>()),
         );
       });
 
-      test('defineThemeFromJson rejects empty ids', () async {
+      test('defineTheme rejects empty ids', () async {
         final bundle = await _createBundle();
         expect(
-          () => bundle.controller.defineThemeFromJson('', const {}),
+          () => bundle.controller.defineTheme(
+            const MonacoThemeDefinition(id: '', base: MonacoBaseTheme.vs),
+          ),
           throwsA(isA<ArgumentError>()),
+        );
+      });
+
+      test('MonacoThemeDefinition.fromJson throws on unknown or missing base '
+          'instead of falling back', () {
+        expect(
+          () => MonacoThemeDefinition.fromJson(const {
+            'id': 'x',
+            'base': 'solarized',
+          }),
+          throwsFormatException,
+        );
+        expect(
+          () => MonacoThemeDefinition.fromJson(const {'id': 'x'}),
+          throwsFormatException,
         );
       });
 
@@ -253,7 +273,7 @@ void main() {
         () {
           const original = MonacoThemeDefinition(
             id: 'roundtrip',
-            base: MonacoTheme.hcBlack,
+            base: MonacoBaseTheme.hcBlack,
             inherit: false,
             rules: [
               MonacoThemeRule(
@@ -302,47 +322,40 @@ void main() {
         );
 
         expect(restored.id, 'third-party-dark');
-        expect(restored.base, MonacoTheme.vsDark);
+        expect(restored.base, MonacoBaseTheme.vsDark);
         expect(restored.rules.single.token, 'comment');
         expect(restored.colors['editor.background'], '#1E1E1E');
       });
 
-      test('EditorOptions.effectiveThemeId prefers themeId override', () {
-        const builtIn = EditorOptions(
-          theme: MonacoTheme.vs,
-          themeId: 'custom-dark',
-        );
-        expect(builtIn.effectiveThemeId, 'custom-dark');
+      test('EditorOptions.theme carries custom ids in the open theme type', () {
+        const custom = EditorOptions(theme: MonacoTheme('custom-dark'));
+        expect(custom.theme, const MonacoTheme('custom-dark'));
+        expect(custom.theme!.isBuiltIn, false);
 
-        const fallback = EditorOptions(theme: MonacoTheme.hcLight);
-        expect(fallback.effectiveThemeId, MonacoTheme.hcLight.id);
+        const builtIn = EditorOptions(theme: MonacoTheme.hcLight);
+        expect(builtIn.theme, MonacoTheme.hcLight);
+        expect(builtIn.theme!.isBuiltIn, true);
       });
 
-      test('EditorOptions.fromJson routes custom theme ids to themeId', () {
+      test('EditorOptions.fromJson keeps custom theme ids as-is', () {
         final custom = EditorOptions.fromJson(const {'theme': 'app-dark'});
-        expect(custom.themeId, 'app-dark');
-        // Built-in theme stays at its default since the custom id is not a
-        // recognized MonacoTheme.
-        expect(custom.theme, MonacoTheme.vsDark);
+        expect(custom.theme, const MonacoTheme('app-dark'));
+        expect(custom.theme!.isBuiltIn, false);
 
         final builtIn = EditorOptions.fromJson(const {'theme': 'vs'});
-        expect(builtIn.themeId, isNull);
         expect(builtIn.theme, MonacoTheme.vs);
+        expect(builtIn.theme!.isBuiltIn, true);
       });
 
-      test(
-        'EditorOptions.fromJson preserves built-in fallback with themeId',
-        () {
-          final options = EditorOptions.fromJson(const {
+      test('EditorOptions.fromJson rejects the legacy themeId key', () {
+        expect(
+          () => EditorOptions.fromJson(const {
             'theme': 'hc-light',
             'themeId': 'app-dark',
-          });
-
-          expect(options.theme, MonacoTheme.hcLight);
-          expect(options.themeId, 'app-dark');
-          expect(options.effectiveThemeId, 'app-dark');
-        },
-      );
+          }),
+          throwsFormatException,
+        );
+      });
     });
 
     group('interaction', () {
@@ -577,7 +590,9 @@ void main() {
     group('actions', () {
       test('executeAction forwards args to JS', () async {
         final bundle = await _createBundle();
-        await bundle.controller.executeAction('myAction', {'foo': 'bar'});
+        await bundle.controller.executeAction(const MonacoAction('myAction'), {
+          'foo': 'bar',
+        });
 
         final joined = bundle.webview.executed.join('\n');
         expect(joined, contains('executeAction'));
@@ -1155,48 +1170,52 @@ void main() {
       });
     });
 
-    group('action helpers', () {
-      test('format calls formatDocument action', () async {
+    group('action catalog dispatch', () {
+      test('formatDocument action id reaches the wire', () async {
         final bundle = await _createBundle();
-        await bundle.controller.format();
+        await bundle.controller.executeAction(MonacoAction.formatDocument);
         expect(bundle.webview.executed.join('\n'), contains('formatDocument'));
       });
 
-      test('find calls find action', () async {
+      test('find action id reaches the wire', () async {
         final bundle = await _createBundle();
-        await bundle.controller.find();
+        await bundle.controller.executeAction(MonacoAction.find);
         expect(bundle.webview.executed.join('\n'), contains('actions.find'));
       });
 
-      test('replace calls startFindReplaceAction', () async {
+      test('startFindReplaceAction id reaches the wire', () async {
         final bundle = await _createBundle();
-        await bundle.controller.replace();
+        await bundle.controller.executeAction(
+          MonacoAction.startFindReplaceAction,
+        );
         expect(
           bundle.webview.executed.join('\n'),
           contains('startFindReplaceAction'),
         );
       });
 
-      test('toggleWordWrap calls action', () async {
+      test('toggleWordWrap action id reaches the wire', () async {
         final bundle = await _createBundle();
-        await bundle.controller.toggleWordWrap();
+        await bundle.controller.executeAction(MonacoAction.toggleWordWrap);
         expect(bundle.webview.executed.join('\n'), contains('toggleWordWrap'));
       });
 
-      test('undo/redo call correct actions', () async {
+      test('undo/redo action ids reach the wire', () async {
         final bundle = await _createBundle();
-        await bundle.controller.undo();
-        await bundle.controller.redo();
+        await bundle.controller.executeAction(MonacoAction.undo);
+        await bundle.controller.executeAction(MonacoAction.redo);
         final joined = bundle.webview.executed.join('\n');
         expect(joined, contains('"undo"'));
         expect(joined, contains('"redo"'));
       });
 
-      test('clipboard actions call correct IDs', () async {
+      test('clipboard action ids reach the wire', () async {
         final bundle = await _createBundle();
-        await bundle.controller.cut();
-        await bundle.controller.copy();
-        await bundle.controller.paste();
+        await bundle.controller.executeAction(MonacoAction.clipboardCutAction);
+        await bundle.controller.executeAction(MonacoAction.clipboardCopyAction);
+        await bundle.controller.executeAction(
+          MonacoAction.clipboardPasteAction,
+        );
         final joined = bundle.webview.executed.join('\n');
         expect(joined, contains('clipboardCutAction'));
         expect(joined, contains('clipboardCopyAction'));
@@ -1564,6 +1583,10 @@ void main() {
           value: {'lineNumber': 1, 'column': 3},
         );
         bundle.webview.injectCommandSuccess('document.isDirty', value: false);
+        bundle.webview.injectCommandSuccess(
+          'editor.getTheme',
+          value: 'vs-dark',
+        );
 
         final state = await bundle.controller.getEditorState();
 
@@ -1571,7 +1594,8 @@ void main() {
         expect(state.selection?.endColumn, 5);
         expect(state.cursorPosition?.column, 3);
         expect(state.lineCount, 5);
-        expect(state.hasUnsavedChanges, false);
+        expect(state.isDirty, false);
+        expect(state.theme, MonacoTheme.vsDark);
       });
     });
 
@@ -1631,16 +1655,16 @@ void main() {
       });
     });
 
-    group('getStatistics', () {
-      test('returns current liveStats value', () async {
+    group('stats', () {
+      test('stats listenable exposes the latest live stats value', () async {
         final bundle = await _createBundle();
 
         bundle.webview.emitEvent('stats', {'lineCount': 10, 'charCount': 50});
         await pumpEventQueue();
 
-        final stats = bundle.controller.getStatistics();
-        expect(stats.lineCount.value, 10);
-        expect(stats.charCount.value, 50);
+        final stats = bundle.controller.stats.value;
+        expect(stats.lineCount, 10);
+        expect(stats.charCount, 50);
       });
     });
 

@@ -108,9 +108,6 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
         options: const EditorOptions(
           language: MonacoLanguage.dart,
           theme: MonacoTheme.vsDark,
-          fontSize: 14,
-          wordWrap: true,
-          minimap: false,
         ),
       );
 
@@ -190,7 +187,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
               setState(() {
                 _currentLanguage = language;
               });
-              await _controller?.setLanguage(MonacoLanguage.fromId(language));
+              await _controller?.setLanguage(MonacoLanguage(language));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'dart', child: Text('Dart')),
@@ -211,7 +208,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
               setState(() {
                 _currentTheme = theme;
               });
-              await _controller?.setTheme(MonacoTheme.fromId(theme));
+              await _controller?.setTheme(MonacoTheme(theme));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'vs-dark', child: Text('Dark')),
@@ -227,7 +224,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
             icon: const Icon(Icons.format_align_left),
             tooltip: 'Format Document',
             onPressed: () async {
-              await _controller?.format();
+              await _controller?.executeAction(MonacoAction.formatDocument);
             },
           ),
         ],
@@ -246,12 +243,12 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
                 const Spacer(),
                 // Live stats
                 if (_controller != null)
-                  ValueListenableBuilder<LiveStats>(
-                    valueListenable: _controller!.liveStats,
+                  ValueListenableBuilder<MonacoLiveStats>(
+                    valueListenable: _controller!.stats,
                     builder: (context, stats, _) {
                       return Text(
-                        'Lines: ${stats.lineCount.value} | '
-                        'Chars: ${stats.charCount.value}',
+                        'Lines: ${stats.lineCount} | '
+                        'Chars: ${stats.charCount}',
                       );
                     },
                   ),

@@ -158,7 +158,9 @@ class _Toolbar extends StatelessWidget {
           _ToolbarMenu<MonacoLanguage>(
             icon: Icons.translate_rounded,
             value: controller.language,
-            entries: [for (final l in kPlaygroundLanguages) (l, l.label)],
+            entries: [
+              for (final l in kPlaygroundLanguages) (l, l.label ?? l.id),
+            ],
             onSelected: controller.setLanguage,
           ),
           _ToolbarMenu<PlaygroundTheme>(
@@ -650,15 +652,16 @@ class _LiveStatsBar extends StatelessWidget {
       return bar(const ['Ready when the editor loads'], 'UTF-8');
     }
 
-    return ValueListenableBuilder<LiveStats>(
+    return ValueListenableBuilder<MonacoLiveStats>(
       valueListenable: stats,
       builder: (context, value, _) {
+        final cursor = value.cursorPosition;
         return bar([
-          'Ln ${value.cursorPosition?.label ?? '1:1'}',
-          '${value.lineCount.value} lines',
-          if (value.selectedCharacters.value > 0)
-            '${value.selectedCharacters.value} selected',
-        ], (value.language ?? controller.language.id).toUpperCase());
+          'Ln ${cursor != null ? '${cursor.line}:${cursor.column}' : '1:1'}',
+          '${value.lineCount} lines',
+          if (value.selectedCharacters > 0)
+            '${value.selectedCharacters} selected',
+        ], (value.language ?? controller.language).id.toUpperCase());
       },
     );
   }

@@ -1,4 +1,3 @@
-import 'package:convert_object/convert_object.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -10,16 +9,24 @@ void main() {
       expect(pos.column, 10);
     });
 
-    test('fromJson with alternative keys', () {
-      expect(Position.fromJson({'line': 2, 'col': 3}).line, 2);
-      expect(Position.fromJson({'ln': 4, 'character': 5}).column, 5);
-      expect(Position.fromJson({'row': 6, 'ch': 7}).line, 6);
+    test('fromJson rejects alternative keys', () {
+      expect(
+        () => Position.fromJson({'line': 2, 'col': 3}),
+        throwsFormatException,
+      );
+      expect(
+        () => Position.fromJson({'ln': 4, 'character': 5}),
+        throwsFormatException,
+      );
+      expect(
+        () => Position.fromJson({'row': 6, 'ch': 7}),
+        throwsFormatException,
+      );
     });
 
-    test('fromJson with defaults', () {
-      final pos = Position.fromJson({});
-      expect(pos.line, 1);
-      expect(pos.column, 1);
+    test('fromJson throws on missing keys instead of defaulting', () {
+      expect(() => Position.fromJson({}), throwsFormatException);
+      expect(() => Position.fromJson({'lineNumber': 1}), throwsFormatException);
     });
 
     test('fromZeroBased adds one', () {
@@ -69,26 +76,26 @@ void main() {
       expect(range.endColumn, 10);
     });
 
-    test('fromJson with alternative keys', () {
-      final range = Range.fromJson({
-        'startLine': 1,
-        'startCol': 2,
-        'endLine': 3,
-        'endCol': 4,
-      });
-      expect(range.startLine, 1);
-      expect(range.startColumn, 2);
-      expect(range.endLine, 3);
-      expect(range.endColumn, 4);
+    test('fromJson rejects alternative keys', () {
+      expect(
+        () => Range.fromJson({
+          'startLine': 1,
+          'startCol': 2,
+          'endLine': 3,
+          'endCol': 4,
+        }),
+        throwsFormatException,
+      );
 
-      final range2 = Range.fromJson({
-        'from_line': 5,
-        'from_column': 6,
-        'to_line': 7,
-        'to_column': 8,
-      });
-      expect(range2.startLine, 5);
-      expect(range2.endLine, 7);
+      expect(
+        () => Range.fromJson({
+          'from_line': 5,
+          'from_column': 6,
+          'to_line': 7,
+          'to_column': 8,
+        }),
+        throwsFormatException,
+      );
     });
 
     test('fromPositions', () {
@@ -293,17 +300,17 @@ void main() {
   });
 
   group('RelatedInformation', () {
-    test('fromJson with defaults', () {
-      final info = RelatedInformation.fromJson({
-        'message': 'Related info',
-        'startLineNumber': 5,
-        'startColumn': 1,
-        'endLineNumber': 5,
-        'endColumn': 10,
-      });
-
-      expect(info.message, 'Related info');
-      expect(info.resource.toString(), 'file:///unknown');
+    test('fromJson throws when resource is missing instead of defaulting', () {
+      expect(
+        () => RelatedInformation.fromJson({
+          'message': 'Related info',
+          'startLineNumber': 5,
+          'startColumn': 1,
+          'endLineNumber': 5,
+          'endColumn': 10,
+        }),
+        throwsFormatException,
+      );
     });
 
     test('fromJson with uri', () {
@@ -529,17 +536,17 @@ void main() {
     });
   });
 
-  group('LiveStats', () {
+  group('MonacoLiveStats', () {
     test('defaults', () {
-      final stats = LiveStats.defaults();
-      expect(stats.lineCount.value, 0);
-      expect(stats.charCount.value, 0);
-      expect(stats.caretCount.value, 1);
+      const stats = MonacoLiveStats();
+      expect(stats.lineCount, 0);
+      expect(stats.charCount, 0);
+      expect(stats.caretCount, 1);
       expect(stats.cursorPosition, isNull);
     });
 
-    test('fromJson parses cursor position', () {
-      final stats = LiveStats.fromJson({
+    test('fromJson parses cursor position and language', () {
+      final stats = MonacoLiveStats.fromJson({
         'lineCount': 10,
         'charCount': 100,
         'selLines': 2,
@@ -550,20 +557,26 @@ void main() {
         'language': 'dart',
       });
 
-      expect(stats.cursorPosition?.label, '5:10');
-      expect(stats.language, 'dart');
+      expect(stats.cursorPosition, const Position(line: 5, column: 10));
+      expect(stats.language, MonacoLanguage.dart);
       expect(stats.hasSelection, true);
     });
 
     test('hasSelection and hasMultipleCursors', () {
-      expect(LiveStats.fromJson({'selChars': 5}).hasSelection, true);
-      expect(LiveStats.fromJson({'selChars': 0}).hasSelection, false);
-      expect(LiveStats.fromJson({'caretCount': 3}).hasMultipleCursors, true);
-      expect(LiveStats.fromJson({'caretCount': 1}).hasMultipleCursors, false);
+      expect(MonacoLiveStats.fromJson({'selChars': 5}).hasSelection, true);
+      expect(MonacoLiveStats.fromJson({'selChars': 0}).hasSelection, false);
+      expect(
+        MonacoLiveStats.fromJson({'caretCount': 3}).hasMultipleCursors,
+        true,
+      );
+      expect(
+        MonacoLiveStats.fromJson({'caretCount': 1}).hasMultipleCursors,
+        false,
+      );
     });
 
-    test('allStats returns all statistics', () {
-      final stats = LiveStats.fromJson({
+    test('fromJson maps every wire key to a plain field', () {
+      final stats = MonacoLiveStats.fromJson({
         'lineCount': 10,
         'charCount': 50,
         'selLines': 1,
@@ -573,34 +586,28 @@ void main() {
         'cursorColumn': 7,
       });
 
-      expect(stats.allStats.length, 6); // Including cursor
+      expect(stats.lineCount, 10);
+      expect(stats.charCount, 50);
+      expect(stats.selectedLines, 1);
+      expect(stats.selectedCharacters, 5);
+      expect(stats.caretCount, 1);
+      expect(stats.cursorPosition, const Position(line: 3, column: 7));
+    });
+
+    test('fromJson throws on wrongly typed counters', () {
+      expect(
+        () => MonacoLiveStats.fromJson({'lineCount': 'ten'}),
+        throwsFormatException,
+      );
     });
   });
 
   group('EditorState', () {
-    test('isEmpty and wordCount', () {
-      const empty = EditorState(
-        content: '',
-        lineCount: 0,
-        hasUnsavedChanges: false,
-      );
-      expect(empty.isEmpty, true);
-      expect(empty.wordCount, 0);
-
-      const withContent = EditorState(
-        content: 'hello world test',
-        lineCount: 1,
-        hasUnsavedChanges: false,
-      );
-      expect(withContent.isEmpty, false);
-      expect(withContent.wordCount, 3);
-    });
-
     test('fromJson parses nested objects', () {
       final state = EditorState.fromJson({
         'content': 'test content',
         'lineCount': 5,
-        'hasUnsavedChanges': true,
+        'isDirty': true,
         'selection': {
           'startLineNumber': 1,
           'startColumn': 1,
@@ -614,11 +621,18 @@ void main() {
 
       expect(state.content, 'test content');
       expect(state.lineCount, 5);
-      expect(state.hasUnsavedChanges, true);
+      expect(state.isDirty, true);
       expect(state.selection?.endColumn, 5);
       expect(state.cursorPosition?.column, 3);
-      expect(state.language, 'dart');
-      expect(state.theme, 'vs-dark');
+      expect(state.language, MonacoLanguage.dart);
+      expect(state.theme, MonacoTheme.vsDark);
+    });
+
+    test('fromJson throws on missing content', () {
+      expect(
+        () => EditorState.fromJson({'lineCount': 1}),
+        throwsFormatException,
+      );
     });
   });
 
@@ -774,21 +788,22 @@ void main() {
       expect(schema.fileMatch, ['*.json']);
     });
 
-    test('fromJson parses schemaUri alias', () {
-      final schema = JsonDiagnosticsSchema.fromJson({
-        'schemaUri': 'https://example.com/alt.json',
-        'fileMatch': ['*'],
-      });
-
-      expect(schema.uri.toString(), 'https://example.com/alt.json');
+    test('fromJson rejects the legacy schemaUri alias', () {
+      expect(
+        () => JsonDiagnosticsSchema.fromJson({
+          'schemaUri': 'https://example.com/alt.json',
+          'fileMatch': ['*'],
+        }),
+        throwsFormatException,
+      );
     });
 
-    test('fromJson throws when both uri and schemaUri are missing', () {
+    test('fromJson throws when uri is missing', () {
       expect(
         () => JsonDiagnosticsSchema.fromJson({
           'fileMatch': ['*.json'],
         }),
-        throwsA(isA<ConversionException>()),
+        throwsFormatException,
       );
     });
 

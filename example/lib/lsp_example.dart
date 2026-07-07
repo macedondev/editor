@@ -348,7 +348,6 @@ class _LspDemoPageState extends State<LspDemoPage> {
                 options: const EditorOptions(
                   language: MonacoLanguage.python,
                   fontSize: 13,
-                  minimap: false,
                 ),
                 showStatusBar: true,
                 onReady: (controller) => unawaited(_onEditorReady(controller)),
