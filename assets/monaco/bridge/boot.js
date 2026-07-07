@@ -36,7 +36,24 @@ window.__FMB = window.__FMB || {};
           function () {
             console.log('[Monaco] SUCCESS: editor.main.js has loaded. Initializing editor...');
 
-            monaco.editor.onDidCreateEditor(function (editor) {
+            bootPromise.then(function (params) {
+              window.__FM_BOOT = params;
+              if ((params.mode || 'editor') === 'diff') {
+                // Diff mode (Phase 11): two models in a createDiffEditor,
+                // driven by the diff.* registry. Single-editor emitters and
+                // feature sections are skipped by design; diff-api wires a
+                // stats-lite feed instead. The onDidCreateEditor handler
+                // below is never registered here - it would fire for BOTH
+                // inner editors of the diff pair.
+                var diffCtx = {};
+                (window.__FMB || {}).diffApi(diffCtx);
+                diffCtx.bootDiff(params);
+                window.FlutterMonaco.lifecycle('ready');
+                console.log('[Monaco] Diff Editor is ready and the Flutter bridge is installed.');
+                return;
+              }
+
+              monaco.editor.onDidCreateEditor(function (editor) {
               window.editor = editor;
 
               var FMB = window.__FMB || {};
@@ -119,8 +136,6 @@ window.__FMB = window.__FMB || {};
               console.log('[Monaco] Editor is ready and the Flutter bridge is installed.');
             });
 
-            bootPromise.then(function (params) {
-              window.__FM_BOOT = params;
               // The editor is born configured: sparse Monaco options from
               // Dart, plus the initial text/language/theme, in one create.
               var options = Object.assign({}, params.options || {});

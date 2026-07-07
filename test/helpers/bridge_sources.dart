@@ -17,6 +17,7 @@ const List<String> bridgeFileNames = [
   'core.js',
   'focus.js',
   'editor-api.js',
+  'diff-api.js',
   'scroll-handoff.js',
   'lsp.js',
   'viewport-fit.js',

@@ -71,6 +71,8 @@ export 'src/assets/monaco_assets.dart' show MonacoAssets;
 export 'src/editor/controller.dart' show MonacoController;
 export 'src/common/monaco_page_config.dart'
     show MonacoCapabilities, MonacoPageConfig;
+export 'src/diff/diff_controller.dart' show MonacoDiffController;
+export 'src/diff/diff_options.dart' show MonacoDiffOptions;
 export 'src/editor/completions.dart'
     show CompletionProvider, MonacoCompletionRegistration;
 export 'src/editor/custom_actions.dart' show MonacoActionRegistration;
@@ -158,6 +160,7 @@ export 'src/types/text.dart'
     show EditOperation, FindMatch, FindOptions, MonacoTextChange;
 
 // Widget exports
+export 'src/widgets/monaco_diff_editor.dart' show MonacoDiffEditor;
 export 'src/widgets/monaco_editor_view.dart' show MonacoEditor;
 export 'src/widgets/monaco_focus_guard.dart' show MonacoFocusGuard;
 export 'src/widgets/monaco_overlay_boundary.dart' show MonacoOverlayBoundary;

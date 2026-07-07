@@ -63,12 +63,12 @@ $JsonDiagnosticsOptionsCopyWith<JsonDiagnosticsOptions> get copyWith => _$JsonDi
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is JsonDiagnosticsOptions&&(identical(other.allowComments, allowComments) || other.allowComments == allowComments)&&(identical(other.enableSchemaRequest, enableSchemaRequest) || other.enableSchemaRequest == enableSchemaRequest)&&(identical(other.validate, validate) || other.validate == validate)&&const DeepCollectionEquality().equals(other.schemaRequest, schemaRequest)&&const DeepCollectionEquality().equals(other.schemaValidation, schemaValidation)&&const DeepCollectionEquality().equals(other.trailingCommas, trailingCommas)&&const DeepCollectionEquality().equals(other.comments, comments)&&const DeepCollectionEquality().equals(other.schemas, schemas));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is JsonDiagnosticsOptions&&(identical(other.allowComments, allowComments) || other.allowComments == allowComments)&&(identical(other.enableSchemaRequest, enableSchemaRequest) || other.enableSchemaRequest == enableSchemaRequest)&&(identical(other.validate, validate) || other.validate == validate)&&(identical(other.schemaRequest, schemaRequest) || other.schemaRequest == schemaRequest)&&(identical(other.schemaValidation, schemaValidation) || other.schemaValidation == schemaValidation)&&(identical(other.trailingCommas, trailingCommas) || other.trailingCommas == trailingCommas)&&(identical(other.comments, comments) || other.comments == comments)&&const DeepCollectionEquality().equals(other.schemas, schemas));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,allowComments,enableSchemaRequest,validate,const DeepCollectionEquality().hash(schemaRequest),const DeepCollectionEquality().hash(schemaValidation),const DeepCollectionEquality().hash(trailingCommas),const DeepCollectionEquality().hash(comments),const DeepCollectionEquality().hash(schemas));
+int get hashCode => Object.hash(runtimeType,allowComments,enableSchemaRequest,validate,schemaRequest,schemaValidation,trailingCommas,comments,const DeepCollectionEquality().hash(schemas));
 
 @override
 String toString() {
@@ -317,12 +317,12 @@ _$JsonDiagnosticsOptionsCopyWith<_JsonDiagnosticsOptions> get copyWith => __$Jso
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _JsonDiagnosticsOptions&&(identical(other.allowComments, allowComments) || other.allowComments == allowComments)&&(identical(other.enableSchemaRequest, enableSchemaRequest) || other.enableSchemaRequest == enableSchemaRequest)&&(identical(other.validate, validate) || other.validate == validate)&&const DeepCollectionEquality().equals(other.schemaRequest, schemaRequest)&&const DeepCollectionEquality().equals(other.schemaValidation, schemaValidation)&&const DeepCollectionEquality().equals(other.trailingCommas, trailingCommas)&&const DeepCollectionEquality().equals(other.comments, comments)&&const DeepCollectionEquality().equals(other._schemas, _schemas));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _JsonDiagnosticsOptions&&(identical(other.allowComments, allowComments) || other.allowComments == allowComments)&&(identical(other.enableSchemaRequest, enableSchemaRequest) || other.enableSchemaRequest == enableSchemaRequest)&&(identical(other.validate, validate) || other.validate == validate)&&(identical(other.schemaRequest, schemaRequest) || other.schemaRequest == schemaRequest)&&(identical(other.schemaValidation, schemaValidation) || other.schemaValidation == schemaValidation)&&(identical(other.trailingCommas, trailingCommas) || other.trailingCommas == trailingCommas)&&(identical(other.comments, comments) || other.comments == comments)&&const DeepCollectionEquality().equals(other._schemas, _schemas));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,allowComments,enableSchemaRequest,validate,const DeepCollectionEquality().hash(schemaRequest),const DeepCollectionEquality().hash(schemaValidation),const DeepCollectionEquality().hash(trailingCommas),const DeepCollectionEquality().hash(comments),const DeepCollectionEquality().hash(_schemas));
+int get hashCode => Object.hash(runtimeType,allowComments,enableSchemaRequest,validate,schemaRequest,schemaValidation,trailingCommas,comments,const DeepCollectionEquality().hash(_schemas));
 
 @override
 String toString() {

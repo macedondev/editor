@@ -1,0 +1,275 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/widgets.dart';
+import 'package:flutter_monaco/flutter_monaco.dart';
+import 'package:flutter_monaco/src/platform/platform_webview.dart';
+import 'package:flutter_monaco/src/protocol/envelope.dart';
+import 'package:flutter_monaco/src/protocol/protocol.dart';
+
+/// Drives a Monaco diff editor (original vs modified) in a WebView.
+///
+/// The page boots in diff mode (`page.boot` with `mode: 'diff'`): two
+/// models inside `monaco.editor.createDiffEditor`, driven by the `diff.*`
+/// command registry. The single-editor surface ([MonacoController]) does
+/// not exist on a diff page - only the operations below.
+///
+/// ### Usage
+///
+/// ```dart
+/// final diff = await MonacoDiffController.create(
+///   original: oldSource,
+///   modified: newSource,
+///   language: MonacoLanguage.dart,
+/// );
+/// await diff.whenReady;
+/// ```
+///
+/// Prefer the `MonacoDiffEditor` widget, which renders loading/error chrome
+/// and manages this controller's lifecycle.
+class MonacoDiffController {
+  MonacoDiffController._(this._protocol, this._webViewController);
+
+  final MonacoProtocol _protocol;
+  final PlatformWebViewController _webViewController;
+  final Completer<void> _onReady = Completer<void>();
+  bool _readyCompletedOk = false;
+  bool _disposed = false;
+
+  /// Completes when the diff editor is fully initialized and ready to
+  /// accept commands. Completes with the boot error if initialization
+  /// fails.
+  Future<void> get whenReady => _onReady.future;
+
+  /// Returns `true` if the diff editor finished initializing successfully.
+  bool get isReady => _onReady.isCompleted && _readyCompletedOk;
+
+  /// The platform-specific WebView widget hosting the diff editor.
+  Widget get webViewWidget => _webViewController.widget;
+
+  /// Creates a diff controller and starts the (non-blocking) boot.
+  ///
+  /// Returns immediately on every platform; await [whenReady] for
+  /// readiness. [options] configures the inner editors (fonts, minimap,
+  /// ...), [diff] the diff-specific behavior (side-by-side vs inline,
+  /// ...). [original]/[modified]/[language] seed the two models so the
+  /// first painted frame already shows the requested diff.
+  static Future<MonacoDiffController> create({
+    EditorOptions? options,
+    MonacoDiffOptions diff = const MonacoDiffOptions(),
+    String original = '',
+    String modified = '',
+    MonacoLanguage language = MonacoLanguage.plaintext,
+    MonacoPageConfig page = const MonacoPageConfig(),
+    Duration readyTimeout = const Duration(seconds: 20),
+  }) async {
+    await MonacoAssets.ensureReady();
+
+    final webViewController = PlatformWebViewFactory.createController();
+    final protocol = MonacoProtocol(webView: webViewController);
+    MonacoDiffController? controller;
+
+    try {
+      await webViewController.initialize();
+      await webViewController.enableJavaScript();
+      await webViewController.addJavaScriptChannel(
+        'flutterChannel',
+        protocol.handleChannelMessage,
+      );
+
+      controller = MonacoDiffController._(protocol, webViewController);
+      controller._startBoot(
+        options: options,
+        diff: diff,
+        original: original,
+        modified: modified,
+        language: language,
+        page: page,
+        readyTimeout: readyTimeout,
+      );
+      return controller;
+    } catch (_) {
+      if (controller != null) {
+        controller.dispose();
+      } else {
+        protocol.dispose();
+        webViewController.dispose();
+      }
+      rethrow;
+    }
+  }
+
+  /// Runs the two-phase boot in diff mode. Failures land in [whenReady].
+  void _startBoot({
+    required EditorOptions? options,
+    required MonacoDiffOptions diff,
+    required String original,
+    required String modified,
+    required MonacoLanguage language,
+    required MonacoPageConfig page,
+    required Duration readyTimeout,
+  }) {
+    final bootOptions = MonacoDefaults.editorOptions.merge(options);
+    final bootTheme = bootOptions.theme ?? MonacoDefaults.darkTheme;
+    _onReady.future.ignore();
+    unawaited(() async {
+      try {
+        await () async {
+          await _webViewController.load(page: page);
+          await _protocol.pageReady;
+          await _protocol.invoke('page.boot', {
+            'mode': 'diff',
+            'options': bootOptions.toMonacoOptions(),
+            'diffOptions': diff.toMonacoOptions(),
+            'original': original,
+            'modified': modified,
+            'language': language.id,
+            'theme': bootTheme.id,
+          }, timeout: null);
+          await _protocol.editorReady;
+        }().timeout(
+          readyTimeout,
+          onTimeout: () => throw MonacoTimeoutError(
+            message:
+                'Monaco diff editor did not report ready in '
+                '${readyTimeout.inSeconds} seconds.',
+            timeout: readyTimeout,
+            operation: 'boot',
+          ),
+        );
+        _readyCompletedOk = true;
+        if (!_onReady.isCompleted) {
+          _onReady.complete();
+        }
+      } catch (e, st) {
+        if (!_onReady.isCompleted) {
+          _onReady.completeError(e, st);
+        }
+      }
+    }());
+  }
+
+  /// Create a diff controller for tests without touching assets or
+  /// platform views.
+  @visibleForTesting
+  static Future<MonacoDiffController> createForTesting({
+    required PlatformWebViewController webViewController,
+    bool markReady = true,
+    String channelName = 'flutterChannel',
+  }) async {
+    final protocol = MonacoProtocol(webView: webViewController);
+
+    await webViewController.initialize();
+    await webViewController.enableJavaScript();
+    await webViewController.addJavaScriptChannel(
+      channelName,
+      protocol.handleChannelMessage,
+    );
+
+    final controller = MonacoDiffController._(protocol, webViewController);
+    if (markReady) {
+      controller.completeReadyForTesting();
+    }
+    return controller;
+  }
+
+  /// Manually complete the ready signal for tests.
+  @visibleForTesting
+  void completeReadyForTesting() {
+    _protocol.handleChannelMessage(
+      jsonEncode({
+        'v': kMonacoProtocolVersion,
+        'kind': 'lifecycle',
+        'name': 'pageReady',
+        'protocolVersion': kMonacoProtocolVersion,
+        'monacoVersion': 'test',
+        'capabilities': <String>[],
+      }),
+    );
+    _protocol.handleChannelMessage(
+      jsonEncode({
+        'v': kMonacoProtocolVersion,
+        'kind': 'lifecycle',
+        'name': 'ready',
+      }),
+    );
+    _readyCompletedOk = true;
+    if (!_onReady.isCompleted) {
+      _onReady.complete();
+    }
+  }
+
+  Future<Object?> _invoke(String method, Map<String, Object?> params) async {
+    if (!_onReady.isCompleted) {
+      await _onReady.future;
+    }
+    final result = await _protocol.invoke(method, params);
+    return identical(result, monacoJsUndefined) ? null : result;
+  }
+
+  /// Replaces both sides of the diff (and optionally the shared language).
+  Future<void> setTexts({
+    required String original,
+    required String modified,
+    MonacoLanguage? language,
+  }) async {
+    await _invoke('diff.setTexts', {
+      'original': original,
+      'modified': modified,
+      if (language != null) 'language': language.id,
+    });
+  }
+
+  /// Returns the current text of the modified (right/editable) side.
+  Future<String> getModifiedText() async {
+    final state = await _invoke('diff.getState', {});
+    if (state is Map && state['modifiedText'] is String) {
+      return state['modifiedText'] as String;
+    }
+    throw const MonacoProtocolError(
+      message: 'diff.getState returned no modifiedText',
+      operation: 'diff.getState',
+    );
+  }
+
+  /// The number of changed line blocks Monaco currently reports.
+  Future<int> getLineChangeCount() async {
+    final state = await _invoke('diff.getState', {});
+    return state is Map ? (state['lineChangeCount'] as int? ?? 0) : 0;
+  }
+
+  /// Applies sparse editor options (fonts, minimap, ...) to the diff pair.
+  Future<void> updateOptions(EditorOptions options) async {
+    await _invoke('diff.updateOptions', {'options': options.toMonacoOptions()});
+  }
+
+  /// Applies sparse diff-specific options (side-by-side vs inline, ...).
+  Future<void> updateDiffOptions(MonacoDiffOptions options) async {
+    await _invoke('diff.updateOptions', {'options': options.toMonacoOptions()});
+  }
+
+  /// Switches the (global) editor theme.
+  Future<void> setTheme(MonacoTheme theme) async {
+    await _invoke('diff.updateOptions', {
+      'options': {'theme': theme.id},
+    });
+  }
+
+  /// Scrolls to and highlights the next change.
+  Future<void> revealNextChange() async {
+    await _invoke('diff.revealNextChange', {});
+  }
+
+  /// Scrolls to and highlights the previous change.
+  Future<void> revealPreviousChange() async {
+    await _invoke('diff.revealPreviousChange', {});
+  }
+
+  /// Releases the WebView and fails all in-flight commands.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _protocol.dispose();
+    _webViewController.dispose();
+  }
+}

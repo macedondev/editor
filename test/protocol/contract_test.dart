@@ -230,6 +230,26 @@ const List<ContractCase> contractCases = [
     ],
   }, responseValue: true),
   ContractCase('actions.unregister', {'id': 'demo.save'}, responseValue: true),
+  ContractCase('diff.setTexts', {
+    'original': 'a',
+    'modified': 'b',
+    'language': 'dart',
+  }, responseValue: true),
+  ContractCase('diff.updateOptions', {
+    'options': {'renderSideBySide': false},
+  }, responseValue: true),
+  ContractCase('diff.revealNextChange', {}, responseValue: true),
+  ContractCase('diff.revealPreviousChange', {}, responseValue: true),
+  ContractCase(
+    'diff.getState',
+    {},
+    responseValue: {
+      'originalText': 'a',
+      'modifiedText': 'b',
+      'lineChangeCount': 1,
+      'language': 'dart',
+    },
+  ),
   ContractCase('json.configureDiagnostics', {
     'options': {'validate': true},
   }, responseUndefined: true),
