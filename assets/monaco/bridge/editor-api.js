@@ -391,7 +391,13 @@ window.__FMB.editorApi = function (ctx) {
                   FM.register('editor.layout', () => api.layout());
                   FM.register('document.getText', (p) => resolveModel(p.uri).getValue());
                   FM.register('document.setText', (p) => {
-                    resolveModel(p.uri).setValue(p.text || '');
+                    const model = resolveModel(p.uri);
+                    model.setValue(p.text || '');
+                    // setValue resets Monaco's undo stack and version ids,
+                    // which would leave the version-id dirty check
+                    // inconsistent; re-baseline so setText always means a
+                    // clean programmatic load.
+                    markDirtyBaseline(model);
                     return true;
                   });
                   FM.register('document.lineCount', (p) => resolveModel(p.uri).getLineCount());

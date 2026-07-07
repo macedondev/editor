@@ -42,6 +42,11 @@ final class MonacoDocument {
   }
 
   /// Replaces the entire document text.
+  ///
+  /// This is a programmatic load: Monaco's undo stack is reset and the
+  /// dirty baseline moves to the new content, so [isDirty] reports `false`
+  /// until the next edit. Use [insert], [applyEdits], or [replaceRange]
+  /// for changes that should count as unsaved.
   Future<void> setText(String text) async {
     await _invoke('document.setText', {'uri': _uriParam, 'text': text});
   }
