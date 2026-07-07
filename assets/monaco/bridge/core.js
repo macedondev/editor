@@ -102,13 +102,16 @@ window.__FMB = window.__FMB || {};
     },
 
     /// JS -> Dart request (completion provider, custom action run). Returns
-    /// a promise that Dart settles via FlutterMonaco.respond.
+    /// { id, promise }; Dart settles the promise via FlutterMonaco.respond.
+    /// Callers that resolve locally (cancellation) should pass the id to
+    /// FlutterMonaco.dropRequest so the late Dart answer is a no-op.
     request: function (name, data) {
       var id = 'q' + (++requestSeq);
-      return new Promise(function (resolve, reject) {
+      var promise = new Promise(function (resolve, reject) {
         pendingRequests[id] = { resolve: resolve, reject: reject };
         postToFlutter({ kind: 'request', id: id, name: name, data: data || {} });
       });
+      return { id: id, promise: promise };
     },
 
     /// Dart's answer to a request. A late respond for a dead id is a no-op.

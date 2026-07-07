@@ -212,14 +212,24 @@ const List<ContractCase> contractCases = [
     'id': 'flutter_1',
     'languages': ['dart'],
     'triggerCharacters': ['.'],
-  }, responseUndefined: true),
+  }, responseValue: true),
   ContractCase('completions.unregister', {
     'id': 'flutter_1',
-  }, responseUndefined: true),
-  ContractCase('completions.resolve', {
-    'requestId': 'req-1',
-    'payload': {'suggestions': <Object?>[]},
-  }, responseUndefined: true),
+  }, responseValue: true),
+  ContractCase('actions.register', {
+    'id': 'demo.save',
+    'label': 'Save',
+    'keybindings': [
+      {
+        'key': 'KeyS',
+        'ctrlCmd': true,
+        'shift': false,
+        'alt': false,
+        'winCtrl': false,
+      },
+    ],
+  }, responseValue: true),
+  ContractCase('actions.unregister', {'id': 'demo.save'}, responseValue: true),
   ContractCase('json.configureDiagnostics', {
     'options': {'validate': true},
   }, responseUndefined: true),

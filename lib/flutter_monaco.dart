@@ -70,6 +70,9 @@ export 'src/core/monaco_assets.dart' show MonacoAssets;
 export 'src/core/monaco_controller.dart' show MonacoController;
 export 'src/core/monaco_page_config.dart'
     show MonacoCapabilities, MonacoPageConfig;
+export 'src/editor/completions.dart'
+    show CompletionProvider, MonacoCompletionRegistration;
+export 'src/editor/custom_actions.dart' show MonacoActionRegistration;
 export 'src/editor/decorations.dart' show MonacoDecorationSet;
 export 'src/editor/document.dart' show MonacoDocument;
 export 'src/editor/events.dart'

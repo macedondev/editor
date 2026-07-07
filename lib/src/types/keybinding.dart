@@ -182,4 +182,14 @@ final class MonacoActionDescriptor {
   /// Monaco context-key expression gating the action (e.g.
   /// `'editorTextFocus'`).
   final String? precondition;
+
+  /// Wire form for the `actions.register` bridge command.
+  Map<String, Object?> toJson() => {
+    'id': id.id,
+    'label': label,
+    'keybindings': [for (final kb in keybindings) kb.toJson()],
+    if (contextMenuGroupId != null) 'contextMenuGroupId': contextMenuGroupId,
+    if (contextMenuOrder != null) 'contextMenuOrder': contextMenuOrder,
+    if (precondition != null) 'precondition': precondition,
+  };
 }

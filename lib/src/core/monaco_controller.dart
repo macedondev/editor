@@ -10,12 +10,6 @@ import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/protocol/envelope.dart';
 import 'package:flutter_monaco/src/protocol/protocol.dart';
 
-/// A callback function that provides completion items for a given
-/// [CompletionRequest]. It should return a [Future] that resolves to a
-/// [CompletionList].
-typedef CompletionProvider =
-    Future<CompletionList> Function(CompletionRequest request);
-
 /// Manages the lifecycle and interaction with a Monaco Editor instance.
 ///
 /// The [MonacoController] bridges Dart and the underlying JavaScript editor,
@@ -28,6 +22,7 @@ typedef CompletionProvider =
 class MonacoController {
   MonacoController._(this._protocol, this._webViewController) {
     _wireEvents();
+    _wireRequests();
     _lspManager = MonacoLspManager(protocol: _protocol);
   }
 
@@ -59,8 +54,10 @@ class MonacoController {
   /// model is currently attached to the editor. See [MonacoDocument].
   late final MonacoDocument document = MonacoDocument.internal(_invoke, null);
 
-  final Map<String, _RegisteredCompletion> _completionSources = {};
-  bool _completionListenerWired = false;
+  final Map<String, CompletionProvider> _completionSources = {};
+  final Map<String, Future<void> Function()> _customActions = {};
+  StreamSubscription<ProtocolRequest>? _requestSubscription;
+  int _registrationSeq = 0;
   MonacoCapabilities? _capabilities;
 
   /// Completes when the editor is fully initialized and ready to accept
@@ -495,15 +492,19 @@ class MonacoController {
 
   /// Registers a dynamic completion provider for the given [languages].
   ///
-  /// The [provider] callback is invoked whenever the user requests completions (e.g., Ctrl+Space).
+  /// The [provider] callback is invoked whenever the user requests
+  /// completions (e.g., Ctrl+Space). Provider errors are logged and answered
+  /// with an empty suggestion list; they never crash the editor.
   ///
   /// * [id]: Optional unique identifier. If omitted, one is generated.
-  /// * [triggerCharacters]: Characters that automatically trigger the completion (e.g., `.` or `@`).
+  /// * [triggerCharacters]: Characters that automatically trigger the
+  ///   completion (e.g., `.` or `@`).
   ///
-  /// Returns the [id] of the registered provider.
-  Future<String> registerCompletionSource({
+  /// Returns a [MonacoCompletionRegistration]; call its `dispose` to remove
+  /// the provider.
+  Future<MonacoCompletionRegistration> registerCompletions({
     String? id,
-    required List<String> languages,
+    required List<MonacoLanguage> languages,
     List<String> triggerCharacters = const [],
     required CompletionProvider provider,
   }) async {
@@ -514,49 +515,35 @@ class MonacoController {
       throw ArgumentError.value(id, 'id', 'Completion source already exists');
     }
 
-    final providerId =
-        id ??
-        'flutter_${DateTime.now().millisecondsSinceEpoch}_${_completionSources.length}';
-    final entry = _RegisteredCompletion(
-      id: providerId,
-      languages: List<String>.from(languages),
-      triggerCharacters: List<String>.from(triggerCharacters),
-      provider: provider,
-    );
-    _completionSources[providerId] = entry;
-
-    await _registerCompletionSourceInternal(entry);
-    return providerId;
-  }
-
-  Future<void> _registerCompletionSourceInternal(
-    _RegisteredCompletion entry,
-  ) async {
+    final providerId = id ?? 'flutter_${++_registrationSeq}';
+    _completionSources[providerId] = provider;
     try {
       await _invoke('completions.register', {
-        'id': entry.id,
-        'languages': entry.languages,
-        'triggerCharacters': entry.triggerCharacters,
+        'id': providerId,
+        'languages': [for (final language in languages) language.id],
+        'triggerCharacters': List<String>.from(triggerCharacters),
       });
     } catch (e) {
-      _completionSources.remove(entry.id);
+      _completionSources.remove(providerId);
       rethrow;
     }
-
-    _wireCompletionListenerOnce();
+    return MonacoCompletionRegistration.internal(
+      id: providerId,
+      unregister: () => _unregisterCompletions(providerId),
+    );
   }
 
   /// Registers a static list of completion items.
   ///
   /// Useful for simple keyword lists or fixed snippets.
-  Future<String> registerStaticCompletions({
+  Future<MonacoCompletionRegistration> registerStaticCompletions({
     String? id,
-    required List<String> languages,
+    required List<MonacoLanguage> languages,
     List<String> triggerCharacters = const [],
     required List<CompletionItem> items,
     bool isIncomplete = false,
   }) {
-    return registerCompletionSource(
+    return registerCompletions(
       id: id,
       languages: languages,
       triggerCharacters: triggerCharacters,
@@ -565,9 +552,9 @@ class MonacoController {
     );
   }
 
-  /// Unregisters a previously registered completion source.
-  Future<void> unregisterCompletionSource(String id) async {
+  Future<void> _unregisterCompletions(String id) async {
     _completionSources.remove(id);
+    if (_disposed) return;
     await _invoke('completions.unregister', {'id': id});
   }
 
@@ -579,6 +566,48 @@ class MonacoController {
       'actionId': action.id,
       'args': args,
     });
+  }
+
+  /// Registers a Dart-defined editor action (D16).
+  ///
+  /// The action shows up in the command palette under
+  /// [MonacoActionDescriptor.label], binds the descriptor's keybindings
+  /// (e.g. Cmd/Ctrl+S save hooks), and optionally appears in the context
+  /// menu. Each invocation calls [run] on the Dart side; errors thrown by
+  /// [run] are logged in the page console and never crash the editor.
+  ///
+  /// Returns a [MonacoActionRegistration]; call its `dispose` to remove the
+  /// action again. Registering a second action with the same id throws an
+  /// [ArgumentError].
+  Future<MonacoActionRegistration> addAction(
+    MonacoActionDescriptor descriptor,
+    Future<void> Function() run,
+  ) async {
+    final actionId = descriptor.id.id;
+    if (_customActions.containsKey(actionId)) {
+      throw ArgumentError.value(
+        descriptor,
+        'descriptor',
+        'Action "$actionId" is already registered',
+      );
+    }
+    _customActions[actionId] = run;
+    try {
+      await _invoke('actions.register', descriptor.toJson());
+    } catch (e) {
+      _customActions.remove(actionId);
+      rethrow;
+    }
+    return MonacoActionRegistration.internal(
+      id: descriptor.id,
+      unregister: () => _removeAction(actionId),
+    );
+  }
+
+  Future<void> _removeAction(String actionId) async {
+    _customActions.remove(actionId);
+    if (_disposed) return;
+    await _invoke('actions.unregister', {'id': actionId});
   }
 
   /// Requests editor focus, retrying to ride out layout transitions.
@@ -665,55 +694,88 @@ class MonacoController {
         return;
       }
       // LSP internals are consumed by the LSP manager, not surfaced here.
-      if (event.name == 'lspStatus' ||
-          event.name == 'lspMessage' ||
-          event.name == 'completionRequest') {
+      if (event.name == 'lspStatus' || event.name == 'lspMessage') {
         return;
       }
       _events.add(MonacoEvent.fromProtocolEvent(event));
     });
   }
 
-  void _wireCompletionListenerOnce() {
-    if (_completionListenerWired) return;
-    _completionListenerWired = true;
+  /// Wire up the JS-initiated request channel (6.5): completion providers
+  /// and Dart-defined action callbacks.
+  void _wireRequests() {
+    _requestSubscription = _protocol.requests.listen((request) {
+      unawaited(_handleRequest(request));
+    });
+  }
 
-    _protocol.events.where((event) => event.name == 'completionRequest').listen(
-      (event) {
-        unawaited(() async {
-          try {
-            await _ensureReady();
-            final request = CompletionRequest.fromJson(
-              Map<String, dynamic>.from(event.data),
-            );
-            final registered = _completionSources[request.providerId];
-            const emptySuggestions = {'suggestions': <Map<String, dynamic>>[]};
+  Future<void> _handleRequest(ProtocolRequest request) async {
+    try {
+      switch (request.name) {
+        case 'completion':
+          await _handleCompletionRequest(request);
+        case 'action':
+          await _handleActionRequest(request);
+        default:
+          await _protocol.respond(
+            request.id,
+            error: 'Unknown request: ${request.name}',
+          );
+      }
+    } catch (e) {
+      // Failing to answer (e.g. the page went away mid-request) is not an
+      // editor error; the JS side treats a missing answer as cancellation.
+      debugPrint('[MonacoController] request "${request.name}" failed: $e');
+    }
+  }
 
-            Future<void> respond(Map<String, dynamic> payload) {
-              return _invoke('completions.resolve', {
-                'requestId': request.requestId,
-                'payload': payload,
-              });
-            }
+  Future<void> _handleCompletionRequest(ProtocolRequest request) async {
+    const emptySuggestions = {'suggestions': <Object?>[]};
 
-            if (registered == null) {
-              await respond(emptySuggestions);
-              return;
-            }
+    CompletionRequest completionRequest;
+    try {
+      completionRequest = CompletionRequest.fromJson(
+        Map<String, dynamic>.from(request.data),
+      );
+    } on FormatException catch (e) {
+      debugPrint('[MonacoController] malformed completion request: $e');
+      await _protocol.respond(request.id, value: emptySuggestions);
+      return;
+    }
 
-            try {
-              final result = await registered.provider(request);
-              await respond(result.toJson());
-            } catch (e) {
-              debugPrint('[MonacoController] completion provider failed: $e');
-              await respond(emptySuggestions);
-            }
-          } catch (e) {
-            debugPrint('[MonacoController] completion respond failed: $e');
-          }
-        }());
-      },
-    );
+    final provider = _completionSources[completionRequest.providerId];
+    if (provider == null) {
+      await _protocol.respond(request.id, value: emptySuggestions);
+      return;
+    }
+
+    Map<String, dynamic> payload;
+    try {
+      payload = (await provider(completionRequest)).toJson();
+    } catch (e) {
+      debugPrint('[MonacoController] completion provider failed: $e');
+      payload = Map<String, dynamic>.from(emptySuggestions);
+    }
+    await _protocol.respond(request.id, value: payload);
+  }
+
+  Future<void> _handleActionRequest(ProtocolRequest request) async {
+    final actionId = request.data['actionId'];
+    final run = actionId is String ? _customActions[actionId] : null;
+    if (run == null) {
+      await _protocol.respond(request.id, error: 'Unknown action: $actionId');
+      return;
+    }
+    try {
+      await run();
+    } catch (e) {
+      await _protocol.respond(
+        request.id,
+        error: 'Action "$actionId" failed: $e',
+      );
+      return;
+    }
+    await _protocol.respond(request.id, value: const <String, Object?>{});
   }
 
   // --- SELECTION AND NAVIGATION ---
@@ -1117,23 +1179,12 @@ class MonacoController {
     // and finalizes connection state streams.
     _lspManager.dispose();
     _eventSubscription?.cancel();
+    _requestSubscription?.cancel();
+    _completionSources.clear();
+    _customActions.clear();
     _events.close();
     _liveStats.dispose();
     _protocol.dispose();
     _webViewController.dispose();
   }
-}
-
-class _RegisteredCompletion {
-  _RegisteredCompletion({
-    required this.id,
-    required this.languages,
-    required this.triggerCharacters,
-    required this.provider,
-  });
-
-  final String id;
-  final List<String> languages;
-  final List<String> triggerCharacters;
-  final CompletionProvider provider;
 }

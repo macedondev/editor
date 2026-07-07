@@ -554,153 +554,208 @@ window.__FMB.editorApi = function (ctx) {
 };
 
 window.__FMB.completions = function (ctx) {
-  const { postMessageToFlutter } = ctx;
-                // Completion bridge: JS stays dumb, Flutter drives the data
-                (function () {
-                  const completion = {
-                    resolvers: Object.create(null),
-                    providers: Object.create(null),
-                    nextId: 1,
-                  };
+  // Completion bridge: JS stays dumb, Flutter drives the data. Every Monaco
+  // completion query rides the protocol v3 request channel as a 'completion'
+  // request; Dart answers through FlutterMonaco.respond. On Monaco-side
+  // cancellation the provider resolves locally with empty suggestions and
+  // drops the pending request so the late Dart answer is a no-op.
+  (function () {
+    const completion = {
+      providers: Object.create(null),
+      reqSeq: 0,
+    };
 
-                  function toIRange(r) {
-                    if (!r) return undefined;
-                    const sL = r.startLineNumber ?? r.startLine ?? r.from_line ?? r.start ?? 1;
-                    const sC = r.startColumn ?? r.startCol ?? r.sc ?? 1;
-                    const eL = r.endLineNumber ?? r.endLine ?? r.to_line ?? r.end ?? sL;
-                    const eC = r.endColumn ?? r.endCol ?? r.ec ?? sC;
-                    return {
-                      startLineNumber: sL,
-                      startColumn: sC,
-                      endLineNumber: eL,
-                      endColumn: eC,
-                    };
-                  }
+    function toIRange(r) {
+      if (!r) return undefined;
+      const sL = r.startLineNumber ?? r.startLine ?? r.from_line ?? r.start ?? 1;
+      const sC = r.startColumn ?? r.startCol ?? r.sc ?? 1;
+      const eL = r.endLineNumber ?? r.endLine ?? r.to_line ?? r.end ?? sL;
+      const eC = r.endColumn ?? r.endCol ?? r.ec ?? sC;
+      return {
+        startLineNumber: sL,
+        startColumn: sC,
+        endLineNumber: eL,
+        endColumn: eC,
+      };
+    }
 
-                  // cfg: { id?: string, languages: string[]|string, triggerCharacters?: string[] }
-                  window.flutterMonaco.registerCompletionSource = function (cfg) {
-                    const id = cfg?.id || 'flutter_' + completion.nextId++;
-                    const langs = Array.isArray(cfg?.languages)
-                      ? cfg.languages
-                      : [cfg?.languages ?? 'plaintext'];
-                    const triggerCharacters = cfg?.triggerCharacters || [];
+    // Maps Dart's CompletionList JSON to Monaco's CompletionList shape.
+    function mapSuggestions(payload, fallbackRange) {
+      const items = (payload && payload.suggestions) || [];
+      const defaultRange = payload?.defaultRange || fallbackRange;
+      const mapped = items.map((it) => {
+        let kind = it.kind;
+        if (typeof kind === 'string') {
+          kind = monaco.languages.CompletionItemKind[kind] ??
+            monaco.languages.CompletionItemKind.Text;
+        }
+        let insertTextRules = it.insertTextRules;
+        if (Array.isArray(insertTextRules)) {
+          insertTextRules = insertTextRules.reduce((mask, rule) => {
+            const value = monaco.languages.CompletionItemInsertTextRule[rule];
+            return typeof value === 'number' ? (mask | value) : mask;
+          }, 0);
+        }
+        return {
+          label: it.label,
+          insertText: it.insertText || it.label,
+          kind: kind || monaco.languages.CompletionItemKind.Text,
+          detail: it.detail,
+          documentation: it.documentation,
+          sortText: it.sortText,
+          filterText: it.filterText,
+          commitCharacters: it.commitCharacters,
+          insertTextRules: insertTextRules || undefined,
+          range: toIRange(it.range) || toIRange(defaultRange),
+        };
+      });
+      return { suggestions: mapped, incomplete: !!payload?.isIncomplete };
+    }
 
-                    const provider = {
-                      triggerCharacters,
-                      provideCompletionItems: (model, position, context, token) =>
-                        new Promise((resolve) => {
-                          const reqId =
-                            id + ':' + Date.now() + ':' + Math.random().toString(36).slice(2);
-                          const lang =
-                            (model.getLanguageId && model.getLanguageId()) ||
-                            monaco.editor.getModelLanguage(model);
-                          const word = model.getWordUntilPosition(position);
-                          const defaultRange = {
-                            startLineNumber: position.lineNumber,
-                            startColumn: word.startColumn,
-                            endLineNumber: position.lineNumber,
-                            endColumn: word.endColumn,
-                          };
-                          completion.resolvers[reqId] = {
-                            resolve,
-                            defaultRange,
-                          };
+    // cfg: { id: string, languages: string[], triggerCharacters?: string[] }
+    function registerProvider(cfg) {
+      if (!cfg || !cfg.id) throw new Error('completions.register requires id');
+      const id = cfg.id;
+      const langs = Array.isArray(cfg.languages)
+        ? cfg.languages
+        : [cfg.languages ?? 'plaintext'];
+      const triggerCharacters = cfg.triggerCharacters || [];
 
-                          const payload = {
-                            event: 'completionRequest',
-                            providerId: id,
-                            requestId: reqId,
-                            language: lang,
-                            uri: model.uri?.toString(),
-                            position: {
-                              lineNumber: position.lineNumber,
-                              column: position.column,
-                            },
-                            defaultRange,
-                            lineText: model.getLineContent(position.lineNumber),
-                            triggerKind: context?.triggerKind ?? null,
-                            triggerCharacter: context?.triggerCharacter ?? null,
-                          };
-                          postMessageToFlutter(payload);
+      const provider = {
+        triggerCharacters,
+        provideCompletionItems: (model, position, context, token) =>
+          new Promise((resolve) => {
+            const lang =
+              (model.getLanguageId && model.getLanguageId()) ||
+              monaco.editor.getModelLanguage(model);
+            const word = model.getWordUntilPosition(position);
+            const defaultRange = {
+              startLineNumber: position.lineNumber,
+              startColumn: word.startColumn,
+              endLineNumber: position.lineNumber,
+              endColumn: word.endColumn,
+            };
+            const pending = window.FlutterMonaco.request('completion', {
+              providerId: id,
+              requestId: id + ':' + (++completion.reqSeq),
+              language: lang,
+              uri: model.uri?.toString(),
+              position: {
+                lineNumber: position.lineNumber,
+                column: position.column,
+              },
+              defaultRange,
+              lineText: model.getLineContent(position.lineNumber),
+              triggerKind: context?.triggerKind ?? null,
+              triggerCharacter: context?.triggerCharacter ?? null,
+            });
 
-                          token?.onCancellationRequested?.(() => {
-                            delete completion.resolvers[reqId];
-                            try {
-                              resolve({ suggestions: [] });
-                            } catch (_) {}
-                          });
-                        }),
-                    };
+            token?.onCancellationRequested?.(() => {
+              window.FlutterMonaco.dropRequest(pending.id);
+              try {
+                resolve({ suggestions: [] });
+              } catch (_) {}
+            });
 
-                    const disposables = langs.map((l) =>
-                      monaco.languages.registerCompletionItemProvider(l, provider),
-                    );
-                    completion.providers[id] = { disposables };
-                    return id;
-                  };
+            pending.promise.then(
+              (payload) => resolve(mapSuggestions(payload, defaultRange)),
+              () => resolve({ suggestions: [] }),
+            );
+          }),
+      };
 
-                  window.flutterMonaco.unregisterCompletionSource = function (id) {
-                    const p = completion.providers[id];
-                    if (p?.disposables) {
-                      for (const d of p.disposables) {
-                        try {
-                          d.dispose();
-                        } catch (_) {}
-                      }
-                    }
-                    delete completion.providers[id];
-                  };
+      const disposables = langs.map((l) =>
+        monaco.languages.registerCompletionItemProvider(l, provider),
+      );
+      completion.providers[id] = { disposables };
+      return true;
+    }
 
-                  // Flutter -> JS: deliver completion results
-                  window.flutterMonaco.complete = function (requestId, payload) {
-                    const resolver = completion.resolvers[requestId];
-                    if (!resolver) return;
-                    const resolve = resolver.resolve;
-                    const fallbackRange = resolver.defaultRange;
-                    try {
-                      const items = (payload && payload.suggestions) || [];
-                      const defaultRange = payload?.defaultRange || fallbackRange;
-                      const mapped = items.map((it) => {
-                        let kind = it.kind;
-                        if (typeof kind === 'string') {
-                          kind = monaco.languages.CompletionItemKind[kind] ??
-                            monaco.languages.CompletionItemKind.Text;
-                        }
-                        let insertTextRules = it.insertTextRules;
-                        if (Array.isArray(insertTextRules)) {
-                          insertTextRules = insertTextRules.reduce((mask, rule) => {
-                            const value = monaco.languages.CompletionItemInsertTextRule[rule];
-                            return typeof value === 'number' ? (mask | value) : mask;
-                          }, 0);
-                        }
-                        return {
-                          label: it.label,
-                          insertText: it.insertText || it.label,
-                          kind: kind || monaco.languages.CompletionItemKind.Text,
-                          detail: it.detail,
-                          documentation: it.documentation,
-                          sortText: it.sortText,
-                          filterText: it.filterText,
-                          commitCharacters: it.commitCharacters,
-                          insertTextRules: insertTextRules || undefined,
-                          range: toIRange(it.range) || toIRange(defaultRange),
-                        };
-                      });
-                      resolve({
-                        suggestions: mapped,
-                        incomplete: !!payload?.isIncomplete,
-                      });
-                    } finally {
-                      delete completion.resolvers[requestId];
-                    }
-                  };
-                })();
+    function unregisterProvider(id) {
+      const p = completion.providers[id];
+      if (p?.disposables) {
+        for (const d of p.disposables) {
+          try {
+            d.dispose();
+          } catch (_) {}
+        }
+      }
+      delete completion.providers[id];
+      return true;
+    }
 
-                // ---- protocol v3 command registry ----
-                window.FlutterMonaco.register('completions.register', (p) =>
-                  window.flutterMonaco.registerCompletionSource(p));
-                window.FlutterMonaco.register('completions.unregister', (p) =>
-                  window.flutterMonaco.unregisterCompletionSource(p.id));
-                window.FlutterMonaco.register('completions.resolve', (p) =>
-                  window.flutterMonaco.complete(p.requestId, p.payload));
+    window.FlutterMonaco.register('completions.register', (p) =>
+      registerProvider(p));
+    window.FlutterMonaco.register('completions.unregister', (p) =>
+      unregisterProvider(p.id));
+  })();
+};
+
+window.__FMB.actions = function (ctx) {
+  // Dart-defined editor actions (D16): Dart registers an action descriptor
+  // with symbolic keybindings; each invocation rides the protocol v3 request
+  // channel as an 'action' request and Dart runs the callback. Errors from
+  // Dart are logged here and never crash the editor.
+  const { requireEditor } = ctx;
+  (function () {
+    const registered = Object.create(null);
+
+    // {key: 'KeyS', ctrlCmd: true, ...} -> monaco keybinding bitmask.
+    function composeKeybinding(kb) {
+      const code = monaco.KeyCode[kb.key];
+      if (typeof code !== 'number') {
+        throw new Error('Unknown key: ' + kb.key);
+      }
+      let chord = code;
+      if (kb.ctrlCmd) chord |= monaco.KeyMod.CtrlCmd;
+      if (kb.shift) chord |= monaco.KeyMod.Shift;
+      if (kb.alt) chord |= monaco.KeyMod.Alt;
+      if (kb.winCtrl) chord |= monaco.KeyMod.WinCtrl;
+      return chord;
+    }
+
+    window.FlutterMonaco.register('actions.register', (p) => {
+      if (!p || !p.id) throw new Error('actions.register requires id');
+      const editor = requireEditor();
+      const existing = registered[p.id];
+      if (existing) {
+        try {
+          existing.dispose();
+        } catch (_) {}
+        delete registered[p.id];
+      }
+      const keybindings = (p.keybindings || []).map(composeKeybinding);
+      registered[p.id] = editor.addAction({
+        id: p.id,
+        label: p.label || p.id,
+        keybindings: keybindings.length ? keybindings : undefined,
+        contextMenuGroupId: p.contextMenuGroupId || undefined,
+        contextMenuOrder: p.contextMenuOrder ?? undefined,
+        precondition: p.precondition || undefined,
+        run: () => {
+          const pending = window.FlutterMonaco.request('action', {
+            actionId: p.id,
+          });
+          return pending.promise.catch((e) => {
+            window.FlutterMonaco.log(
+              'warn',
+              'action ' + p.id + ' failed: ' + ((e && e.message) || e),
+            );
+          });
+        },
+      });
+      return true;
+    });
+
+    window.FlutterMonaco.register('actions.unregister', (p) => {
+      const disposable = registered[p && p.id];
+      if (disposable) {
+        try {
+          disposable.dispose();
+        } catch (_) {}
+        delete registered[p.id];
+      }
+      return true;
+    });
+  })();
 };

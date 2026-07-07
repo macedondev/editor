@@ -133,7 +133,12 @@ class ShowcaseController extends ChangeNotifier {
       await controller.defineTheme(kMidnightTheme);
       await controller.registerStaticCompletions(
         id: 'showcase-snippets',
-        languages: const ['dart', 'typescript', 'javascript', 'python'],
+        languages: const [
+          MonacoLanguage.dart,
+          MonacoLanguage.typescript,
+          MonacoLanguage.javascript,
+          MonacoLanguage.python,
+        ],
         triggerCharacters: const ['.'],
         items: kDemoCompletions,
       );

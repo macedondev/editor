@@ -14,14 +14,18 @@ Future<MonacoController> _createController(
   );
 }
 
-Map<String, Object?> _completionRequestData({
+/// Emits a `completion` request envelope like the page's completion
+/// provider does (protocol 6.5).
+void _emitCompletionRequest(
+  FakePlatformWebViewController webview, {
   required String providerId,
+  String id = 'q1',
   String requestId = 'req-1',
   String language = 'dart',
   int line = 1,
   int column = 2,
 }) {
-  return {
+  webview.emitRequest(id, 'completion', {
     'providerId': providerId,
     'requestId': requestId,
     'language': language,
@@ -33,14 +37,18 @@ Map<String, Object?> _completionRequestData({
       'endColumn': column,
     },
     'lineText': 'test line',
-  };
+  });
 }
 
-/// Raw dispatch scripts that answer a completion request. The Dart response
-/// rides the v3 wire as method `completions.resolve` with params
-/// `{requestId, payload}`.
-List<String> _resolveScripts(FakePlatformWebViewController webview) {
-  return webview.scriptsContaining('"method": "completions.resolve"');
+/// Dart's answer to the single outstanding completion request.
+Map<String, Object?> _singleRespond(FakePlatformWebViewController webview) {
+  expect(webview.responded, hasLength(1));
+  return webview.responded.single;
+}
+
+List<Object?> _suggestionsOf(Map<String, Object?> respond) {
+  final value = respond['value']! as Map<String, Object?>;
+  return value['suggestions']! as List<Object?>;
 }
 
 void main() {
@@ -51,7 +59,7 @@ void main() {
         final controller = await _createController(webview);
 
         expect(
-          () => controller.registerCompletionSource(
+          () => controller.registerCompletions(
             id: 'p1',
             languages: const [],
             provider: (_) async => const CompletionList(suggestions: []),
@@ -64,16 +72,16 @@ void main() {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => const CompletionList(suggestions: []),
         );
 
         expect(
-          () => controller.registerCompletionSource(
+          () => controller.registerCompletions(
             id: 'p1',
-            languages: const ['dart'],
+            languages: const [MonacoLanguage.dart],
             provider: (_) async => const CompletionList(suggestions: []),
           ),
           throwsArgumentError,
@@ -84,19 +92,19 @@ void main() {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        final id1 = await controller.registerCompletionSource(
-          languages: const ['dart'],
+        final registration1 = await controller.registerCompletions(
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => const CompletionList(suggestions: []),
         );
 
-        final id2 = await controller.registerCompletionSource(
-          languages: const ['dart'],
+        final registration2 = await controller.registerCompletions(
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => const CompletionList(suggestions: []),
         );
 
-        expect(id1, isNot(equals(id2)));
-        expect(id1, startsWith('flutter_'));
-        expect(id2, startsWith('flutter_'));
+        expect(registration1.id, isNot(equals(registration2.id)));
+        expect(registration1.id, startsWith('flutter_'));
+        expect(registration2.id, startsWith('flutter_'));
       });
     });
 
@@ -105,13 +113,14 @@ void main() {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        await controller.registerCompletionSource(
+        final registration = await controller.registerCompletions(
           id: 'myProvider',
-          languages: const ['dart', 'typescript'],
+          languages: const [MonacoLanguage.dart, MonacoLanguage.typescript],
           triggerCharacters: const ['.', '@'],
           provider: (_) async => const CompletionList(suggestions: []),
         );
 
+        expect(registration.id, 'myProvider');
         final call = webview.dispatched.singleWhere(
           (d) => d['method'] == 'completions.register',
         );
@@ -121,17 +130,19 @@ void main() {
         expect(params['triggerCharacters'], ['.', '@']);
       });
 
-      test('unregister dispatches completions.unregister', () async {
+      test('registration.dispose dispatches completions.unregister', () async {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        final id = await controller.registerCompletionSource(
+        final registration = await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => const CompletionList(suggestions: []),
         );
 
-        await controller.unregisterCompletionSource(id);
+        expect(registration.isDisposed, isFalse);
+        await registration.dispose();
+        expect(registration.isDisposed, isTrue);
 
         final calls = webview.dispatched
             .where((d) => d['method'] == 'completions.unregister')
@@ -139,6 +150,51 @@ void main() {
         expect(calls, hasLength(1));
         final params = calls.single['params']! as Map<String, Object?>;
         expect(params['id'], 'p1');
+      });
+
+      test('double dispose is a no-op', () async {
+        final webview = FakePlatformWebViewController();
+        final controller = await _createController(webview);
+
+        final registration = await controller.registerCompletions(
+          id: 'p1',
+          languages: const [MonacoLanguage.dart],
+          provider: (_) async => const CompletionList(suggestions: []),
+        );
+
+        await registration.dispose();
+        await registration.dispose();
+
+        final calls = webview.dispatched
+            .where((d) => d['method'] == 'completions.unregister')
+            .toList();
+        expect(calls, hasLength(1));
+      });
+
+      test('failed bridge registration rolls the provider back', () async {
+        final webview = FakePlatformWebViewController();
+        final controller = await _createController(webview);
+
+        webview.injectCommandFailure(
+          'completions.register',
+          message: 'no editor',
+        );
+        await expectLater(
+          controller.registerCompletions(
+            id: 'p1',
+            languages: const [MonacoLanguage.dart],
+            provider: (_) async => const CompletionList(suggestions: []),
+          ),
+          throwsA(isA<MonacoJavaScriptError>()),
+        );
+
+        // The id is free again.
+        final registration = await controller.registerCompletions(
+          id: 'p1',
+          languages: const [MonacoLanguage.dart],
+          provider: (_) async => const CompletionList(suggestions: []),
+        );
+        expect(registration.id, 'p1');
       });
     });
 
@@ -148,9 +204,9 @@ void main() {
         final controller = await _createController(webview);
         final requestCompleter = Completer<CompletionRequest>();
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (request) async {
             requestCompleter.complete(request);
             return const CompletionList(
@@ -169,10 +225,7 @@ void main() {
           },
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
         await pumpEventQueue();
 
         final request = await requestCompleter.future;
@@ -182,11 +235,15 @@ void main() {
         expect(request.position.line, 1);
         expect(request.position.column, 2);
 
-        final completeCall = _resolveScripts(webview).first;
-        expect(completeCall, contains('"req-1"'));
-        expect(completeCall, contains('"print"'));
-        expect(completeCall, contains('"println"'));
-        expect(completeCall, contains('"Function"'));
+        final respond = _singleRespond(webview);
+        expect(respond['id'], 'q1');
+        expect(respond['ok'], isTrue);
+        final suggestions = _suggestionsOf(respond);
+        expect(suggestions, hasLength(2));
+        final first = suggestions.first! as Map<String, Object?>;
+        expect(first['label'], 'print');
+        expect(first['kind'], 'Function');
+        expect(first['detail'], 'Print to console');
       });
 
       test('receives trigger context', () async {
@@ -194,9 +251,9 @@ void main() {
         final controller = await _createController(webview);
         CompletionRequest? receivedRequest;
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           triggerCharacters: const ['.'],
           provider: (request) async {
             receivedRequest = request;
@@ -204,7 +261,7 @@ void main() {
           },
         );
 
-        webview.emitEvent('completionRequest', {
+        webview.emitRequest('q2', 'completion', {
           'providerId': 'p1',
           'requestId': 'req-2',
           'language': 'dart',
@@ -231,55 +288,69 @@ void main() {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        // Register a provider but request from a different one
-        await controller.registerCompletionSource(
+        // Register a provider but request from a different one.
+        await controller.registerCompletions(
           id: 'registered',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => const CompletionList(
             suggestions: [CompletionItem(label: 'should not appear')],
           ),
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'unknown'),
-        );
+        _emitCompletionRequest(webview, providerId: 'unknown');
         await pumpEventQueue();
 
-        final completeCall = _resolveScripts(webview).first;
-        expect(completeCall, contains('"suggestions":[]'));
-        expect(completeCall, isNot(contains('"should not appear"')));
+        final respond = _singleRespond(webview);
+        expect(respond['ok'], isTrue);
+        expect(_suggestionsOf(respond), isEmpty);
       });
 
       test('provider exception returns empty suggestions', () async {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async {
             throw StateError('Provider error');
           },
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
         await pumpEventQueue();
 
-        final completeCall = _resolveScripts(webview).first;
-        expect(completeCall, contains('"suggestions":[]'));
+        final respond = _singleRespond(webview);
+        expect(respond['ok'], isTrue);
+        expect(_suggestionsOf(respond), isEmpty);
       });
 
-      test('provider async timeout still sends response', () async {
+      test('malformed request payload returns empty suggestions', () async {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
+          provider: (_) async =>
+              const CompletionList(suggestions: [CompletionItem(label: 'x')]),
+        );
+
+        webview.emitRequest('q1', 'completion', {'providerId': 'p1'});
+        await pumpEventQueue();
+
+        final respond = _singleRespond(webview);
+        expect(respond['ok'], isTrue);
+        expect(_suggestionsOf(respond), isEmpty);
+      });
+
+      test('slow provider still sends a response', () async {
+        final webview = FakePlatformWebViewController();
+        final controller = await _createController(webview);
+
+        await controller.registerCompletions(
+          id: 'p1',
+          languages: const [MonacoLanguage.dart],
           provider: (_) async {
             await Future<void>.delayed(const Duration(milliseconds: 50));
             return const CompletionList(
@@ -288,16 +359,14 @@ void main() {
           },
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
 
-        // Wait for async completion
         await Future<void>.delayed(const Duration(milliseconds: 100));
         await pumpEventQueue();
 
-        webview.assertExecuted('"method": "completions.resolve"');
+        final respond = _singleRespond(webview);
+        final suggestions = _suggestionsOf(respond);
+        expect((suggestions.single! as Map)['label'], 'delayed');
       });
     });
 
@@ -306,9 +375,9 @@ void main() {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => const CompletionList(
             suggestions: [
               CompletionItem(
@@ -333,24 +402,28 @@ void main() {
           ),
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
         await pumpEventQueue();
 
-        final call = _resolveScripts(webview).first;
-        expect(call, contains('"testItem"'));
-        expect(call, contains('"testItem()"'));
-        expect(call, contains('"Method"'));
-        expect(call, contains('"A test method"'));
-        expect(call, contains('"Detailed documentation"'));
-        expect(call, contains('"00001"'));
-        expect(call, contains('"test"'));
-        expect(call, contains('"("'));
-        expect(call, contains('"."'));
-        expect(call, contains('"InsertAsSnippet"'));
-        expect(call, contains('"isIncomplete":true'));
+        final respond = _singleRespond(webview);
+        final value = respond['value']! as Map<String, Object?>;
+        expect(value['isIncomplete'], isTrue);
+        final item = _suggestionsOf(respond).single! as Map<String, Object?>;
+        expect(item['label'], 'testItem');
+        expect(item['insertText'], 'testItem()');
+        expect(item['kind'], 'Method');
+        expect(item['detail'], 'A test method');
+        expect(item['documentation'], 'Detailed documentation');
+        expect(item['sortText'], '00001');
+        expect(item['filterText'], 'test');
+        expect(item['range'], {
+          'startLineNumber': 1,
+          'startColumn': 1,
+          'endLineNumber': 1,
+          'endColumn': 5,
+        });
+        expect(item['commitCharacters'], ['(', '.']);
+        expect(item['insertTextRules'], ['InsertAsSnippet']);
       });
 
       test('all CompletionItemKind values serialized correctly', () async {
@@ -362,22 +435,19 @@ void main() {
             .map((k) => CompletionItem(label: k.name, kind: k))
             .toList();
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => CompletionList(suggestions: suggestions),
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
         await pumpEventQueue();
 
-        final call = _resolveScripts(webview).first;
-        for (final kind in allKinds) {
-          expect(call, contains('"${kind.jsonValue}"'));
-        }
+        final serializedKinds = _suggestionsOf(
+          _singleRespond(webview),
+        ).map((item) => (item! as Map<String, Object?>)['kind']).toList();
+        expect(serializedKinds, [for (final kind in allKinds) kind.jsonValue]);
       });
     });
 
@@ -388,22 +458,20 @@ void main() {
 
         await controller.registerStaticCompletions(
           id: 'static1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           items: const [
             CompletionItem(label: 'static1'),
             CompletionItem(label: 'static2'),
           ],
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'static1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'static1');
         await pumpEventQueue();
 
-        final call = _resolveScripts(webview).first;
-        expect(call, contains('"static1"'));
-        expect(call, contains('"static2"'));
+        final labels = _suggestionsOf(
+          _singleRespond(webview),
+        ).map((item) => (item! as Map<String, Object?>)['label']).toList();
+        expect(labels, ['static1', 'static2']);
       });
 
       test('registerStaticCompletions with isIncomplete', () async {
@@ -412,19 +480,16 @@ void main() {
 
         await controller.registerStaticCompletions(
           id: 'static1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           items: const [CompletionItem(label: 'item')],
           isIncomplete: true,
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'static1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'static1');
         await pumpEventQueue();
 
-        final call = _resolveScripts(webview).first;
-        expect(call, contains('"isIncomplete":true'));
+        final value = _singleRespond(webview)['value']! as Map<String, Object?>;
+        expect(value['isIncomplete'], isTrue);
       });
     });
 
@@ -434,9 +499,9 @@ void main() {
         final controller = await _createController(webview);
         final calls = <String>[];
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async {
             calls.add('p1');
             return const CompletionList(
@@ -445,9 +510,9 @@ void main() {
           },
         );
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p2',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async {
             calls.add('p2');
             return const CompletionList(
@@ -456,50 +521,52 @@ void main() {
           },
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
         await pumpEventQueue();
         expect(calls, ['p1']);
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p2', requestId: 'req-2'),
+        _emitCompletionRequest(
+          webview,
+          providerId: 'p2',
+          id: 'q2',
+          requestId: 'req-2',
         );
         await pumpEventQueue();
         expect(calls, ['p1', 'p2']);
       });
 
-      test('unregistered provider stops receiving requests', () async {
+      test('disposed provider stops receiving requests', () async {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
         var callCount = 0;
 
-        final id = await controller.registerCompletionSource(
+        final registration = await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async {
             callCount++;
             return const CompletionList(suggestions: []);
           },
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
         await pumpEventQueue();
         expect(callCount, 1);
 
-        await controller.unregisterCompletionSource(id);
+        await registration.dispose();
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1', requestId: 'req-2'),
+        _emitCompletionRequest(
+          webview,
+          providerId: 'p1',
+          id: 'q2',
+          requestId: 'req-2',
         );
         await pumpEventQueue();
-        expect(callCount, 1); // Not incremented
+        expect(callCount, 1); // Not incremented.
+
+        // The dead provider still gets an (empty) answer.
+        expect(webview.responded, hasLength(2));
+        expect(_suggestionsOf(webview.responded.last), isEmpty);
       });
     });
 
@@ -509,9 +576,9 @@ void main() {
         final controller = await _createController(webview);
         var completedCount = 0;
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async {
             await Future<void>.delayed(const Duration(milliseconds: 10));
             completedCount++;
@@ -521,69 +588,80 @@ void main() {
           },
         );
 
-        // Fire multiple requests quickly
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
+        // Fire multiple requests quickly.
+        _emitCompletionRequest(webview, providerId: 'p1');
+        _emitCompletionRequest(
+          webview,
+          providerId: 'p1',
+          id: 'q2',
+          requestId: 'req-2',
         );
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1', requestId: 'req-2'),
-        );
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1', requestId: 'req-3'),
+        _emitCompletionRequest(
+          webview,
+          providerId: 'p1',
+          id: 'q3',
+          requestId: 'req-3',
         );
 
         await Future<void>.delayed(const Duration(milliseconds: 50));
         await pumpEventQueue();
 
         expect(completedCount, 3);
-        expect(_resolveScripts(webview), hasLength(3));
+        expect(webview.responded, hasLength(3));
+        expect(webview.responded.map((r) => r['id']).toSet(), {
+          'q1',
+          'q2',
+          'q3',
+        });
       });
 
       test('empty suggestions list handled', () async {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => const CompletionList(suggestions: []),
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
         await pumpEventQueue();
 
-        final call = _resolveScripts(webview).first;
-        expect(call, contains('"suggestions":[]'));
+        expect(_suggestionsOf(_singleRespond(webview)), isEmpty);
       });
 
-      test('completion item with null optional fields', () async {
+      test('completion item omits null optional fields', () async {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
-        await controller.registerCompletionSource(
+        await controller.registerCompletions(
           id: 'p1',
-          languages: const ['dart'],
+          languages: const [MonacoLanguage.dart],
           provider: (_) async => const CompletionList(
             suggestions: [CompletionItem(label: 'minimal')],
           ),
         );
 
-        webview.emitEvent(
-          'completionRequest',
-          _completionRequestData(providerId: 'p1'),
-        );
+        _emitCompletionRequest(webview, providerId: 'p1');
         await pumpEventQueue();
 
-        final call = _resolveScripts(webview).first;
-        expect(call, contains('"minimal"'));
-        // Should not contain null fields
-        expect(call, isNot(contains('null')));
+        final item =
+            _suggestionsOf(_singleRespond(webview)).single!
+                as Map<String, Object?>;
+        expect(item, {'label': 'minimal'});
+      });
+
+      test('unknown request name is answered with an error', () async {
+        final webview = FakePlatformWebViewController();
+        await _createController(webview);
+
+        webview.emitRequest('q9', 'mystery', {});
+        await pumpEventQueue();
+
+        final respond = _singleRespond(webview);
+        expect(respond['id'], 'q9');
+        expect(respond['ok'], isFalse);
       });
     });
   });

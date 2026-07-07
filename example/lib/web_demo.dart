@@ -438,7 +438,11 @@ MonacoEditor(
   Future<void> _registerCompletions(MonacoController controller) async {
     await controller.registerStaticCompletions(
       id: 'demo-snippets',
-      languages: ['dart', 'typescript', 'javascript'],
+      languages: const [
+        MonacoLanguage.dart,
+        MonacoLanguage.typescript,
+        MonacoLanguage.javascript,
+      ],
       triggerCharacters: ['.'],
       items: [
         const CompletionItem(

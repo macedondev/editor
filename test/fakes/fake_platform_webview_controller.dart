@@ -69,6 +69,11 @@ class FakePlatformWebViewController implements PlatformWebViewController {
   /// Every parsed dispatch call, in order ({id, method, params}).
   final List<Map<String, Object?>> dispatched = [];
 
+  /// Every parsed `FlutterMonaco.respond` payload, in order
+  /// ({id, ok, value?/error?}). These are Dart's answers to JS-initiated
+  /// requests (completions, custom actions).
+  final List<Map<String, Object?>> responded = [];
+
   /// Dynamic responder consulted before the default success envelope.
   /// Return a non-null value to answer the method with it.
   Object? Function(String method, Map<String, Object?> params)?
@@ -207,6 +212,10 @@ class FakePlatformWebViewController implements PlatformWebViewController {
     }
     executed.add(script);
     _maybeRespondToDispatch(script);
+    final respondPayload = _parseCall(script, 'FlutterMonaco.respond(');
+    if (respondPayload != null) {
+      responded.add(respondPayload);
+    }
   }
 
   /// Parses a `FlutterMonaco.dispatch({...})` script and posts the matching
@@ -264,7 +273,12 @@ class FakePlatformWebViewController implements PlatformWebViewController {
   /// Extracts the dispatch payload from [script], or null when the script is
   /// not a dispatch call.
   static Map<String, Object?>? parseDispatch(String script) {
-    const marker = 'FlutterMonaco.dispatch(';
+    return _parseCall(script, 'FlutterMonaco.dispatch(');
+  }
+
+  /// Extracts the single JSON argument of a `<marker>{...})` call from
+  /// [script], or null when the script is not such a call.
+  static Map<String, Object?>? _parseCall(String script, String marker) {
     final start = script.indexOf(marker);
     if (start < 0) return null;
     final jsonStart = start + marker.length;
@@ -293,6 +307,22 @@ class FakePlatformWebViewController implements PlatformWebViewController {
         'v': 3,
         'kind': 'event',
         'seq': ++_eventSeq,
+        'name': name,
+        'data': data,
+      }),
+    );
+  }
+
+  /// Emits a protocol v3 JS-to-Dart request envelope through the channel
+  /// (completion provider queries, custom action invocations). Dart's answer
+  /// lands in [responded].
+  void emitRequest(String id, String name, Map<String, Object?> data) {
+    tryEmitToChannel(
+      'flutterChannel',
+      jsonEncode({
+        'v': 3,
+        'kind': 'request',
+        'id': id,
         'name': name,
         'data': data,
       }),

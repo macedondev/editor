@@ -113,6 +113,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
 
       await controller.document.setText(_sampleCode);
       await _registerCompletionSources(controller);
+      await _registerSaveAction(controller);
 
       setState(() {
         _controller = controller;
@@ -129,14 +130,14 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
   Future<void> _registerCompletionSources(MonacoController controller) async {
     await controller.registerStaticCompletions(
       id: 'keywords',
-      languages: [MonacoLanguage.dart.id, MonacoLanguage.javascript.id],
+      languages: const [MonacoLanguage.dart, MonacoLanguage.javascript],
       triggerCharacters: const [' ', '.'],
       items: _keywordCompletions,
     );
 
-    await controller.registerCompletionSource(
+    await controller.registerCompletions(
       id: 'acme-api',
-      languages: [MonacoLanguage.dart.id],
+      languages: const [MonacoLanguage.dart],
       triggerCharacters: const ['.', '_'],
       provider: (request) async {
         final token = _extractCurrentWord(request);
@@ -152,6 +153,31 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
         return CompletionList(
           suggestions: suggestions,
           isIncomplete: token.isEmpty,
+        );
+      },
+    );
+  }
+
+  /// Dart-defined editor action: Cmd/Ctrl+S runs a Flutter save hook
+  /// instead of the browser save dialog. Also reachable from the command
+  /// palette and the editor context menu.
+  Future<void> _registerSaveAction(MonacoController controller) async {
+    await controller.addAction(
+      const MonacoActionDescriptor(
+        id: MonacoAction('demo.save'),
+        label: 'Save (Flutter handler)',
+        keybindings: [MonacoKeybinding(key: MonacoKey.keyS, ctrlCmd: true)],
+        contextMenuGroupId: 'navigation',
+        contextMenuOrder: 1,
+      ),
+      () async {
+        final text = await controller.document.getText();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved ${text.length} characters via Cmd/Ctrl+S'),
+            duration: const Duration(seconds: 2),
+          ),
         );
       },
     );
