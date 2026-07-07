@@ -340,18 +340,63 @@ window.__FMB.editorApi = function (ctx) {
                 // ---- protocol v3 command registry (upcoming/v3.md 6.3) ----
                 // Thin adapters over the ported helpers above: the wire
                 // speaks dotted methods with named params; the bodies stay
-                // the battle-tested 2.3.0 implementations.
+                // the battle-tested 2.3.0 implementations. document.* takes
+                // a uri param: null targets the ACTIVE model (the Dart
+                // active-tracking document handle), a string targets that
+                // exact model whether or not it is attached to the editor.
                 {
                   const FM = window.FlutterMonaco;
                   const api = window.flutterMonaco;
+
+                  const resolveModel = (uri) => {
+                    if (uri === null || uri === undefined) return requireModel();
+                    const model = monaco.editor.getModel(monaco.Uri.parse(uri));
+                    if (!model) {
+                      throw new Error('No model for uri: ' + uri);
+                    }
+                    return model;
+                  };
+                  const modelLanguage = (model) =>
+                    model.getLanguageId ? model.getLanguageId() : monaco.editor.getModelLanguage(model);
+                  const searchSpec = (q, opts) => {
+                    const isRegex = !!(opts && opts.isRegex);
+                    const wholeWord = !!(opts && opts.wholeWord);
+                    let search = q ?? '';
+                    let useRegex = isRegex;
+                    if (wholeWord && !isRegex) {
+                      search = '\\b' + escapeRegExp(String(q ?? '')) + '\\b';
+                      useRegex = true;
+                    }
+                    return { search, useRegex, matchCase: !!(opts && opts.matchCase) };
+                  };
+                  const findMatchesIn = (model, q, opts, limit) => {
+                    const s = searchSpec(q, opts);
+                    return model.findMatches(
+                      s.search, null, s.useRegex, s.matchCase, null, false, limit || 9999);
+                  };
+                  const markDirtyBaseline = (model) => {
+                    if (model && model.uri) {
+                      api._baselines.set(model.uri.toString(), model.getAlternativeVersionId());
+                    }
+                  };
+                  const isModelDirty = (model) => {
+                    if (!model || !model.uri) return false;
+                    const uri = model.uri.toString();
+                    if (!api._baselines.has(uri)) markDirtyBaseline(model);
+                    return model.getAlternativeVersionId() !== api._baselines.get(uri);
+                  };
+
                   FM.register('focus.force', (p) =>
                     api.forceFocus(p && p.replayInputFocus ? { replayInputFocus: true } : {}));
                   FM.register('editor.layout', () => api.layout());
-                  FM.register('document.getText', () => api.getValue());
-                  FM.register('document.setText', (p) => api.setValue(p.text));
-                  FM.register('document.lineCount', () => api.getLineCount());
+                  FM.register('document.getText', (p) => resolveModel(p.uri).getValue());
+                  FM.register('document.setText', (p) => {
+                    resolveModel(p.uri).setValue(p.text || '');
+                    return true;
+                  });
+                  FM.register('document.lineCount', (p) => resolveModel(p.uri).getLineCount());
                   FM.register('document.getLines', (p) => {
-                    const model = requireModel();
+                    const model = resolveModel(p.uri);
                     const lineCount = model.getLineCount();
                     const start = Math.min(Math.max(1, p.startLine), lineCount);
                     const end = Math.min(Math.max(start, p.endLine), lineCount);
@@ -359,29 +404,70 @@ window.__FMB.editorApi = function (ctx) {
                     for (let ln = start; ln <= end; ln++) lines.push(model.getLineContent(ln));
                     return lines;
                   });
-                  FM.register('document.setLanguage', (p) => api.setLanguage(p.language));
-                  FM.register('document.getLanguage', () => {
-                    const model = requireModel();
-                    return model.getLanguageId ? model.getLanguageId() : monaco.editor.getModelLanguage(model);
+                  FM.register('document.setLanguage', (p) => {
+                    monaco.editor.setModelLanguage(resolveModel(p.uri), p.language);
+                    return true;
                   });
-                  FM.register('document.applyEdits', (p) => api.applyEdits(p.edits));
-                  FM.register('document.findMatches', (p) =>
-                    api.findMatches(p.query, { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord }, p.limit));
-                  FM.register('document.replaceMatches', (p) =>
-                    api.replaceMatches(p.query, p.replacement, { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord }));
-                  FM.register('document.getWordAt', (p) =>
-                    api.getWordAtPosition(p.position.lineNumber, p.position.column));
-                  FM.register('document.isDirty', () => api.hasUnsavedChanges());
-                  FM.register('document.markSaved', () => api.markSaved());
-                  FM.register('document.setMarkers', (p) => api.setModelMarkers(p.owner, p.markers));
+                  FM.register('document.getLanguage', (p) => modelLanguage(resolveModel(p.uri)));
+                  FM.register('document.applyEdits', (p) => {
+                    resolveModel(p.uri).applyEdits(p.edits || []);
+                    return true;
+                  });
+                  FM.register('document.findMatches', (p) => {
+                    const model = resolveModel(p.uri);
+                    const matches = findMatchesIn(model, p.query,
+                      { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord }, p.limit);
+                    return matches.map((mm) => ({ range: mm.range, match: model.getValueInRange(mm.range) }));
+                  });
+                  FM.register('document.replaceMatches', (p) => {
+                    const model = resolveModel(p.uri);
+                    const matches = findMatchesIn(model, p.query,
+                      { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord }, 9999);
+                    const edits = matches.map((mm) => ({ range: mm.range, text: p.replacement }));
+                    model.pushEditOperations([], edits, () => null);
+                    return edits.length;
+                  });
+                  FM.register('document.getWordAt', (p) => {
+                    const w = resolveModel(p.uri).getWordAtPosition(
+                      new monaco.Position(p.position.lineNumber, p.position.column));
+                    return w ? w.word : null;
+                  });
+                  FM.register('document.isDirty', (p) => isModelDirty(resolveModel(p.uri)));
+                  FM.register('document.markSaved', (p) => {
+                    markDirtyBaseline(resolveModel(p.uri));
+                    return true;
+                  });
+                  FM.register('document.setMarkers', (p) => {
+                    monaco.editor.setModelMarkers(resolveModel(p.uri), p.owner || 'flutter', p.markers || []);
+                    return true;
+                  });
                   FM.register('docs.open', (p) => api.createModel(p.text, p.language, p.uri));
-                  FM.register('docs.close', (p) => api.disposeModel(p.uri));
+                  FM.register('docs.close', (p) => {
+                    resolveModel(p.uri).dispose();
+                    return true;
+                  });
                   FM.register('docs.list', () => api.listModels());
-                  FM.register('docs.activate', (p) => api.setModel(p.uri));
+                  FM.register('docs.activate', (p) => {
+                    requireEditor().setModel(resolveModel(p.uri));
+                    return true;
+                  });
                   FM.register('docs.activeUri', () => {
                     const ed = E();
                     const model = ed && ed.getModel ? ed.getModel() : null;
                     return model && model.uri ? model.uri.toString() : null;
+                  });
+                  FM.register('editor.getState', () => {
+                    const model = requireModel();
+                    return {
+                      content: model.getValue(),
+                      selection: api.getSelection(),
+                      cursorPosition: api.getCursorPosition(),
+                      lineCount: model.getLineCount(),
+                      isDirty: isModelDirty(model),
+                      language: modelLanguage(model),
+                      theme: api.getTheme(),
+                      stats: api.getStatistics(),
+                    };
                   });
                   FM.register('editor.updateOptions', (p) => api.updateOptions(p.options));
                   FM.register('editor.setTheme', (p) => api.setTheme(p.theme));
@@ -422,7 +508,42 @@ window.__FMB.editorApi = function (ctx) {
                   FM.register('editor.executeAction', (p) => api.executeAction(p.actionId, p.args));
                   FM.register('editor.captureViewState', () => api.saveViewState());
                   FM.register('editor.restoreViewState', (p) => api.restoreViewState(p.state));
-                  FM.register('decorations.delta', (p) => api.deltaDecorations(p.previousIds, p.decorations));
+
+                  // Decoration sets over createDecorationsCollection: each
+                  // Dart MonacoDecorationSet owns one collection; set()
+                  // replaces its contents atomically without touching other
+                  // sets (the 2.x deltaDecorations id-juggling is gone).
+                  const decorationSets = new Map();
+                  let nextDecorationSetId = 1;
+                  const requireDecorationSet = (setId) => {
+                    const collection = decorationSets.get(setId);
+                    if (!collection) {
+                      throw new Error('Unknown decoration set: ' + setId);
+                    }
+                    return collection;
+                  };
+                  FM.register('decorations.create', () => {
+                    const id = 'ds' + nextDecorationSetId++;
+                    decorationSets.set(id, requireEditor().createDecorationsCollection([]));
+                    return id;
+                  });
+                  FM.register('decorations.set', (p) => {
+                    requireDecorationSet(p.setId).set(p.decorations || []);
+                    return true;
+                  });
+                  FM.register('decorations.clear', (p) => {
+                    requireDecorationSet(p.setId).clear();
+                    return true;
+                  });
+                  FM.register('decorations.dispose', (p) => {
+                    const collection = decorationSets.get(p.setId);
+                    if (collection) {
+                      collection.clear();
+                      decorationSets.delete(p.setId);
+                    }
+                    return true;
+                  });
+
                   FM.register('json.configureDiagnostics', (p) => api.setJsonDiagnosticsOptions(p.options));
                   FM.register('page.setBackground', (p) => api.setHostPageBackground(p.color));
                 }

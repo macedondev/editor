@@ -126,13 +126,13 @@ class _LspDemoPageState extends State<LspDemoPage> {
     _controller = controller;
     // Language servers key their state on document URIs; give the demo
     // buffer a stable file-like URI instead of Monaco's default inmemory://.
-    final uri = await controller.createModel(
-      _samplePython,
-      language: 'python',
+    final document = await controller.openDocument(
+      text: _samplePython,
+      language: MonacoLanguage.python,
       uri: Uri.parse('file:///demo/main.py'),
     );
-    await controller.setModel(uri);
-    _appendLog('Editor ready (model $uri)');
+    await controller.activateDocument(document);
+    _appendLog('Editor ready (document ${document.uri})');
   }
 
   void _watchConnection(LanguageServerConnection connection) {
@@ -344,7 +344,7 @@ class _LspDemoPageState extends State<LspDemoPage> {
               flex: 3,
               child: MonacoEditor(
                 key: ValueKey('lsp-editor-$_editorGeneration'),
-                allowedConnectSources: [_allowedOrigin],
+                page: MonacoPageConfig(allowedConnectSources: [_allowedOrigin]),
                 options: const EditorOptions(
                   language: MonacoLanguage.python,
                   fontSize: 13,

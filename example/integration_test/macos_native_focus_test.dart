@@ -19,7 +19,7 @@ void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('primary click hands native first responder to the WKWebView '
-      'and releaseNativeInputFocus hands it back', (tester) async {
+      'and releaseNativeFocus hands it back', (tester) async {
     if (!Platform.isMacOS) {
       markTestSkipped('macOS-only native handoff test');
       return;
@@ -77,12 +77,12 @@ void main() {
     );
 
     // And the explicit handoff out of the editor.
-    await controller.releaseNativeInputFocus();
+    await controller.releaseNativeFocus();
     await tester.pump(const Duration(milliseconds: 100));
     expect(
       await controller.hasNativeInputFocus(),
       isFalse,
-      reason: 'WKWebView still first responder after releaseNativeInputFocus',
+      reason: 'WKWebView still first responder after releaseNativeFocus',
     );
 
     binding.reportData = <String, dynamic>{'nativeHandoffVerified': true};

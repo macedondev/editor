@@ -3,8 +3,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
+import 'package:flutter_monaco/src/editor/focus_coordinator.dart';
 import 'package:flutter_monaco/src/lsp/lsp_connection.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/protocol/envelope.dart';
@@ -15,20 +15,6 @@ import 'package:flutter_monaco/src/protocol/protocol.dart';
 /// [CompletionList].
 typedef CompletionProvider =
     Future<CompletionList> Function(CompletionRequest request);
-
-/// Describes why Monaco input focus is being requested.
-///
-/// The distinction matters on desktop platform views: background maintenance
-/// must not steal the keyboard from Flutter text inputs, while direct user
-/// interaction with Monaco is an intentional keyboard handoff that may release
-/// Flutter's active text input before Monaco is focused.
-enum MonacoFocusIntent {
-  /// Focus requested because the user directly interacted with Monaco.
-  user,
-
-  /// Focus requested by background maintenance such as route or lifecycle sync.
-  maintenance,
-}
 
 /// Manages the lifecycle and interaction with a Monaco Editor instance.
 ///
@@ -58,17 +44,20 @@ class MonacoController {
     const MonacoLiveStats(),
   );
 
-  // Event streams
-  final _onContentChanged = StreamController<bool>.broadcast();
-  final _onSelectionChanged = StreamController<Range?>.broadcast();
-  final _onFocus = StreamController<void>.broadcast();
-  final _onBlur = StreamController<void>.broadcast();
-  final _onScrollHandoff =
-      StreamController<MonacoScrollHandoffDetails>.broadcast();
+  // Decoded editor events (sealed MonacoEvent union).
+  final _events = StreamController<MonacoEvent>.broadcast();
   StreamSubscription<ProtocolEvent>? _eventSubscription;
 
-  // Decoration tracking
-  List<String> _decorationIds = const [];
+  late final MonacoFocusCoordinator _focus = MonacoFocusCoordinator(
+    webView: _webViewController,
+    ensureReady: _ensureReady,
+    invoke: (method, params) => _protocol.invoke(method, params),
+    isInteractionEnabled: () => _interactionEnabled,
+  );
+
+  /// The active-tracking document handle: every call targets whatever
+  /// model is currently attached to the editor. See [MonacoDocument].
+  late final MonacoDocument document = MonacoDocument.internal(_invoke, null);
 
   final Map<String, _RegisteredCompletion> _completionSources = {};
   bool _completionListenerWired = false;
@@ -106,29 +95,41 @@ class MonacoController {
   /// Real-time statistics (cursor position, selection, line count).
   ValueListenable<MonacoLiveStats> get stats => _liveStats;
 
-  /// Stream emitting `true` (flush) or `false` (partial) when content changes.
-  Stream<bool> get onContentChanged => _onContentChanged.stream;
-
-  /// Stream emitting the new [Range] whenever the cursor selection changes.
-  Stream<Range?> get onSelectionChanged => _onSelectionChanged.stream;
-
-  /// Stream emitting Monaco DOM focus events.
+  /// Every decoded editor event, in arrival order.
   ///
-  /// This is not a native input-readiness guarantee on desktop platform views.
-  Stream<void> get onFocus => _onFocus.stream;
+  /// The union is sealed for exhaustive switching; unknown events surface
+  /// as [MonacoUnknownEvent]. Prefer the typed convenience streams below
+  /// for single-concern listeners.
+  Stream<MonacoEvent> get events => _events.stream;
 
-  /// Stream emitting Monaco DOM blur events.
-  Stream<void> get onBlur => _onBlur.stream;
+  /// Content changes ([MonacoContentChanged]: flush flag, deltas or a
+  /// truncation marker).
+  Stream<MonacoContentChanged> get onContentChanged =>
+      events.where((e) => e is MonacoContentChanged).cast();
 
-  /// Stream emitting scroll deltas the editor could not consume.
+  /// The new primary [Range] (or `null`) whenever the selection changes.
+  Stream<Range?> get onSelectionChanged => events
+      .where((e) => e is MonacoSelectionChanged)
+      .map((e) => (e as MonacoSelectionChanged).selection);
+
+  /// Monaco DOM focus transitions (`true` = focused).
+  ///
+  /// This is not a native input-readiness guarantee on desktop platform
+  /// views; see [hasNativeInputFocus] for the authoritative signal.
+  Stream<bool> get onFocusChanged => events
+      .where((e) => e is MonacoFocusChanged)
+      .map((e) => (e as MonacoFocusChanged).focused);
+
+  /// Scroll deltas the editor could not consume.
   ///
   /// Events only arrive after a source was enabled with
   /// [setScrollHandoffSources] (the `MonacoEditor.scrollHandoff`
   /// configuration does this automatically). Malformed bridge payloads are
   /// dropped silently. See [MonacoScrollHandoffDetails] for the delta
   /// conventions.
-  Stream<MonacoScrollHandoffDetails> get onScrollHandoff =>
-      _onScrollHandoff.stream;
+  Stream<MonacoScrollHandoffDetails> get onScrollHandoff => events
+      .where((e) => e is MonacoScrollHandoffEvent)
+      .map((e) => (e as MonacoScrollHandoffEvent).details);
 
   /// Creates a new [MonacoController] and boots the editor.
   ///
@@ -330,14 +331,6 @@ class MonacoController {
     return identical(result, monacoJsUndefined) ? null : result;
   }
 
-  /// Switches the editor's syntax highlighting language.
-  ///
-  /// Waits for editor readiness; calls issued before ready apply in call
-  /// order once the editor exists (last write wins).
-  Future<void> setLanguage(MonacoLanguage language) async {
-    await _invoke('document.setLanguage', {'language': language.id});
-  }
-
   /// Configures Monaco's built-in JSON diagnostics and schema validation.
   ///
   /// This applies globally to all JSON models in the editor, not just the
@@ -370,15 +363,15 @@ class MonacoController {
     await _invoke('editor.setTheme', {'theme': theme.id});
   }
 
-  /// Returns the Monaco theme id currently active in the editor.
+  /// Returns the theme currently active in the editor.
   ///
   /// Reads the live value from Monaco's runtime rather than caching what
   /// Dart most recently sent. Returns `null` when Monaco can't report a
   /// theme (e.g. on engine versions that don't expose `editor.getTheme()`).
   /// Bridge failures throw a [MonacoException].
-  Future<String?> getThemeId() async {
+  Future<MonacoTheme?> getTheme() async {
     final result = await _invoke('editor.getTheme', {});
-    return result is String && result.isNotEmpty ? result : null;
+    return result is String && result.isNotEmpty ? MonacoTheme(result) : null;
   }
 
   /// Registers or replaces a custom Monaco theme.
@@ -581,207 +574,44 @@ class MonacoController {
   /// Runs a Monaco editor action, e.g.
   /// `executeAction(MonacoAction.formatDocument)`. Custom command ids run
   /// via `MonacoAction('my.command')`.
-  Future<void> executeAction(MonacoAction action, [dynamic args]) async {
+  Future<void> executeAction(MonacoAction action, {Object? args}) async {
     await _invoke('editor.executeAction', {
       'actionId': action.id,
       'args': args,
     });
   }
 
-  /// Whether a Flutter text input (TextField, CupertinoTextField,
-  /// SelectableText, ...) currently owns Flutter's primary focus.
+  /// Requests editor focus, retrying to ride out layout transitions.
   ///
-  /// Focus nudges must never steal the keyboard from one: on Windows,
-  /// [PlatformWebViewController.requestNativeFocus] moves real Win32
-  /// keyboard focus to the WebView, which would make typing land in the
-  /// editor instead of, say, a dialog's TextField.
-  static bool _flutterTextInputHasFocus() {
-    final BuildContext? context;
-    try {
-      context = FocusManager.instance.primaryFocus?.context;
-    } catch (_) {
-      // MonacoController also runs headless (no widget binding, e.g. plain
-      // Dart tests); without a binding there is no Flutter focus to steal.
-      return false;
-    }
-    if (context == null) return false;
-    // Every Flutter text input attaches its focus node inside an
-    // EditableText, so it is found as an ancestor state.
-    return context.findAncestorStateOfType<EditableTextState>() != null;
-  }
-
-  static bool _shouldRespectFlutterTextInput(MonacoFocusIntent intent) {
-    return intent == MonacoFocusIntent.maintenance;
-  }
-
-  /// Whether the in-page focus path must run a full replay (blur + refocus).
-  ///
-  /// The replay recovers stale WKWebView input readiness, but it is also the
-  /// caret double-blink. With the macOS native first-responder handoff in
-  /// place, replay is only the FALLBACK for embeddings where the handoff is
-  /// unavailable (no native plugin registered) or did not take effect - when
-  /// the handoff succeeded, native readiness is real and the idempotent
-  /// in-page focus is enough, exactly as on Windows.
-  static bool _shouldReplayInputFocus({
-    required MonacoFocusIntent intent,
-    required NativeFocusResult nativeFocus,
-  }) {
-    return !kIsWeb &&
-        defaultTargetPlatform == TargetPlatform.macOS &&
-        intent == MonacoFocusIntent.user &&
-        (nativeFocus == NativeFocusResult.unsupported ||
-            nativeFocus == NativeFocusResult.failed);
-  }
-
-  static bool _shouldReleaseFlutterTextInput(MonacoFocusIntent intent) {
-    if (kIsWeb || intent != MonacoFocusIntent.user) return false;
-    return defaultTargetPlatform == TargetPlatform.macOS ||
-        defaultTargetPlatform == TargetPlatform.windows ||
-        defaultTargetPlatform == TargetPlatform.linux;
-  }
-
-  static Future<void> _releaseFlutterTextInputForUserFocus() async {
-    if (_flutterTextInputHasFocus()) {
-      try {
-        FocusManager.instance.primaryFocus?.unfocus();
-      } catch (_) {}
-    }
-    try {
-      await SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
-    } catch (_) {}
-    await Future<void>.delayed(Duration.zero);
-  }
-
-  /// Dispatches the in-page focus helper; failures are swallowed exactly as
-  /// the 2.x raw-script path did (focus nudges are best-effort).
-  Future<void> _forceFocus({bool replayInputFocus = false}) async {
-    try {
-      await _protocol.invoke('focus.force', {
-        'replayInputFocus': replayInputFocus,
-      });
-    } catch (_) {}
-  }
-
-  /// Requests focus for the editor widget.
-  ///
-  /// Uses a robust method that waits for visibility and layout before attempting focus.
-  /// On Android and iOS, the OS soft keyboard may only appear after a user tap
-  /// inside the editor.
-  ///
-  /// This is cooperative: it does nothing while a Flutter text input owns
-  /// the primary focus, so programmatic calls cannot steal the keyboard from
-  /// a focused TextField (e.g. in a dialog). For direct pointer interaction,
-  /// use [ensureEditorFocus] with [MonacoFocusIntent.user].
-  Future<void> focus() async {
-    if (!_interactionEnabled) return;
-    await _ensureReady();
-    if (_flutterTextInputHasFocus()) return;
-    // Windows: WebView2 must hold real Win32 keyboard focus before the
-    // in-page focus below has any effect. macOS: the WKWebView must be the
-    // window's first responder. No-op elsewhere.
-    await _webViewController.requestNativeFocus();
-    // Use robust in-page helper (waits for visibility, layouts, focuses textarea)
-    await _forceFocus();
-  }
-
-  /// Attempts to focus the editor multiple times to handle race conditions during layout transitions.
-  ///
-  /// [attempts] defaults to 3, with [interval] of 24ms.
-  ///
-  /// Like [focus], this defaults to cooperative background maintenance:
-  /// attempts made while a Flutter text input owns the primary focus are
-  /// skipped, so refocus nudges after content updates, route pops, or app
-  /// resume cannot steal the keyboard from a focused TextField.
-  ///
-  /// Pass [MonacoFocusIntent.user] only from direct user interaction with the
-  /// editor, such as a primary pointer down inside the Monaco view. On desktop
-  /// that intent first releases Flutter's text-input channel so a stale
-  /// TextField/dialog client cannot keep swallowing native input, then hands
-  /// native keyboard focus to the WebView (Win32 focus on Windows, NSWindow
-  /// first responder on macOS). When the macOS handoff is unavailable (no
-  /// native plugin registered) or fails, the first in-page focus attempt
-  /// replays the full focus path as a fallback, because WKWebView native
-  /// input readiness can become stale while Monaco still reports DOM focus.
-  Future<void> ensureEditorFocus({
+  /// Cooperative by default: background [MonacoFocusIntent.maintenance]
+  /// calls never steal the keyboard from a focused Flutter text input.
+  /// Pass [MonacoFocusIntent.user] only from direct pointer interaction
+  /// with the editor. See [MonacoFocusCoordinator.requestFocus] for the
+  /// full platform decision table.
+  Future<void> requestFocus({
+    MonacoFocusIntent intent = MonacoFocusIntent.maintenance,
     int attempts = 3,
     Duration interval = const Duration(milliseconds: 24),
-    MonacoFocusIntent intent = MonacoFocusIntent.maintenance,
-  }) async {
-    if (!_interactionEnabled) return;
-    await _ensureReady();
-
-    var nativeFocusRequested = false;
-    var replayInputFocus = false;
-
-    // On mobile, multiple async focus() calls interrupt the IME lifecycle.
-    final isMobileNative =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS);
-    final effectiveAttempts = isMobileNative ? 1 : attempts;
-    if (effectiveAttempts <= 0) return;
-
-    if (_shouldReleaseFlutterTextInput(intent)) {
-      await _releaseFlutterTextInputForUserFocus();
-    }
-
-    for (var i = 0; i < effectiveAttempts; i++) {
-      // Re-evaluated per attempt: a text input losing focus mid-loop (e.g.
-      // a closing dialog) lets the remaining attempts proceed.
-      if (!_shouldRespectFlutterTextInput(intent) ||
-          !_flutterTextInputHasFocus()) {
-        if (!nativeFocusRequested) {
-          // Hand native keyboard focus to the WebView first; the JS focus
-          // below cannot take effect without it (Win32 focus on Windows,
-          // first responder on macOS).
-          final nativeFocus = await _webViewController.requestNativeFocus();
-          nativeFocusRequested = true;
-          replayInputFocus = _shouldReplayInputFocus(
-            intent: intent,
-            nativeFocus: nativeFocus,
-          );
-        }
-        await _forceFocus(replayInputFocus: replayInputFocus);
-        // Replay at most once per call: later attempts are settle-retries,
-        // and repeating the blur/refocus cycle would multiply the caret
-        // blink the replay already costs.
-        replayInputFocus = false;
-      }
-      if (i + 1 < effectiveAttempts) {
-        await Future<void>.delayed(interval);
-      }
-    }
+  }) {
+    return _focus.requestFocus(
+      intent: intent,
+      attempts: attempts,
+      interval: interval,
+    );
   }
 
   /// Whether the native layer currently routes keyboard input to the
   /// editor's WebView.
   ///
-  /// Returns `true`/`false` where the platform can answer authoritatively
-  /// (macOS: the WKWebView is the window's first responder, via the
-  /// `flutter_monaco` native plugin; Windows: WebView2 reports native
-  /// focus), and `null` where it cannot (Android, iOS, Web, headless test
-  /// environments, or when the WebView cannot be located in the window).
-  ///
-  /// This is the real desktop input-readiness signal: [onFocus]/[onBlur]
-  /// only report Monaco's DOM focus, which can stay `true` while the native
-  /// layer stopped routing keys to the WebView (for example after an
-  /// app switch, dialog, or tab change). Apps that model input readiness
-  /// can use this to verify staleness instead of assuming it.
-  Future<bool?> hasNativeInputFocus() {
-    return _webViewController.hasNativeInputFocus();
-  }
+  /// `true`/`false` where the platform can answer authoritatively (macOS
+  /// first responder, Windows WebView2); `null` where it cannot (Android,
+  /// iOS, Web, headless tests). This is the real desktop input-readiness
+  /// signal - [onFocusChanged] only reports Monaco's DOM focus.
+  Future<bool?> hasNativeInputFocus() => _focus.hasNativeInputFocus();
 
   /// Hands native keyboard focus back to the Flutter view if the editor's
-  /// WebView currently holds it.
-  ///
-  /// Use this for an explicit programmatic handoff out of the editor (for
-  /// example before moving focus to a Flutter text field without a user
-  /// click). macOS makes the Flutter view first responder; Windows asks
-  /// WebView2 to release focus. No-op on other platforms or when the editor
-  /// does not own native focus.
-  Future<void> releaseNativeInputFocus() {
-    return _webViewController.releaseNativeFocus();
-  }
+  /// WebView currently holds it. No-op elsewhere.
+  Future<void> releaseNativeFocus() => _focus.releaseNativeFocus();
 
   /// Forces the Monaco editor to re-measure its container and update its layout.
   ///
@@ -823,40 +653,24 @@ class MonacoController {
   /// Wire up protocol event listeners.
   void _wireEvents() {
     _eventSubscription = _protocol.events.listen((event) {
-      switch (event.name) {
-        case 'stats':
-          try {
-            _liveStats.value = MonacoLiveStats.fromJson(
-              Map<String, dynamic>.from(event.data),
-            );
-          } catch (e) {
-            debugPrint('[MonacoController] Failed to parse stats: $e');
-          }
-        case 'contentChanged':
-          _onContentChanged.add(event.data['isFlush'] == true);
-        case 'selectionChanged':
-          final selection = event.data['selection'];
-          _onSelectionChanged.add(
-            selection is Map
-                ? Range.fromJson(Map<String, dynamic>.from(selection))
-                : null,
-          );
-        case 'focusChanged':
-          if (event.data['focused'] == true) {
-            _onFocus.add(null);
-          } else {
-            _onBlur.add(null);
-          }
-        case 'scrollHandoff':
-          final details = MonacoScrollHandoffDetails.tryParse(
+      // Stats feed the ValueListenable, not the public event union.
+      if (event.name == 'stats') {
+        try {
+          _liveStats.value = MonacoLiveStats.fromJson(
             Map<String, dynamic>.from(event.data),
           );
-          if (details != null) {
-            _onScrollHandoff.add(details);
-          }
-        default:
-          break;
+        } catch (e) {
+          debugPrint('[MonacoController] Failed to parse stats: $e');
+        }
+        return;
       }
+      // LSP internals are consumed by the LSP manager, not surfaced here.
+      if (event.name == 'lspStatus' ||
+          event.name == 'lspMessage' ||
+          event.name == 'completionRequest') {
+        return;
+      }
+      _events.add(MonacoEvent.fromProtocolEvent(event));
     });
   }
 
@@ -902,30 +716,7 @@ class MonacoController {
     );
   }
 
-  // --- CONTENT AND SELECTION ---
-
-  /// Retrieves the current text content of the editor.
-  ///
-  /// Throws a [MonacoException] on failure; the result is never silently
-  /// defaulted.
-  Future<String> getValue() async {
-    final result = await _invoke('document.getText', {'uri': null});
-    if (result is String) return result;
-    throw MonacoProtocolError(
-      operation: 'document.getText',
-      message: 'Expected a string document text, got ${result.runtimeType}.',
-    );
-  }
-
-  /// Replaces the entire content of the editor.
-  ///
-  /// Waits for editor readiness; calls issued before ready apply in call
-  /// order once the editor exists (last write wins). Prefer the
-  /// `initialText` parameter of [create] for the first contents - it rides
-  /// the boot command and paints in the first frame.
-  Future<void> setValue(String value) async {
-    await _invoke('document.setText', {'uri': null, 'text': value});
-  }
+  // --- SELECTION AND NAVIGATION ---
 
   /// Retrieves the current primary selection range.
   ///
@@ -955,356 +746,97 @@ class MonacoController {
     await _invoke('editor.reveal', {'range': range.toJson(), 'center': center});
   }
 
-  /// Reveal multiple lines in the editor
-  Future<void> revealLines(
-    int startLine,
-    int endLine, {
-    bool center = false,
-  }) async {
-    final range = Range.lines(startLine, endLine);
-    await revealRange(range, center: center);
-  }
-
   /// Reveal a position in the editor
   Future<void> revealPosition(Position position, {bool center = false}) async {
     final range = Range.fromPositions(position, position);
     await revealRange(range, center: center);
   }
 
-  // --- LINE OPERATIONS ---
-
-  /// Returns the total number of lines in the document.
-  ///
-  /// Throws a [MonacoException] on failure.
-  Future<int> getLineCount() async {
-    final result = await _invoke('document.lineCount', {'uri': null});
-    if (result is int) return result;
-    if (result is num) return result.toInt();
-    throw MonacoProtocolError(
-      operation: 'document.lineCount',
-      message: 'Expected a numeric line count, got ${result.runtimeType}.',
-    );
-  }
-
-  /// Returns the content of the given [line] (1-based).
-  ///
-  /// Throws a [RangeError] when [line] is outside `1..lineCount` (JS clamps,
-  /// so an out-of-range request would otherwise silently return the nearest
-  /// line) and a [MonacoException] on bridge failure.
-  Future<String> getLineContent(int line) async {
-    final lineCount = await getLineCount();
-    if (line < 1 || line > lineCount) {
-      throw RangeError.range(line, 1, lineCount, 'line');
-    }
-
-    final result = await _invoke('document.getLines', {
-      'uri': null,
-      'startLine': line,
-      'endLine': line,
-    });
-    if (result is List && result.isNotEmpty) {
-      return result.first?.toString() ?? '';
-    }
-    throw MonacoProtocolError(
-      operation: 'document.getLines',
-      message: 'Expected a non-empty list of lines for line $line.',
-    );
-  }
-
-  /// Returns the content of multiple [lines] (1-based) in input order.
-  ///
-  /// Throws a [RangeError] when any requested line is outside
-  /// `1..lineCount` and a [MonacoException] on bridge failure.
-  Future<List<String>> getLinesContent(List<int> lines) async {
-    final results = <String>[];
-    if (lines.isEmpty) return results;
-
-    final lineCount = await getLineCount();
-    for (final line in lines) {
-      if (line < 1 || line > lineCount) {
-        throw RangeError.range(line, 1, lineCount, 'lines');
-      }
-    }
-    for (final line in lines) {
-      final result = await _invoke('document.getLines', {
-        'uri': null,
-        'startLine': line,
-        'endLine': line,
-      });
-      if (result is List && result.isNotEmpty) {
-        results.add(result.first?.toString() ?? '');
-      } else {
-        throw MonacoProtocolError(
-          operation: 'document.getLines',
-          message: 'Expected a non-empty list of lines for line $line.',
-        );
-      }
-    }
-    return results;
-  }
-
-  // --- EDITS ---
-
-  /// Applies a list of edit operations to the document.
-  ///
-  /// This is the most efficient way to make multiple changes at once.
-  Future<void> applyEdits(List<EditOperation> edits) async {
-    if (edits.isEmpty) return;
-    await _invoke('document.applyEdits', {
-      'uri': null,
-      'edits': edits.map((e) => e.toJson()).toList(),
-    });
-  }
-
-  /// Inserts [text] at the specified [position].
-  Future<void> insertText(Position position, String text) async {
-    final edit = EditOperation.insert(position: position, text: text);
-    await applyEdits([edit]);
-  }
-
-  /// Deletes the text within the specified [range].
-  Future<void> deleteRange(Range range) async {
-    final edit = EditOperation.delete(range: range);
-    await applyEdits([edit]);
-  }
-
-  /// Replaces the text within [range] with [text].
-  Future<void> replaceRange(Range range, String text) async {
-    final edit = EditOperation(range: range, text: text);
-    await applyEdits([edit]);
-  }
-
-  /// Deletes the specified [line] (1-based index).
-  Future<void> deleteLine(int line) async {
-    final range = Range.lines(line, line);
-    await deleteRange(range);
-  }
-
   // --- DECORATIONS ---
 
-  /// Sets the decorations (highlights, glyphs, etc.) in the editor.
+  /// Creates an independent decoration set.
   ///
-  /// Replaces any previously set decorations tracked by this controller.
-  /// Returns the IDs of the newly created decorations.
-  Future<List<String>> setDecorations(
-    List<DecorationOptions> decorations,
-  ) async {
-    final raw = await _invoke('decorations.delta', {
-      'previousIds': _decorationIds,
-      'decorations': decorations.map((d) => d.toJson()).toList(),
-    });
-    if (raw is! List) {
-      throw const MonacoProtocolError(
-        operation: 'decorations.delta',
-        message: 'Expected deltaDecorations to return a list of IDs.',
-      );
+  /// Each set wraps one Monaco decorations collection: setting it replaces
+  /// only that set's decorations, so multiple features can decorate the
+  /// editor without clobbering each other. Dispose the set to remove its
+  /// decorations and release the page-side collection.
+  Future<MonacoDecorationSet> createDecorationSet() async {
+    final result = await _invoke('decorations.create', {});
+    if (result is String && result.isNotEmpty) {
+      return MonacoDecorationSet.internal(_invoke, result);
     }
-
-    return _decorationIds = raw
-        .map((e) => e.toString())
-        .where((s) => s.isNotEmpty)
-        .toList();
-  }
-
-  /// Adds inline style decorations (e.g., text color, background) to specific [ranges].
-  ///
-  /// [className] should be a CSS class available in the WebView (injected via `customCss`).
-  Future<List<String>> addInlineDecorations(
-    List<Range> ranges,
-    String className, {
-    String? hoverMessage,
-  }) async {
-    final decorations = ranges
-        .map(
-          (range) => DecorationOptions.inlineClass(
-            range: range,
-            className: className,
-            hoverMessage: hoverMessage,
-          ),
-        )
-        .toList();
-
-    return setDecorations(decorations);
-  }
-
-  /// Adds decorations to entire lines (e.g., for breakpoints or diffs).
-  Future<List<String>> addLineDecorations(
-    List<int> lines,
-    String className, {
-    bool isWholeLine = true,
-  }) async {
-    final decorations = lines
-        .map(
-          (line) => DecorationOptions.line(
-            range: Range.singleLine(line),
-            className: className,
-            isWholeLine: isWholeLine,
-          ),
-        )
-        .toList();
-
-    return setDecorations(decorations);
-  }
-
-  /// Removes all decorations set by this controller.
-  Future<void> clearDecorations() => setDecorations(const []);
-
-  // --- MARKERS (DIAGNOSTICS) ---
-
-  /// Sets the diagnostics (errors, warnings, hints) for the editor.
-  ///
-  /// [owner] is a string identifier for the source of these markers.
-  Future<void> setMarkers(
-    List<MarkerData> markers, {
-    String owner = 'flutter',
-  }) async {
-    await _invoke('document.setMarkers', {
-      'uri': null,
-      'owner': owner,
-      'markers': markers.map((m) => m.toJson()).toList(),
-    });
-  }
-
-  /// Convenience method to set error markers.
-  Future<void> setErrorMarkers(
-    List<MarkerData> errors, {
-    String owner = 'flutter-errors',
-  }) async {
-    await setMarkers(errors, owner: owner);
-  }
-
-  /// Convenience method to set warning markers.
-  Future<void> setWarningMarkers(
-    List<MarkerData> warnings, {
-    String owner = 'flutter-warnings',
-  }) async {
-    await setMarkers(warnings, owner: owner);
-  }
-
-  /// Clears all markers for the specified [owner].
-  Future<void> clearMarkers({String owner = 'flutter'}) async {
-    await setMarkers([], owner: owner);
-  }
-
-  /// Clears all markers from common owners ('flutter', 'flutter-errors', 'flutter-warnings').
-  Future<void> clearAllMarkers() async {
-    await Future.wait([
-      clearMarkers(owner: 'flutter'),
-      clearMarkers(owner: 'flutter-errors'),
-      clearMarkers(owner: 'flutter-warnings'),
-    ]);
-  }
-
-  // --- FIND AND REPLACE ---
-
-  /// Find matches in the document with enhanced parsing
-  Future<List<FindMatch>> findMatches(
-    String query, {
-    FindOptions options = const FindOptions(),
-    int limit = 1000,
-  }) async {
-    final matches = await _invoke('document.findMatches', {
-      'uri': null,
-      'query': query,
-      'isRegex': options.isRegex,
-      'matchCase': options.matchCase,
-      'wholeWord': options.wholeWord,
-      'limit': limit,
-    });
-    if (matches is! List) {
-      throw MonacoProtocolError(
-        operation: 'document.findMatches',
-        message: 'Expected a list of matches, got ${matches.runtimeType}.',
-      );
-    }
-    return matches
-        .whereType<Map>()
-        .map((match) => FindMatch.fromJson(Map<String, dynamic>.from(match)))
-        .toList();
-  }
-
-  /// Replaces all matches in the document and returns the replacement count.
-  ///
-  /// Throws a [MonacoException] on failure.
-  Future<int> replaceMatches(
-    String query,
-    String replacement, {
-    FindOptions options = const FindOptions(),
-  }) async {
-    final result = await _invoke('document.replaceMatches', {
-      'uri': null,
-      'query': query,
-      'replacement': replacement,
-      'isRegex': options.isRegex,
-      'matchCase': options.matchCase,
-      'wholeWord': options.wholeWord,
-    });
-    if (result is int) return result;
-    if (result is num) return result.toInt();
     throw MonacoProtocolError(
-      operation: 'document.replaceMatches',
-      message:
-          'Expected a numeric replacement count, got ${result.runtimeType}.',
+      operation: 'decorations.create',
+      message: 'Expected a decoration set id, got ${result.runtimeType}.',
     );
   }
 
   // --- VIEW STATE ---
 
-  /// Captures the current view state (cursor, scroll, folding).
+  /// Captures the current view state (cursor, scroll, folding) as an
+  /// opaque, persistable [MonacoViewState].
   ///
-  /// Returns `null` when the editor has no state to capture (no model).
+  /// Returns an empty state when the editor has no model to capture.
   /// Throws a [MonacoException] on failure.
-  Future<Map<String, dynamic>?> saveViewState() async {
+  Future<MonacoViewState> captureViewState() async {
     final result = await _invoke('editor.captureViewState', {});
-    return result is Map ? Map<String, dynamic>.from(result) : null;
-  }
-
-  /// Restore a previously saved view state
-  Future<void> restoreViewState(Map<String, dynamic> state) async {
-    if (state.isEmpty) return;
-    await _invoke('editor.restoreViewState', {'state': state});
-  }
-
-  // --- MULTI-MODEL ---
-
-  /// Creates a new model and returns its URI.
-  ///
-  /// Throws a [MonacoException] on failure.
-  Future<Uri> createModel(
-    String value, {
-    String language = 'plaintext',
-    Uri? uri,
-  }) async {
-    final result = await _invoke('docs.open', {
-      'text': value,
-      'language': language,
-      'uri': uri?.toString(),
-    });
-
-    final createdUri = result is String ? Uri.tryParse(result) : null;
-    if (createdUri != null) {
-      return createdUri;
-    }
-    throw MonacoProtocolError(
-      operation: 'docs.open',
-      message: 'Expected a model URI string, got: $result',
+    return MonacoViewState.fromJson(
+      result is Map ? Map<String, Object?>.from(result) : const {},
     );
   }
 
-  /// Set the active model
-  Future<void> setModel(Uri uri) async {
+  /// Restores a previously captured view state.
+  Future<void> restoreViewState(MonacoViewState state) async {
+    if (state.isEmpty) return;
+    await _invoke('editor.restoreViewState', {'state': state.toJson()});
+  }
+
+  // --- DOCUMENTS ---
+
+  /// Opens a new document (Monaco model) and returns a pinned handle.
+  ///
+  /// Give language servers stable, file-like URIs (`file:///...`) so they
+  /// can associate diagnostics and cross-file features correctly. Opening
+  /// a document does not activate it; call [activateDocument].
+  Future<MonacoDocument> openDocument({
+    required String text,
+    MonacoLanguage language = MonacoLanguage.plaintext,
+    Uri? uri,
+  }) async {
+    final result = await _invoke('docs.open', {
+      'text': text,
+      'language': language.id,
+      'uri': uri?.toString(),
+    });
+    final createdUri = result is String ? Uri.tryParse(result) : null;
+    if (createdUri == null) {
+      throw MonacoProtocolError(
+        operation: 'docs.open',
+        message: 'Expected a model URI string, got: $result',
+      );
+    }
+    return MonacoDocument.internal(_invoke, createdUri);
+  }
+
+  /// Attaches [document] to the editor (making it the active model).
+  ///
+  /// Throws [ArgumentError] for the active-tracking handle (it has no URI
+  /// to activate).
+  Future<void> activateDocument(MonacoDocument document) async {
+    final uri = document.uri;
+    if (uri == null) {
+      throw ArgumentError.value(
+        document,
+        'document',
+        'The active-tracking handle is already active; pass a pinned '
+            'handle from openDocument/documentByUri/listDocuments.',
+      );
+    }
     await _invoke('docs.activate', {'uri': uri.toString()});
   }
 
-  /// Dispose a model
-  Future<void> disposeModel(Uri uri) async {
-    await _invoke('docs.close', {'uri': uri.toString()});
-  }
-
-  /// Lists the URIs of every open model.
-  ///
-  /// Throws a [MonacoException] on failure.
-  Future<List<Uri>> listModels() async {
+  /// Pinned handles for every open document.
+  Future<List<MonacoDocument>> listDocuments() async {
     final list = await _invoke('docs.list', {});
     if (list is! List) {
       throw MonacoProtocolError(
@@ -1315,23 +847,16 @@ class MonacoController {
     return list
         .map((e) => Uri.tryParse(e.toString()))
         .whereType<Uri>()
+        .map((uri) => MonacoDocument.internal(_invoke, uri))
         .toList();
   }
 
-  // --- ADDITIONAL HELPER METHODS ---
-
-  /// Whether the document changed since the last [markSaved].
+  /// A pinned handle for [uri] without a bridge round trip.
   ///
-  /// Throws a [MonacoException] on failure.
-  Future<bool> hasUnsavedChanges() async {
-    final result = await _invoke('document.isDirty', {'uri': null});
-    return result == true;
-  }
-
-  /// Mark the current content as saved (baseline for dirty tracking)
-  Future<void> markSaved() async {
-    await _invoke('document.markSaved', {'uri': null});
-  }
+  /// The handle is constructed locally; calls through it throw a
+  /// [MonacoJavaScriptError] if no document with that URI is open.
+  MonacoDocument documentByUri(Uri uri) =>
+      MonacoDocument.internal(_invoke, uri);
 
   /// Returns the current cursor position.
   ///
@@ -1351,52 +876,17 @@ class MonacoController {
     });
   }
 
-  /// Set cursor position from zero-based coordinates
-  Future<void> setCursorPositionZeroBased(int line, int column) async {
-    final position = Position.fromZeroBased(line, column);
-    await setCursorPosition(position);
-  }
-
-  /// Returns the word at [position], or `null` when there is none.
-  ///
-  /// Throws a [MonacoException] on bridge failure.
-  Future<String?> getWordAtPosition(Position position) async {
-    final result = await _invoke('document.getWordAt', {
-      'uri': null,
-      'position': {'lineNumber': position.line, 'column': position.column},
-    });
-    return result is String ? result : null;
-  }
-
-  // --- BATCH OPERATIONS ---
-
-  /// Execute multiple operations in batch
-  Future<void> executeBatch(List<Future<void> Function()> operations) async {
-    for (final operation in operations) {
-      await operation();
-    }
-  }
-
-  /// Returns a full editor snapshot.
+  /// Returns a full editor snapshot in ONE bridge round trip
+  /// (`editor.getState`).
   Future<EditorState> getEditorState() async {
-    final content = await getValue();
-    final selection = await getSelection();
-    final cursorPosition = await getCursorPosition();
-    final lineCount = await getLineCount();
-    final isDirty = await hasUnsavedChanges();
-    final theme = await getThemeId();
-    final liveStats = stats.value;
-
-    return EditorState(
-      content: content,
-      selection: selection,
-      cursorPosition: cursorPosition,
-      lineCount: lineCount,
-      isDirty: isDirty,
-      language: liveStats.language,
-      theme: theme == null ? null : MonacoTheme(theme),
-      stats: liveStats,
-    );
+    final result = await _invoke('editor.getState', {});
+    if (result is! Map) {
+      throw MonacoProtocolError(
+        operation: 'editor.getState',
+        message: 'Expected a state map, got ${result.runtimeType}.',
+      );
+    }
+    return EditorState.fromJson(Map<String, dynamic>.from(result));
   }
 
   // --- LANGUAGE SERVER PROTOCOL ---
@@ -1493,9 +983,9 @@ class MonacoController {
   /// Executes arbitrary JavaScript in the editor WebView.
   ///
   /// This is an advanced escape hatch for scenarios not covered by the typed
-  /// Dart API. Prefer typed [MonacoController] methods such as [setValue],
-  /// [getSelection], [setMarkers], and [executeAction] when they cover your
-  /// use case.
+  /// Dart API. Prefer the typed surface - [document] methods such as
+  /// `setText`/`setMarkers`, [getSelection], and [executeAction] - when it
+  /// covers your use case.
   ///
   /// Useful for configuring Monaco language services, such as JSON schemas or
   /// TypeScript options, or for calling Monaco APIs not yet wrapped by this
@@ -1549,9 +1039,10 @@ class MonacoController {
   /// );
   /// ```
   ///
-  /// Returns `null` when the expression returns `undefined` or `null`.
-  /// Throws a [MonacoProtocolError] when the value cannot be converted to
-  /// [T]; JavaScript execution errors propagate as [MonacoJavaScriptError].
+  /// Returns [defaultValue] (default `null`) when the expression returns
+  /// `undefined` or `null`. Throws a [MonacoProtocolError] when the value
+  /// cannot be converted to [T]; JavaScript execution errors propagate as
+  /// [MonacoJavaScriptError].
   ///
   /// ## Security
   ///
@@ -1572,13 +1063,13 @@ class MonacoController {
   ///   'monaco.editor.getEditors().length',
   /// );
   /// ```
-  Future<T?> evaluateJavaScript<T>(String expression) async {
+  Future<T?> evaluateJavaScript<T>(String expression, {T? defaultValue}) async {
     await _ensureReady();
     final result = await _protocol.invoke('page.eval', {
       'expression': expression,
     });
     if (identical(result, monacoJsUndefined) || result == null) {
-      return null;
+      return defaultValue;
     }
     if (result is T) return result as T;
     // Number normalization: platforms and JSON round-trips blur int/double.
@@ -1626,11 +1117,7 @@ class MonacoController {
     // and finalizes connection state streams.
     _lspManager.dispose();
     _eventSubscription?.cancel();
-    _onContentChanged.close();
-    _onSelectionChanged.close();
-    _onFocus.close();
-    _onBlur.close();
-    _onScrollHandoff.close();
+    _events.close();
     _liveStats.dispose();
     _protocol.dispose();
     _webViewController.dispose();

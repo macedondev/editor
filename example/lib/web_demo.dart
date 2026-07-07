@@ -278,7 +278,7 @@ import 'package:flutter_monaco/flutter_monaco.dart';
 
 // Simply use the widget - no controller setup needed!
 MonacoEditor(
-  initialValue: 'print("Hello!");',
+  initialText: 'print("Hello!");',
   options: EditorOptions(
     language: MonacoLanguage.dart,
     theme: MonacoTheme.vsDark,
@@ -465,15 +465,15 @@ MonacoEditor(
     if (_controller == null || index == _activeFileIndex) return;
 
     // Save current content
-    final currentContent = await _controller!.getValue();
+    final currentContent = await _controller!.document.getText();
     _fileContents[_activeFileIndex] = currentContent;
 
     // Load new file
     final file = _files[index];
     final content = _fileContents[index] ?? file.content;
 
-    await _controller!.setLanguage(file.language);
-    await _controller!.setValue(content);
+    await _controller!.document.setLanguage(file.language);
+    await _controller!.document.setText(content);
 
     setState(() => _activeFileIndex = index);
   }
@@ -482,7 +482,7 @@ MonacoEditor(
     if (_controller == null) return;
 
     final timestamp = TimeOfDay.now().format(context);
-    final code = await _controller!.getValue();
+    final code = await _controller!.document.getText();
     final file = _files[_activeFileIndex];
 
     String output = '[$timestamp] Running ${file.name}...\n\n';
@@ -514,7 +514,7 @@ MonacoEditor(
 
   void _copyCode() async {
     if (_controller == null) return;
-    final code = await _controller!.getValue();
+    final code = await _controller!.document.getText();
     await Clipboard.setData(ClipboardData(text: code));
 
     if (mounted) {
@@ -964,7 +964,7 @@ MonacoEditor(
   Widget _buildEditor(_SampleFile file) {
     return MonacoEditor(
       key: ValueKey('editor-${file.name}'),
-      initialValue: _fileContents[_activeFileIndex] ?? file.content,
+      initialText: _fileContents[_activeFileIndex] ?? file.content,
       options: EditorOptions(
         language: file.language,
         theme: _currentTheme,

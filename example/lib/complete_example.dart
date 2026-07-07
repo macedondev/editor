@@ -111,7 +111,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
         ),
       );
 
-      await controller.setValue(_sampleCode);
+      await controller.document.setText(_sampleCode);
       await _registerCompletionSources(controller);
 
       setState(() {
@@ -187,7 +187,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
               setState(() {
                 _currentLanguage = language;
               });
-              await _controller?.setLanguage(MonacoLanguage(language));
+              await _controller?.document.setLanguage(MonacoLanguage(language));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'dart', child: Text('Dart')),
@@ -332,7 +332,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
           FloatingActionButton.extended(
             heroTag: 'content',
             onPressed: () async {
-              final content = await _controller?.getValue();
+              final content = await _controller?.document.getText();
               if (content != null && context.mounted) {
                 showDialog(
                   context: context,

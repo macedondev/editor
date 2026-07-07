@@ -75,13 +75,13 @@ class _ProbeAppState extends State<ProbeApp> {
         return _finish(false, 'monaco.lsp namespace missing');
       }
 
-      final uri = await controller.createModel(
-        _brokenPython,
-        language: 'python',
+      final document = await controller.openDocument(
+        text: _brokenPython,
+        language: MonacoLanguage.python,
         uri: Uri.parse('file:///probe/main.py'),
       );
-      await controller.setModel(uri);
-      _log('model created: $uri');
+      await controller.activateDocument(document);
+      _log('document opened: ${document.uri}');
 
       _log('spawning pyright at $_pyrightBin ...');
       final server = await LspServerProcess.start(_pyrightBin, ['--stdio']);

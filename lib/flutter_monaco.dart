@@ -35,8 +35,9 @@
 ///   ),
 /// );
 ///
-/// await controller.setValue('print("Hello, World!")');
-/// final content = await controller.getValue();
+/// await controller.whenReady;
+/// await controller.document.setText('print("Hello, World!")');
+/// final content = await controller.document.getText();
 /// ```
 ///
 /// ## Platform Support
@@ -66,10 +67,20 @@ export 'src/common/exceptions.dart'
         MonacoProtocolError,
         MonacoTimeoutError;
 export 'src/core/monaco_assets.dart' show MonacoAssets;
-export 'src/core/monaco_controller.dart'
-    show MonacoController, MonacoFocusIntent;
+export 'src/core/monaco_controller.dart' show MonacoController;
 export 'src/core/monaco_page_config.dart'
     show MonacoCapabilities, MonacoPageConfig;
+export 'src/editor/decorations.dart' show MonacoDecorationSet;
+export 'src/editor/document.dart' show MonacoDocument;
+export 'src/editor/events.dart'
+    show
+        MonacoContentChanged,
+        MonacoEvent,
+        MonacoFocusChanged,
+        MonacoScrollHandoffEvent,
+        MonacoSelectionChanged,
+        MonacoUnknownEvent;
+export 'src/editor/focus_coordinator.dart' show MonacoFocusIntent;
 export 'src/editor/view_state.dart' show MonacoViewState;
 
 // LSP exports

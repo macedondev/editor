@@ -55,6 +55,7 @@ const List<ContractCase> contractCases = [
     responseValue: ['a', 'b'],
   ),
   ContractCase('document.setLanguage', {
+    'uri': null,
     'language': 'dart',
   }, responseUndefined: true),
   ContractCase('document.getLanguage', {'uri': null}, responseValue: 'dart'),
@@ -133,6 +134,20 @@ const List<ContractCase> contractCases = [
     'theme': 'vs-dark',
   }, responseUndefined: true),
   ContractCase('editor.getTheme', {}, responseValue: 'vs-dark'),
+  ContractCase(
+    'editor.getState',
+    {},
+    responseValue: {
+      'content': 'text',
+      'selection': null,
+      'cursorPosition': {'lineNumber': 1, 'column': 1},
+      'lineCount': 1,
+      'isDirty': false,
+      'language': 'dart',
+      'theme': 'vs-dark',
+      'stats': {'lineCount': 1, 'charCount': 4},
+    },
+  ),
   ContractCase('editor.defineTheme', {
     'id': 'my-theme',
     'data': {'base': 'vs-dark', 'inherit': true, 'rules': <Object?>[]},
@@ -186,11 +201,13 @@ const List<ContractCase> contractCases = [
     'state': {'cursorState': <Object?>[]},
   }, responseUndefined: true),
   ContractCase('editor.layout', {}, responseUndefined: true),
-  ContractCase(
-    'decorations.delta',
-    {'previousIds': <Object?>[], 'decorations': <Object?>[]},
-    responseValue: ['dec-1'],
-  ),
+  ContractCase('decorations.create', {}, responseValue: 'ds1'),
+  ContractCase('decorations.set', {
+    'setId': 'ds1',
+    'decorations': <Object?>[],
+  }, responseValue: true),
+  ContractCase('decorations.clear', {'setId': 'ds1'}, responseValue: true),
+  ContractCase('decorations.dispose', {'setId': 'ds1'}, responseValue: true),
   ContractCase('completions.register', {
     'id': 'flutter_1',
     'languages': ['dart'],

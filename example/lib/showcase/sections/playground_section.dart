@@ -100,8 +100,8 @@ class _EditorCard extends StatelessWidget {
             child: MonacoEditor(
               key: const ValueKey('showcase-playground-editor'),
               options: controller.initialEditorOptions,
-              initialValue: controller.initialValue,
-              customCss: kEditorCustomCss,
+              initialText: controller.initialValue,
+              page: const MonacoPageConfig(customCss: kEditorCustomCss),
               backgroundColor: const Color(0xFF0D1117),
               onReady: controller.attachEditor,
             ),

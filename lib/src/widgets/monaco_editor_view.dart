@@ -78,13 +78,11 @@ class MonacoEditor extends StatefulWidget {
     super.key,
     this.controller,
     this.controllerFactory,
-    this.initialValue,
+    this.initialText,
     this.options = const EditorOptions(),
     this.initialSelection,
     this.autofocus = false,
-    this.customCss,
-    this.allowCdnFonts = false,
-    this.allowedConnectSources = const [],
+    this.page = const MonacoPageConfig(),
     this.readyTimeout = const Duration(seconds: 20),
     this.onReady,
     this.onError,
@@ -120,9 +118,10 @@ class MonacoEditor extends StatefulWidget {
 
   /// The initial content to load into the editor.
   ///
-  /// Applied only when the editor is first created. To update content dynamically,
-  /// use [MonacoController.setValue].
-  final String? initialValue;
+  /// Applied only when the editor is first created (it rides the boot
+  /// command and paints in the first frame). To update content
+  /// dynamically, use `controller.document.setText`.
+  final String? initialText;
 
   /// Configuration options for the editor (theme, language, font size, etc.).
   ///
@@ -135,28 +134,11 @@ class MonacoEditor extends StatefulWidget {
   /// If `true`, the editor requests focus as soon as it becomes ready.
   final bool autofocus;
 
-  /// CSS injected into the editor's page (e.g., `@font-face` rules).
-  ///
-  /// Changing this property triggers a full reload of the editor.
-  final String? customCss;
-
-  /// If `true`, allows the editor to load fonts from remote URLs.
-  ///
-  /// **Security Note**: This enables network requests from the WebView.
-  /// Changing this property triggers a full reload.
-  final bool allowCdnFonts;
-
-  /// Extra Content-Security-Policy `connect-src` origins the editor page may
-  /// reach (e.g. `['ws://127.0.0.1:3000']` for a WebSocket language server).
-  ///
-  /// Required for `MonacoController.connectLanguageServer` with an
-  /// `LspWebSocketTransport`. Only used when this widget owns the controller
-  /// (no [controller] supplied). Changing this property triggers a full
-  /// reload.
-  ///
-  /// **Security Note**: Every listed origin becomes reachable from
-  /// JavaScript inside the editor.
-  final List<String> allowedConnectSources;
+  /// Page-level settings (custom CSS, CSP opt-ins such as CDN fonts and
+  /// WebSocket language-server origins). Only used when this widget owns
+  /// the controller (no [controller] supplied). Changing this property
+  /// triggers a full reload of the editor.
+  final MonacoPageConfig page;
 
   /// The maximum duration to wait for the editor to initialize before showing an error.
   final Duration readyTimeout;
@@ -273,7 +255,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
 
   /// Subscriptions to controller events to be managed across the widget lifecycle.
   final List<StreamSubscription<dynamic>> _streamSubscriptions = [];
-  StreamSubscription<bool>? _contentSub;
+  StreamSubscription<MonacoContentChanged>? _contentSub;
   VoidCallback? _statsListener;
 
   /// Content sequence number for race condition prevention.
@@ -321,13 +303,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     }
 
     // If we OWN the controller and HTML-affecting knobs changed, rebuild.
-    final htmlKnobsChanged =
-        (oldWidget.customCss != widget.customCss) ||
-        (oldWidget.allowCdnFonts != widget.allowCdnFonts) ||
-        !listEquals(
-          oldWidget.allowedConnectSources,
-          widget.allowedConnectSources,
-        );
+    final htmlKnobsChanged = oldWidget.page != widget.page;
     if (_ownsController && htmlKnobsChanged) {
       _teardown(disposeOldController: true);
       _bootstrap();
@@ -352,14 +328,20 @@ class _MonacoEditorState extends State<MonacoEditor> {
       return;
     }
 
-    // If options change, apply them to the existing controller.
+    // If options change, apply only the fields that actually differ
+    // (sparse diff: unchanged fields are never re-sent, so Monaco state
+    // adjusted elsewhere is not clobbered).
     if (widget.options != oldWidget.options) {
-      _ignoreAsync(_controller!.updateOptions(widget.options));
-      // Theme and language require separate bridge calls.
-      _ignoreAsync(_controller!.setTheme(_resolveTheme()));
+      final diff = _diffOptions(oldWidget.options, widget.options);
+      if (diff.toMonacoOptions().isNotEmpty) {
+        _ignoreAsync(_controller!.updateOptions(diff));
+      }
+      if (widget.options.theme != oldWidget.options.theme) {
+        _ignoreAsync(_controller!.setTheme(_resolveTheme()));
+      }
       final language = widget.options.language;
-      if (language != null) {
-        _ignoreAsync(_controller!.setLanguage(language));
+      if (language != null && language != oldWidget.options.language) {
+        _ignoreAsync(_controller!.document.setLanguage(language));
       }
     }
 
@@ -399,12 +381,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
           await (widget.controllerFactory?.call() ??
               MonacoController.create(
                 options: widget.options.copyWith(theme: _resolveTheme()),
-                initialText: widget.initialValue,
-                page: MonacoPageConfig(
-                  customCss: widget.customCss,
-                  allowCdnFonts: widget.allowCdnFonts,
-                  allowedConnectSources: widget.allowedConnectSources,
-                ),
+                initialText: widget.initialText,
+                page: widget.page,
                 readyTimeout: widget.readyTimeout,
               ));
 
@@ -456,10 +434,10 @@ class _MonacoEditorState extends State<MonacoEditor> {
         await _controller!.setTheme(_resolveTheme());
         final language = widget.options.language;
         if (language != null) {
-          await _controller!.setLanguage(language);
+          await _controller!.document.setLanguage(language);
         }
-        if (widget.initialValue != null) {
-          await _controller!.setValue(widget.initialValue!);
+        if (widget.initialText != null) {
+          await _controller!.document.setText(widget.initialText!);
         }
         if (!_isBootstrapCurrent(bootstrapToken)) {
           return;
@@ -477,7 +455,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!_isBootstrapCurrent(bootstrapToken)) return;
           _webFocusNode.requestFocus();
-          unawaited(_controller!.ensureEditorFocus(attempts: 3));
+          unawaited(_controller!.requestFocus());
         });
       }
 
@@ -507,6 +485,40 @@ class _MonacoEditorState extends State<MonacoEditor> {
         defaultTargetPlatform == TargetPlatform.iOS;
   }
 
+  /// The sparse difference between two option sets: only keys whose
+  /// serialized value changed survive. Fields that went from set to unset
+  /// cannot be "un-applied" and are dropped (Monaco keeps the last value).
+  static EditorOptions _diffOptions(EditorOptions before, EditorOptions after) {
+    final beforeJson = before.toJson();
+    final afterJson = after.toJson();
+    final diff = <String, dynamic>{};
+    for (final entry in afterJson.entries) {
+      if (!_jsonEquals(beforeJson[entry.key], entry.value)) {
+        diff[entry.key] = entry.value;
+      }
+    }
+    return EditorOptions.fromJson(diff);
+  }
+
+  static bool _jsonEquals(Object? a, Object? b) {
+    if (identical(a, b)) return true;
+    if (a is Map && b is Map) {
+      if (a.length != b.length) return false;
+      for (final key in a.keys) {
+        if (!b.containsKey(key) || !_jsonEquals(a[key], b[key])) return false;
+      }
+      return true;
+    }
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_jsonEquals(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    return a == b;
+  }
+
   /// Resolves the effective theme: an explicit [MonacoEditor.options] theme
   /// always wins; a null theme follows the surrounding Flutter brightness.
   MonacoTheme _resolveTheme() {
@@ -532,16 +544,15 @@ class _MonacoEditorState extends State<MonacoEditor> {
       );
       _streamSubscriptions.add(selectionSub);
     }
-    final focusSub = _controller!.onFocus.listen((_) {
-      _monacoReportsFocused = true;
-      widget.onFocus?.call();
+    final focusSub = _controller!.onFocusChanged.listen((focused) {
+      _monacoReportsFocused = focused;
+      if (focused) {
+        widget.onFocus?.call();
+      } else {
+        widget.onBlur?.call();
+      }
     });
     _streamSubscriptions.add(focusSub);
-    final blurSub = _controller!.onBlur.listen((_) {
-      _monacoReportsFocused = false;
-      widget.onBlur?.call();
-    });
-    _streamSubscriptions.add(blurSub);
 
     final scrollHandoffSub = _controller!.onScrollHandoff.listen(
       _handleScrollHandoff,
@@ -664,7 +675,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _contentSub?.cancel();
     _contentSub = null;
 
-    _contentSub = _controller!.onContentChanged.listen((isFlush) {
+    _contentSub = _controller!.onContentChanged.listen((event) {
+      final isFlush = event.isFlush;
       // 1) Always surface raw signal if requested.
       widget.onRawContentChanged?.call(isFlush);
 
@@ -675,7 +687,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
       // 3) Flush = immediate fetch (no debounce), else debounced.
       Future<void> pullAndEmit() async {
         final seq = ++_contentSeq;
-        final text = await _controller!.getValue();
+        final text = await _controller!.document.getText();
         if (!mounted || seq != _contentSeq) return; // drop stale
         widget.onContentChanged!(text);
       }
@@ -797,7 +809,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
               }
               _webFocusNode.requestFocus();
               unawaited(
-                _controller!.ensureEditorFocus(
+                _controller!.requestFocus(
                   attempts: 1,
                   intent: MonacoFocusIntent.user,
                 ),

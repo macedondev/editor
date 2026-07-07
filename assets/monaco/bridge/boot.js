@@ -66,7 +66,26 @@ window.__FMB = window.__FMB || {};
               editor.onDidChangeCursorSelection(sendStats);
               sendStats();
 
-                E().onDidChangeModelContent(e => post('contentChanged', { isFlush: e.isFlush }));
+                E().onDidChangeModelContent(e => {
+                  // D15: ship the per-change deltas unless their combined
+                  // text exceeds 64 KiB - then omit them and flag truncated
+                  // so Dart consumers know to pull the full text instead.
+                  var model = E().getModel();
+                  var changes = [];
+                  var totalLength = 0;
+                  for (var i = 0; i < e.changes.length; i++) {
+                    var c = e.changes[i];
+                    totalLength += (c.text || '').length;
+                    changes.push({ range: c.range, text: c.text });
+                  }
+                  var truncated = totalLength > 65536;
+                  post('contentChanged', {
+                    uri: model && model.uri ? model.uri.toString() : null,
+                    isFlush: e.isFlush,
+                    changes: truncated ? undefined : changes,
+                    truncated: truncated,
+                  });
+                });
                 E().onDidChangeCursorSelection(e => post('selectionChanged', {
                   selection: e.selection && {
                     startLineNumber: e.selection.startLineNumber,

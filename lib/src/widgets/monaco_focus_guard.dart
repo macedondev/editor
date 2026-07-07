@@ -3,7 +3,7 @@ import 'package:flutter_monaco/flutter_monaco.dart';
 
 /// A tiny, no-UI helper that reasserts Monaco focus on common desktop events.
 ///
-/// - Calls [MonacoController.ensureEditorFocus] when the app is resumed.
+/// - Calls [MonacoController.requestFocus] when the app is resumed.
 /// - Optionally subscribes to the current [PageRoute] via a [RouteObserver]
 ///   and re-focuses when the route becomes visible again (didPopNext).
 ///
@@ -133,7 +133,7 @@ class _MonacoFocusGuardState extends State<MonacoFocusGuard>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      widget.controller.ensureEditorFocus(attempts: widget.ensureAttempts);
+      widget.controller.requestFocus(attempts: widget.ensureAttempts);
     }
   }
 
@@ -153,7 +153,7 @@ class _MonacoFocusGuardState extends State<MonacoFocusGuard>
       _interactionToggledByGuard = false;
       widget.controller.setInteractionEnabled(_interactionWasEnabled);
     }
-    widget.controller.ensureEditorFocus(attempts: widget.ensureAttempts);
+    widget.controller.requestFocus(attempts: widget.ensureAttempts);
   }
 
   @override

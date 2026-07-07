@@ -95,7 +95,7 @@ void main() {
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'trigger error',
+              initialText: 'trigger error',
             ),
           ),
         );
@@ -125,7 +125,7 @@ void main() {
         }
 
         await tester.pumpWidget(
-          _wrap(MonacoEditor(controllerFactory: factory, initialValue: 'boom')),
+          _wrap(MonacoEditor(controllerFactory: factory, initialText: 'boom')),
         );
         await tester.pump();
 
@@ -179,7 +179,7 @@ void main() {
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'trigger',
+              initialText: 'trigger',
               errorBuilder: (context, error, st) =>
                   Text('Custom Error: $error'),
             ),
@@ -192,13 +192,13 @@ void main() {
     });
 
     group('initial values', () {
-      testWidgets('initialValue applied once', (tester) async {
+      testWidgets('initialText applied once', (tester) async {
         final bundle = await _createBundle();
         await tester.pumpWidget(
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'initial content',
+              initialText: 'initial content',
             ),
           ),
         );
@@ -213,36 +213,34 @@ void main() {
           'initial content',
         );
 
-        // Update widget with different initialValue
+        // Update widget with different initialText
         await tester.pumpWidget(
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'new content',
+              initialText: 'new content',
             ),
           ),
         );
         await tester.pump();
 
-        // Should NOT set the new value (initialValue is applied only once)
+        // Should NOT set the new value (initialText is applied only once)
         expect(
           bundle.webview.dispatched
               .where((d) => d['method'] == 'document.setText')
               .length,
           1,
-          reason: 'initialValue must only be applied during initial bootstrap',
+          reason: 'initialText must only be applied during initial bootstrap',
         );
       });
 
-      testWidgets('initialSelection applied after initialValue', (
-        tester,
-      ) async {
+      testWidgets('initialSelection applied after initialText', (tester) async {
         final bundle = await _createBundle();
         await tester.pumpWidget(
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'content',
+              initialText: 'content',
               initialSelection: const Range(
                 startLine: 1,
                 startColumn: 1,
@@ -1009,8 +1007,8 @@ void main() {
       });
     });
 
-    group('customCss handling', () {
-      testWidgets('customCss change does not rebuild when not owned', (
+    group('page config handling', () {
+      testWidgets('page change does not rebuild when not owned', (
         tester,
       ) async {
         final bundle = await _createBundle();
@@ -1021,7 +1019,6 @@ void main() {
             MonacoEditor(
               controller: bundle.controller,
               onReady: (_) => readyCount++,
-              customCss: null,
             ),
           ),
         );
@@ -1032,7 +1029,9 @@ void main() {
             MonacoEditor(
               controller: bundle.controller,
               onReady: (_) => readyCount++,
-              customCss: 'body { background: red; }',
+              page: const MonacoPageConfig(
+                customCss: 'body { background: red; }',
+              ),
             ),
           ),
         );
@@ -1041,7 +1040,7 @@ void main() {
         expect(readyCount, 1); // Not rebuilt
       });
 
-      testWidgets('customCss change rebuilds when owned', (tester) async {
+      testWidgets('page change rebuilds when owned', (tester) async {
         var factoryCalls = 0;
         final webviews = <FakePlatformWebViewController>[];
 
@@ -1058,7 +1057,7 @@ void main() {
         }
 
         await tester.pumpWidget(
-          _wrap(MonacoEditor(controllerFactory: factory, customCss: null)),
+          _wrap(MonacoEditor(controllerFactory: factory)),
         );
         await tester.pump();
 
@@ -1066,7 +1065,9 @@ void main() {
           _wrap(
             MonacoEditor(
               controllerFactory: factory,
-              customCss: 'body { background: red; }',
+              page: const MonacoPageConfig(
+                customCss: 'body { background: red; }',
+              ),
             ),
           ),
         );
@@ -1099,7 +1100,6 @@ void main() {
           _wrap(
             MonacoEditor(
               controllerFactory: factory,
-              customCss: null,
               onReady: (_) => readyCount++,
             ),
           ),
@@ -1110,7 +1110,9 @@ void main() {
           _wrap(
             MonacoEditor(
               controllerFactory: factory,
-              customCss: 'body { background: red; }',
+              page: const MonacoPageConfig(
+                customCss: 'body { background: red; }',
+              ),
               onReady: (_) => readyCount++,
             ),
           ),
@@ -1424,7 +1426,7 @@ void main() {
               data: const MonacoEditorThemeData(errorIconColor: Colors.purple),
               child: MonacoEditor(
                 controller: bundle.controller,
-                initialValue: 'trigger',
+                initialText: 'trigger',
               ),
             ),
           ),
