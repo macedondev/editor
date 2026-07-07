@@ -964,6 +964,18 @@ If you deploy with a non-root `--base-href`, keep the snippet's URLs
 relative (as above) so they resolve against `<base href>` like every other
 Flutter asset.
 
+What to expect: warming moves the download earlier, it does not add
+bandwidth - on a connection fully saturated by the initial load the total
+time until an editor is interactive stays the same. The win is that the
+editor is served from cache the moment it mounts (no multi-megabyte fetch
+racing `readyTimeout` after first frame), which is a strict improvement
+whenever your first editor appears after startup - behind navigation, a
+tab, or below the fold. The `{ priority: 'low' }` hint keeps the warmup
+behind the engine download on HTTP/2 servers; on plain HTTP/1.1 the two
+share connections, which can delay first paint on slow links - if your
+very first screen is an editor and your users are bandwidth-constrained,
+prefer `MonacoAssets.precache()` over the `index.html` snippet.
+
 ### Web: Handling Overlays
 
 Web platform only. This does not affect native platforms.
