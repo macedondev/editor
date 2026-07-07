@@ -139,12 +139,19 @@ window.__FMB = window.__FMB || {};
               // The editor is born configured: sparse Monaco options from
               // Dart, plus the initial text/language/theme, in one create.
               var options = Object.assign({}, params.options || {});
-              options.value = typeof params.text === 'string' ? params.text : '';
-              options.language = params.language || 'plaintext';
               options.theme = params.theme || 'vs';
               if (options.automaticLayout === undefined) {
                 options.automaticLayout = true;
               }
+              // The boot document is created explicitly, NOT via the
+              // value/language create options: a standalone editor owns an
+              // implicitly created model and DISPOSES it on the first
+              // setModel (docs.activate), which would kill the boot
+              // document in multi-document use.
+              options.model = monaco.editor.createModel(
+                typeof params.text === 'string' ? params.text : '',
+                params.language || 'plaintext'
+              );
               monaco.editor.create(
                 document.getElementById('editor-container'),
                 options

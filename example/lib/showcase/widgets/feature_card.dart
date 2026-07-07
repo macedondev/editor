@@ -13,6 +13,7 @@ class FeatureCard extends StatefulWidget {
     required this.body,
     this.snippet,
     this.onTry,
+    this.tryLabel = 'Try it',
   });
 
   final IconData icon;
@@ -20,6 +21,7 @@ class FeatureCard extends StatefulWidget {
   final String body;
   final String? snippet;
   final VoidCallback? onTry;
+  final String tryLabel;
 
   @override
   State<FeatureCard> createState() => _FeatureCardState();
@@ -99,7 +101,7 @@ class _FeatureCardState extends State<FeatureCard> {
             ],
             if (widget.onTry != null) ...[
               const SizedBox(height: Insets.md),
-              _TryLink(onTap: widget.onTry!),
+              _TryLink(onTap: widget.onTry!, label: widget.tryLabel),
             ],
           ],
         ),
@@ -109,9 +111,10 @@ class _FeatureCardState extends State<FeatureCard> {
 }
 
 class _TryLink extends StatelessWidget {
-  const _TryLink({required this.onTap});
+  const _TryLink({required this.onTap, required this.label});
 
   final VoidCallback onTap;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -123,7 +126,7 @@ class _TryLink extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Try it',
+              label,
               style: ShowcaseText.small.copyWith(
                 color: ShowcaseColors.accentBlue,
               ),

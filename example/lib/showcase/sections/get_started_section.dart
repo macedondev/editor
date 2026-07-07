@@ -20,8 +20,20 @@ MonacoEditor(
 const String _controllerSnippet = '''
 MonacoEditor(
   onReady: (controller) async {
+    // Documents are first-class handles (new in 3.0).
     await controller.document.setText('void main() {}');
-    final code = await controller.document.getText();
+
+    // Dart code on a real keybinding (new in 3.0).
+    await controller.addAction(
+      MonacoActionDescriptor(
+        id: const MonacoAction('app.save'),
+        label: 'Save',
+        keybindings: const [
+          MonacoKeybinding(key: MonacoKey.keyS, ctrlCmd: true),
+        ],
+      ),
+      () async => save(await controller.document.getText()),
+    );
   },
 )''';
 

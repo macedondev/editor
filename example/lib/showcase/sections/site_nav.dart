@@ -14,11 +14,13 @@ class SiteNav extends StatelessWidget {
     required this.controller,
     required this.onTapFeatures,
     required this.onTapPlayground,
+    required this.onTapRebuild,
   });
 
   final ShowcaseController controller;
   final VoidCallback onTapFeatures;
   final VoidCallback onTapPlayground;
+  final VoidCallback onTapRebuild;
 
   static const double height = 64;
 
@@ -42,9 +44,11 @@ class SiteNav extends StatelessWidget {
           _Logo(versionLabel: metadata.versionLabel),
           const Spacer(),
           if (!compact) ...[
-            _NavLink(label: 'Features', onTap: onTapFeatures),
-            const SizedBox(width: Insets.lg),
             _NavLink(label: 'Playground', onTap: onTapPlayground),
+            const SizedBox(width: Insets.lg),
+            _NavLink(label: "What's new", onTap: onTapRebuild),
+            const SizedBox(width: Insets.lg),
+            _NavLink(label: 'Features', onTap: onTapFeatures),
             const SizedBox(width: Insets.lg),
           ],
           ThemeToggle(controller: controller),

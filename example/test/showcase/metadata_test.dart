@@ -35,7 +35,7 @@ environment:
       expect(metadata.flutterConstraint, '>=3.44.0');
     });
 
-    test('merges latest pub.dev package metadata', () {
+    test('pub.dev merge adds provenance but keeps the bundled build data', () {
       final metadata = parsePubDevPackage({
         'latest': {
           'version': '2.2.0',
@@ -51,14 +51,21 @@ environment:
         },
       });
 
-      expect(metadata.version, '2.2.0');
-      expect(metadata.description, 'Live description');
+      // The page reports the build it actually runs (the bundled pubspec);
+      // pub.dev only contributes provenance and live stats.
+      expect(metadata.version, ShowcaseMetadata.fallback.version);
+      expect(metadata.description, ShowcaseMetadata.fallback.description);
+      expect(metadata.latestPubVersion, '2.2.0');
       expect(metadata.hasLivePubDev, isTrue);
       expect(metadata.publishedAt, isNotNull);
-      expect(metadata.platforms.map((platform) => platform.label), [
-        'Windows',
-        'Web',
-      ]);
+      expect(
+        metadata.publishedLabel,
+        'v2.2.0 on pub.dev · ${formatShortDate(metadata.publishedAt!)}',
+      );
+      expect(
+        metadata.platforms.map((platform) => platform.id),
+        ShowcaseMetadata.fallback.platforms.map((platform) => platform.id),
+      );
     });
   });
 }
