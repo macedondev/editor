@@ -33,7 +33,7 @@ class MonacoDiffEditor extends StatefulWidget {
     this.options = const EditorOptions(),
     this.diffOptions = const MonacoDiffOptions(),
     this.page = const MonacoPageConfig(),
-    this.readyTimeout = const Duration(seconds: 20),
+    this.readyTimeout = MonacoDefaults.readyTimeout,
     this.scrollHandoff = const MonacoScrollHandoff.disabled(),
     this.onReady,
     this.onError,
@@ -87,6 +87,12 @@ class MonacoDiffEditor extends StatefulWidget {
   final MonacoScrollHandoff scrollHandoff;
 
   /// The maximum duration to wait for the diff editor to initialize.
+  ///
+  /// Defaults to [MonacoDefaults.readyTimeout]: 20s on native platforms
+  /// (local assets, so expiry means a hung boot) and 90s on web, where the
+  /// cold-cache first load must download the multi-megabyte editor bundle
+  /// and is bound by bandwidth, not by a hang. Hard failures surface
+  /// immediately regardless of this deadline.
   final Duration readyTimeout;
 
   /// Callback invoked when the diff editor is ready.

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
@@ -54,6 +55,11 @@ class MonacoDiffController {
   /// ...), [diff] the diff-specific behavior (side-by-side vs inline,
   /// ...). [original]/[modified]/[language] seed the two models so the
   /// first painted frame already shows the requested diff.
+  ///
+  /// [readyTimeout] bounds the whole boot; it defaults to
+  /// [MonacoDefaults.readyTimeout] (20s on native, 90s on web where the
+  /// cold-cache first load must download the editor bundle over the
+  /// network).
   static Future<MonacoDiffController> create({
     EditorOptions? options,
     MonacoDiffOptions diff = const MonacoDiffOptions(),
@@ -61,7 +67,7 @@ class MonacoDiffController {
     String modified = '',
     MonacoLanguage language = MonacoLanguage.plaintext,
     MonacoPageConfig page = const MonacoPageConfig(),
-    Duration readyTimeout = const Duration(seconds: 20),
+    Duration readyTimeout = MonacoDefaults.readyTimeout,
   }) async {
     await MonacoAssets.ensureReady();
 
@@ -132,7 +138,10 @@ class MonacoDiffController {
           onTimeout: () => throw MonacoTimeoutError(
             message:
                 'Monaco diff editor did not report ready in '
-                '${readyTimeout.inSeconds} seconds.',
+                '${readyTimeout.inSeconds} seconds.'
+                '${kIsWeb ? ' On web the first load downloads the editor '
+                          'bundle; a slow connection can exceed this deadline. '
+                          'Retrying resumes from the browser cache.' : ''}',
             timeout: readyTimeout,
             operation: 'boot',
           ),

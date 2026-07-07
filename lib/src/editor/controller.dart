@@ -148,12 +148,14 @@ class MonacoController {
   ///   [MonacoPageConfig]; changing these requires a new controller.
   /// * [readyTimeout]: Upper bound for the whole boot (asset extraction
   ///   excluded); on expiry [whenReady] completes with a
-  ///   [MonacoTimeoutError].
+  ///   [MonacoTimeoutError]. Defaults to [MonacoDefaults.readyTimeout]
+  ///   (20s on native, 90s on web where the cold-cache first load must
+  ///   download the editor bundle over the network).
   static Future<MonacoController> create({
     EditorOptions? options,
     String? initialText,
     MonacoPageConfig page = const MonacoPageConfig(),
-    Duration readyTimeout = const Duration(seconds: 20),
+    Duration readyTimeout = MonacoDefaults.readyTimeout,
   }) async {
     // Ensure Monaco assets are ready
     await MonacoAssets.ensureReady();
@@ -239,7 +241,10 @@ class MonacoController {
           onTimeout: () => throw MonacoTimeoutError(
             message:
                 'Monaco Editor did not report ready in '
-                '${readyTimeout.inSeconds} seconds.',
+                '${readyTimeout.inSeconds} seconds.'
+                '${kIsWeb ? ' On web the first load downloads the editor '
+                          'bundle; a slow connection can exceed this deadline. '
+                          'Retrying resumes from the browser cache.' : ''}',
             timeout: readyTimeout,
             operation: 'boot',
           ),
