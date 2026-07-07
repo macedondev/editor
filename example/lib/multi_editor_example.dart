@@ -1,8 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 
 import 'monaco_observer.dart';
 
+/// One editor, many documents - the v3 multi-document workflow.
+///
+/// The editor is a viewport; documents are Monaco models you open, switch,
+/// and edit independently:
+///
+/// - [MonacoController.openDocument] opens each file once with a stable
+///   `file:///` URI (language servers key diagnostics on these URIs).
+/// - [MonacoController.activateDocument] switches the visible document;
+///   every document keeps its own undo stack.
+/// - Pinned [MonacoDocument] handles edit their model even while another
+///   document is on screen (see the "log to notes" action).
+/// - [MonacoController.listDocuments] enumerates everything that is open.
 class MultiEditorExample extends StatefulWidget {
   const MultiEditorExample({super.key});
 
@@ -10,370 +24,328 @@ class MultiEditorExample extends StatefulWidget {
   State<MultiEditorExample> createState() => _MultiEditorExampleState();
 }
 
+class _DemoFile {
+  const _DemoFile({
+    required this.name,
+    required this.language,
+    required this.icon,
+    required this.color,
+    required this.content,
+  });
+
+  final String name;
+  final MonacoLanguage language;
+  final IconData icon;
+  final Color color;
+  final String content;
+
+  /// Stable file-like URI: this is what language servers and
+  /// [MonacoController.documentByUri] key on.
+  Uri get uri => Uri.parse('file:///demo/$name');
+}
+
 class _MultiEditorExampleState extends State<MultiEditorExample> {
-  MonacoController? _leftController;
-  MonacoController? _rightController;
-  MonacoController? _bottomController;
-  bool _isLoading = true;
-  String _loadingStatus = 'Initializing editors...';
+  static const List<_DemoFile> _files = [
+    _DemoFile(
+      name: 'main.dart',
+      language: MonacoLanguage.dart,
+      icon: Icons.flutter_dash,
+      color: Colors.blue,
+      content: _dartCode,
+    ),
+    _DemoFile(
+      name: 'app.js',
+      language: MonacoLanguage.javascript,
+      icon: Icons.javascript,
+      color: Colors.orange,
+      content: _jsCode,
+    ),
+    _DemoFile(
+      name: 'NOTES.md',
+      language: MonacoLanguage.markdown,
+      icon: Icons.notes,
+      color: Colors.green,
+      content: _markdownContent,
+    ),
+  ];
 
-  @override
-  void initState() {
-    super.initState();
-    _initializeEditors();
-  }
+  MonacoController? _controller;
 
-  Future<void> _initializeEditors() async {
+  /// Pinned handles from [MonacoController.openDocument], keyed by URI.
+  final Map<Uri, MonacoDocument> _documents = {};
+
+  /// Live dirty flags, driven by [MonacoController.onContentChanged].
+  final Map<Uri, bool> _dirty = {};
+
+  StreamSubscription<MonacoContentChanged>? _contentChanges;
+  int _activeIndex = 0;
+  String? _error;
+
+  Future<void> _onReady(MonacoController controller) async {
     try {
-      setState(() {
-        _loadingStatus = 'Creating left editor (Dart)...';
+      // Open every file as its own document. Opening does not activate.
+      for (final file in _files) {
+        _documents[file.uri] = await controller.openDocument(
+          text: file.content,
+          language: file.language,
+          uri: file.uri,
+        );
+      }
+      await controller.activateDocument(_documents[_files.first.uri]!);
+
+      // Drop the editor's initial scratch model so listDocuments shows
+      // exactly our three files.
+      for (final doc in await controller.listDocuments()) {
+        if (!_documents.containsKey(doc.uri)) {
+          await doc.close();
+        }
+      }
+
+      // Content changes carry the document URI, so one stream can keep
+      // per-tab dirty markers accurate.
+      _contentChanges = controller.onContentChanged.listen((event) async {
+        final uri = event.documentUri;
+        final document = _documents[uri];
+        if (document == null) return;
+        final dirty = await document.isDirty();
+        if (mounted) setState(() => _dirty[uri!] = dirty);
       });
 
-      // Left editor - Dart code
-      _leftController = await MonacoController.create(
-        options: const EditorOptions(
-          language: MonacoLanguage.dart,
-          theme: MonacoTheme.vsDark,
-          fontSize: 14,
-          wordWrap: false,
-          minimap: true,
-          automaticLayout: true,
-        ),
-      );
-      await _leftController!.setValue(_dartCode);
-
-      setState(() {
-        _loadingStatus = 'Creating right editor (JavaScript)...';
-      });
-
-      // Right editor - JavaScript code
-      _rightController = await MonacoController.create(
-        options: const EditorOptions(
-          language: MonacoLanguage.javascript,
-          theme: MonacoTheme.vs,
-          fontSize: 14,
-          wordWrap: false,
-          minimap: true,
-          automaticLayout: true,
-        ),
-      );
-      await _rightController!.setValue(_jsCode);
-
-      setState(() {
-        _loadingStatus = 'Creating bottom editor (Markdown)...';
-      });
-
-      // Bottom editor - Markdown
-      _bottomController = await MonacoController.create(
-        options: const EditorOptions(
-          language: MonacoLanguage.markdown,
-          theme: MonacoTheme.vsDark,
-          fontSize: 15,
-          wordWrap: true,
-          minimap: false,
-          automaticLayout: true,
-          lineNumbers: false,
-        ),
-      );
-      await _bottomController!.setValue(_markdownContent);
-
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() => _controller = controller);
     } catch (e) {
-      debugPrint('Error initializing editors: $e');
-      setState(() {
-        _loadingStatus = 'Error: $e';
-      });
+      if (mounted) setState(() => _error = '$e');
     }
   }
 
   @override
   void dispose() {
-    _leftController?.dispose();
-    _rightController?.dispose();
-    _bottomController?.dispose();
+    _contentChanges?.cancel();
+    // The MonacoEditor widget owns and disposes the controller it created.
     super.dispose();
+  }
+
+  Future<void> _activate(int index) async {
+    final controller = _controller;
+    if (controller == null || index == _activeIndex) return;
+    await controller.activateDocument(_documents[_files[index].uri]!);
+    if (mounted) setState(() => _activeIndex = index);
+  }
+
+  /// Appends a line to NOTES.md through its pinned handle - no activation
+  /// needed; the edit lands even while another document is visible.
+  Future<void> _logToNotes() async {
+    final notes = _documents[_files.last.uri];
+    if (notes == null || !mounted) return;
+    final activeName = _files[_activeIndex].name;
+    final time = TimeOfDay.now().format(context);
+    final lastLine = await notes.lineCount();
+    final lastLineText = await notes.lineAt(lastLine);
+    await notes.insert(
+      Position(line: lastLine, column: lastLineText.length + 1),
+      '\n- [$time] logged from $activeName',
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Appended to NOTES.md (switch tabs to see it)'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+          width: 340,
+        ),
+      );
+    }
+  }
+
+  Future<void> _markActiveSaved() async {
+    final file = _files[_activeIndex];
+    final document = _documents[file.uri];
+    if (document == null) return;
+    await document.markSaved();
+    if (mounted) setState(() => _dirty[file.uri] = false);
+  }
+
+  /// Shows everything the controller has open, straight from
+  /// [MonacoController.listDocuments].
+  Future<void> _showOpenDocuments() async {
+    final controller = _controller;
+    if (controller == null) return;
+    final documents = await controller.listDocuments();
+    final rows = <({String uri, String detail, bool dirty})>[];
+    for (final doc in documents) {
+      final language = await doc.getLanguage();
+      final lines = await doc.lineCount();
+      final dirty = await doc.isDirty();
+      rows.add((
+        uri: '${doc.uri}',
+        detail: '${language.id} - $lines lines',
+        dirty: dirty,
+      ));
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Open documents (${rows.length})'),
+        content: SizedBox(
+          width: 420,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final row in rows)
+                ListTile(
+                  dense: true,
+                  leading: Icon(
+                    row.dirty ? Icons.circle : Icons.description_outlined,
+                    size: row.dirty ? 12 : 20,
+                    color: row.dirty ? Colors.amber : null,
+                  ),
+                  title: Text(row.uri),
+                  subtitle: Text(
+                    row.dirty ? '${row.detail} - unsaved' : row.detail,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('Multi-Editor Example'),
-          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        ),
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              Text(_loadingStatus),
-            ],
-          ),
-        ),
-      );
-    }
-
+    final controller = _controller;
     return MonacoScaffold(
       appBar: AppBar(
-        title: const Text('Multi-Editor Example'),
+        title: const Text('Multi-Document Editor'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          // Copy from left to right
           IconButton(
-            icon: const Icon(Icons.arrow_forward),
-            tooltip: 'Copy Dart → JS',
-            onPressed: () async {
-              final content = await _leftController!.getValue();
-              await _rightController!.setValue(
-                '// Copied from Dart editor:\n/*\n$content\n*/',
-              );
-            },
+            icon: const Icon(Icons.edit_note),
+            tooltip: 'Append a line to NOTES.md in the background',
+            onPressed: controller == null ? null : _logToNotes,
           ),
-          // Copy from right to left
           IconButton(
-            icon: const Icon(Icons.arrow_back),
-            tooltip: 'Copy JS → Dart',
-            onPressed: () async {
-              final content = await _rightController!.getValue();
-              await _leftController!.setValue(
-                '// Copied from JS editor:\n/*\n$content\n*/',
-              );
-            },
-          ),
-          // Sync themes
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.palette),
-            tooltip: 'Sync Themes',
-            onSelected: (theme) async {
-              await Future.wait([
-                _leftController!.setTheme(MonacoTheme.fromId(theme)),
-                _rightController!.setTheme(MonacoTheme.fromId(theme)),
-                _bottomController!.setTheme(MonacoTheme.fromId(theme)),
-              ]);
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'vs-dark', child: Text('All Dark')),
-              const PopupMenuItem(value: 'vs', child: Text('All Light')),
-              const PopupMenuItem(
-                value: 'hc-black',
-                child: Text('All High Contrast'),
-              ),
-            ],
+            icon: const Icon(Icons.save_outlined),
+            tooltip: 'Mark active document saved',
+            onPressed: controller == null ? null : _markActiveSaved,
           ),
         ],
       ),
       body: Column(
         children: [
-          // Keep Flutter dialogs/menus clickable over each editor on Web.
-          MonacoFocusGuard(
-            controller: _leftController!,
-            modalRouteObserver: monacoRouteObserver,
-          ),
-          MonacoFocusGuard(
-            controller: _rightController!,
-            modalRouteObserver: monacoRouteObserver,
-          ),
-          MonacoFocusGuard(
-            controller: _bottomController!,
-            modalRouteObserver: monacoRouteObserver,
-          ),
-          // Top section - Split view
-          Expanded(
-            flex: 2,
-            child: Row(
-              children: [
-                // Left editor with stats
-                Expanded(
-                  child: Column(
-                    children: [
-                      _buildEditorHeader(
-                        'Dart Code',
-                        _leftController!,
-                        Colors.blue,
-                      ),
-                      Expanded(child: _leftController!.webViewWidget),
-                    ],
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                // Right editor with stats
-                Expanded(
-                  child: Column(
-                    children: [
-                      _buildEditorHeader(
-                        'JavaScript Code',
-                        _rightController!,
-                        Colors.orange,
-                      ),
-                      Expanded(child: _rightController!.webViewWidget),
-                    ],
-                  ),
-                ),
-              ],
+          // Keep Flutter dialogs/menus clickable over the editor on Web.
+          if (controller != null)
+            MonacoFocusGuard(
+              controller: controller,
+              modalRouteObserver: monacoRouteObserver,
             ),
-          ),
-          const Divider(height: 1),
-          // Bottom section - Markdown editor
+          _buildTabBar(),
+          if (_error != null)
+            MaterialBanner(
+              content: Text('Failed to open documents: $_error'),
+              backgroundColor: Colors.red.shade100,
+              actions: const [SizedBox.shrink()],
+            ),
           Expanded(
-            flex: 1,
-            child: Column(
-              children: [
-                _buildEditorHeader(
-                  'Markdown Notes',
-                  _bottomController!,
-                  Colors.green,
-                ),
-                Expanded(child: _bottomController!.webViewWidget),
-              ],
+            child: MonacoEditor(
+              options: const EditorOptions(
+                theme: MonacoTheme.vsDark,
+                minimap: MonacoMinimapOptions(enabled: true),
+              ),
+              showStatusBar: true,
+              onReady: (c) => unawaited(_onReady(c)),
             ),
           ),
         ],
       ),
       // MonacoScaffold wraps this in a MonacoOverlayBoundary on Web so the
-      // underlying Monaco iframes do not swallow the click.
+      // underlying Monaco iframe does not swallow the click.
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          // Get content from all editors
-          final dartContent = await _leftController!.getValue();
-          final jsContent = await _rightController!.getValue();
-          final mdContent = await _bottomController!.getValue();
-
-          if (context.mounted) {
-            showDialog(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('All Editor Contents'),
-                content: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('Dart (${dartContent.length} chars)'),
-                      const SizedBox(height: 8),
-                      Text('JavaScript (${jsContent.length} chars)'),
-                      const SizedBox(height: 8),
-                      Text('Markdown (${mdContent.length} chars)'),
-                    ],
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close'),
-                  ),
-                ],
-              ),
-            );
-          }
-        },
-        label: const Text('Get All Content'),
-        icon: const Icon(Icons.download),
+        onPressed: controller == null ? null : _showOpenDocuments,
+        label: const Text('Open Documents'),
+        icon: const Icon(Icons.folder_open),
       ),
     );
   }
 
-  Widget _buildEditorHeader(
-    String title,
-    MonacoController controller,
-    Color color,
-  ) {
+  Widget _buildTabBar() {
     return Container(
-      height: 32,
-      color: color.withValues(alpha: 0.1),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      height: 40,
+      color: const Color(0xFF252526),
       child: Row(
         children: [
-          Icon(Icons.code, size: 16, color: color),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: TextStyle(fontWeight: FontWeight.bold, color: color),
-          ),
+          for (var i = 0; i < _files.length; i++)
+            _buildTab(_files[i], index: i, active: i == _activeIndex),
           const Spacer(),
-          // Live stats
-          ValueListenableBuilder<LiveStats>(
-            valueListenable: controller.liveStats,
-            builder: (context, stats, _) {
-              return Row(
-                children: [
-                  if (stats.language != null) ...[
-                    Chip(
-                      label: Text(
-                        stats.language!,
-                        style: const TextStyle(fontSize: 10),
-                      ),
-                      padding: EdgeInsets.zero,
-                      labelPadding: const EdgeInsets.symmetric(horizontal: 6),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  Text(
-                    'L:${stats.lineCount.value} C:${stats.charCount.value}',
-                    style: TextStyle(fontSize: 11, color: color),
-                  ),
-                  if (stats.hasSelection) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      'Sel:${stats.selectedCharacters.value}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ],
-              );
-            },
-          ),
+          if (_controller == null)
+            const Padding(
+              padding: EdgeInsets.only(right: 12),
+              child: SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
         ],
       ),
     );
   }
 
+  Widget _buildTab(_DemoFile file, {required int index, required bool active}) {
+    final dirty = _dirty[file.uri] ?? false;
+    return InkWell(
+      onTap: _controller == null ? null : () => unawaited(_activate(index)),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF1E1E1E) : Colors.transparent,
+          border: Border(
+            top: BorderSide(
+              color: active ? file.color : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(file.icon, size: 16, color: file.color),
+            const SizedBox(width: 8),
+            Text(
+              file.name,
+              style: TextStyle(
+                color: active ? Colors.white : Colors.white60,
+                fontSize: 13,
+              ),
+            ),
+            if (dirty) ...[
+              const SizedBox(width: 6),
+              const Icon(Icons.circle, size: 8, color: Colors.amber),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   static const String _dartCode = '''
-// Dart Example - Flutter Widget
+// main.dart - opened as file:///demo/main.dart
 import 'package:flutter/material.dart';
 
-class MyWidget extends StatefulWidget {
-  final String title;
-  final VoidCallback? onPressed;
-  
-  const MyWidget({
-    super.key,
-    required this.title,
-    this.onPressed,
-  });
+void main() => runApp(const DemoApp());
 
-  @override
-  State<MyWidget> createState() => _MyWidgetState();
-}
+class DemoApp extends StatelessWidget {
+  const DemoApp({super.key});
 
-class _MyWidgetState extends State<MyWidget> {
-  int _counter = 0;
-  
-  void _incrementCounter() {
-    setState(() {
-      _counter++;
-    });
-    widget.onPressed?.call();
-  }
-  
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: ListTile(
-        title: Text(widget.title),
-        subtitle: Text('Counter: \$_counter'),
-        trailing: IconButton(
-          icon: const Icon(Icons.add),
-          onPressed: _incrementCounter,
-        ),
+    return const MaterialApp(
+      home: Scaffold(
+        body: Center(child: Text('One editor, many documents')),
       ),
     );
   }
@@ -381,79 +353,36 @@ class _MyWidgetState extends State<MyWidget> {
 ''';
 
   static const String _jsCode = '''
-// JavaScript Example - React Component
-import React, { useState, useCallback } from 'react';
-import { Card, Button, Badge } from '@/components/ui';
-
-export function CounterWidget({ title, onCountChange }) {
-  const [count, setCount] = useState(0);
-  
-  const handleIncrement = useCallback(() => {
-    const newCount = count + 1;
-    setCount(newCount);
-    onCountChange?.(newCount);
-  }, [count, onCountChange]);
-  
-  const handleDecrement = useCallback(() => {
-    const newCount = Math.max(0, count - 1);
-    setCount(newCount);
-    onCountChange?.(newCount);
-  }, [count, onCountChange]);
-  
-  return (
-    <Card className="p-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">{title}</h3>
-        <Badge variant="secondary">{count}</Badge>
-      </div>
-      <div className="mt-4 flex gap-2">
-        <Button onClick={handleDecrement} variant="outline">
-          Decrement
-        </Button>
-        <Button onClick={handleIncrement}>
-          Increment
-        </Button>
-      </div>
-    </Card>
-  );
+// app.js - opened as file:///demo/app.js
+export function counter(start = 0) {
+  let count = start;
+  return {
+    increment: () => ++count,
+    decrement: () => Math.max(0, --count),
+    get value() { return count; },
+  };
 }
+
+const demo = counter();
+demo.increment();
+console.log(`count is now \${demo.value}`);
 ''';
 
   static const String _markdownContent = '''
-# Multi-Editor Demo
+# Multi-Document Notes
 
-This example demonstrates **three independent Monaco editors** running simultaneously:
+All three tabs share **one** Monaco editor. Each tab is a document opened
+with `controller.openDocument(text: ..., language: ..., uri: ...)`.
 
-## Features Demonstrated
+Try it:
 
-1. **Multiple Languages**: Each editor has different syntax highlighting
-   - Left: Dart with dark theme
-   - Right: JavaScript with light theme  
-   - Bottom: Markdown with word wrap
+- Edit a file, switch tabs, switch back: undo history survives.
+- Watch the amber dot appear on edited tabs (`onContentChanged` +
+  `document.isDirty()`).
+- Press the note icon in the app bar while another tab is active: the
+  pinned `MonacoDocument` handle writes here in the background.
+- Press "Open Documents" to see `listDocuments()`.
 
-2. **Independent Configuration**: Each editor has its own:
-   - Theme settings
-   - Font sizes
-   - Minimap preferences
-   - Line number visibility
-
-3. **Live Statistics**: Each header shows real-time:
-   - Line count
-   - Character count
-   - Selection info
-   - Language mode
-
-## Try These Actions
-
-- [ ] Select text in any editor
-- [ ] Use the arrow buttons to copy between editors
-- [ ] Change all themes at once with the palette button
-- [ ] Edit content and watch stats update
-- [ ] Resize the window - editors auto-layout
-
-## Performance
-
-Notice how smooth everything runs even with 3 editors! 
-Each maintains its own state and WebView instance.
+## Log
 ''';
 }

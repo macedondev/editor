@@ -113,8 +113,8 @@ class ShowcaseMetadata {
   final bool hasLivePubDev;
   final bool hasLiveGitHub;
 
-  int get typedLanguageCount => MonacoLanguage.values.length;
-  int get builtInThemeCount => MonacoTheme.values.length;
+  int get typedLanguageCount => MonacoLanguage.builtIn.length;
+  int get builtInThemeCount => MonacoTheme.builtIn.length;
   int get showcasedThemeCount => PlaygroundThemeCount.total;
 
   String get versionLabel => 'v$version';
@@ -206,7 +206,7 @@ class ShowcaseMetadata {
 
 abstract final class PlaygroundThemeCount {
   static const int custom = 1;
-  static int get total => MonacoTheme.values.length + custom;
+  static int get total => MonacoTheme.builtIn.length + custom;
 }
 
 class ShowcaseMetadataLoader {

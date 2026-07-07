@@ -1,4 +1,4 @@
-import 'package:flutter_monaco/src/platform/web_view_controller/web_asset_resolver.dart';
+import 'package:flutter_monaco/src/platform/web_asset_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -3,18 +3,21 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('MonacoLanguage', () {
-    test('fromId should return correct language enum', () {
-      expect(MonacoLanguage.fromId('javascript'), MonacoLanguage.javascript);
-      expect(MonacoLanguage.fromId('typescript'), MonacoLanguage.typescript);
-      expect(MonacoLanguage.fromId('dart'), MonacoLanguage.dart);
-      expect(MonacoLanguage.fromId('python'), MonacoLanguage.python);
+    test('constructor resolves built-in language ids', () {
+      expect(const MonacoLanguage('javascript'), MonacoLanguage.javascript);
+      expect(const MonacoLanguage('typescript'), MonacoLanguage.typescript);
+      expect(const MonacoLanguage('dart'), MonacoLanguage.dart);
+      expect(const MonacoLanguage('python'), MonacoLanguage.python);
     });
 
-    test('fromId should return markdown for unknown language', () {
-      expect(MonacoLanguage.fromId('unknown-lang'), MonacoLanguage.markdown);
+    test('unknown language ids stay custom instead of falling back', () {
+      const custom = MonacoLanguage('unknown-lang');
+      expect(custom.id, 'unknown-lang');
+      expect(custom.isBuiltIn, false);
+      expect(custom.label, isNull);
     });
 
-    test('language id should match enum name', () {
+    test('language id should match catalog id', () {
       expect(MonacoLanguage.javascript.id, 'javascript');
       expect(MonacoLanguage.python.id, 'python');
       expect(MonacoLanguage.dart.id, 'dart');
@@ -22,15 +25,18 @@ void main() {
   });
 
   group('MonacoTheme', () {
-    test('fromId should return correct theme enum', () {
-      expect(MonacoTheme.fromId('vs'), MonacoTheme.vs);
-      expect(MonacoTheme.fromId('vs-dark'), MonacoTheme.vsDark);
-      expect(MonacoTheme.fromId('hc-black'), MonacoTheme.hcBlack);
-      expect(MonacoTheme.fromId('hc-light'), MonacoTheme.hcLight);
+    test('constructor resolves built-in theme ids', () {
+      expect(const MonacoTheme('vs'), MonacoTheme.vs);
+      expect(const MonacoTheme('vs-dark'), MonacoTheme.vsDark);
+      expect(const MonacoTheme('hc-black'), MonacoTheme.hcBlack);
+      expect(const MonacoTheme('hc-light'), MonacoTheme.hcLight);
     });
 
-    test('fromId should return vsDark for unknown theme', () {
-      expect(MonacoTheme.fromId('unknown-theme'), MonacoTheme.vsDark);
+    test('unknown theme ids stay custom instead of falling back', () {
+      const custom = MonacoTheme('unknown-theme');
+      expect(custom.id, 'unknown-theme');
+      expect(custom.isBuiltIn, false);
+      expect(custom.label, isNull);
     });
 
     test('theme id should match expected values', () {
@@ -42,13 +48,22 @@ void main() {
   });
 
   group('EditorOptions', () {
-    test('should create with default values', () {
+    test('default construction leaves every field unset', () {
       const options = EditorOptions();
-      expect(options.fontSize, 14);
-      expect(options.tabSize, 4);
-      expect(options.wordWrap, true);
-      expect(options.minimap, false);
-      expect(options.lineNumbers, true);
+      expect(options.fontSize, isNull);
+      expect(options.tabSize, isNull);
+      expect(options.wordWrap, isNull);
+      expect(options.minimap, isNull);
+      expect(options.lineNumbers, isNull);
+    });
+
+    test('MonacoDefaults.editorOptions carries the curated boot defaults', () {
+      const defaults = MonacoDefaults.editorOptions;
+      expect(defaults.fontSize, 14);
+      expect(defaults.tabSize, 4);
+      expect(defaults.wordWrap, MonacoWordWrap.on);
+      expect(defaults.minimap, const MonacoMinimapOptions(enabled: false));
+      expect(defaults.lineNumbers, MonacoLineNumbers.on);
     });
 
     test('should create with custom values', () {
@@ -57,15 +72,15 @@ void main() {
         theme: MonacoTheme.vsDark,
         fontSize: 16,
         tabSize: 2,
-        wordWrap: true,
-        minimap: false,
+        wordWrap: MonacoWordWrap.on,
+        minimap: MonacoMinimapOptions(enabled: false),
       );
       expect(options.language, MonacoLanguage.python);
       expect(options.theme, MonacoTheme.vsDark);
       expect(options.fontSize, 16);
       expect(options.tabSize, 2);
-      expect(options.wordWrap, true);
-      expect(options.minimap, false);
+      expect(options.wordWrap, MonacoWordWrap.on);
+      expect(options.minimap, const MonacoMinimapOptions(enabled: false));
     });
   });
 }

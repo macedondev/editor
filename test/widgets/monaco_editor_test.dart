@@ -86,13 +86,16 @@ void main() {
         tester,
       ) async {
         final bundle = await _createBundle();
-        bundle.webview.throwOnContains('setValue');
+        bundle.webview.injectCommandFailure(
+          'document.setText',
+          message: 'boom',
+        );
 
         await tester.pumpWidget(
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'trigger error',
+              initialText: 'trigger error',
             ),
           ),
         );
@@ -111,7 +114,10 @@ void main() {
           failingWebview = FakePlatformWebViewController(
             widget: const SizedBox(key: Key('webview')),
           );
-          failingWebview!.throwOnContains('setValue');
+          failingWebview!.injectCommandFailure(
+            'document.setText',
+            message: 'boom',
+          );
           return MonacoController.createForTesting(
             webViewController: failingWebview!,
             markReady: true,
@@ -119,7 +125,7 @@ void main() {
         }
 
         await tester.pumpWidget(
-          _wrap(MonacoEditor(controllerFactory: factory, initialValue: 'boom')),
+          _wrap(MonacoEditor(controllerFactory: factory, initialText: 'boom')),
         );
         await tester.pump();
 
@@ -164,13 +170,16 @@ void main() {
 
       testWidgets('custom errorBuilder is used', (tester) async {
         final bundle = await _createBundle();
-        bundle.webview.throwOnContains('setValue');
+        bundle.webview.injectCommandFailure(
+          'document.setText',
+          message: 'boom',
+        );
 
         await tester.pumpWidget(
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'trigger',
+              initialText: 'trigger',
               errorBuilder: (context, error, st) =>
                   Text('Custom Error: $error'),
             ),
@@ -183,50 +192,55 @@ void main() {
     });
 
     group('initial values', () {
-      testWidgets('initialValue applied once', (tester) async {
+      testWidgets('initialText applied once', (tester) async {
         final bundle = await _createBundle();
         await tester.pumpWidget(
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'initial content',
+              initialText: 'initial content',
             ),
           ),
         );
         await tester.pump();
 
-        final setValueScripts = bundle.webview.scriptsContaining('"setValue"');
-        expect(setValueScripts.length, 1);
-        expect(setValueScripts.first, contains('"initial content"'));
+        final setTextCalls = bundle.webview.dispatched
+            .where((d) => d['method'] == 'document.setText')
+            .toList();
+        expect(setTextCalls.length, 1);
+        expect(
+          (setTextCalls.single['params']! as Map)['text'],
+          'initial content',
+        );
 
-        // Update widget with different initialValue
+        // Update widget with different initialText
         await tester.pumpWidget(
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'new content',
+              initialText: 'new content',
             ),
           ),
         );
         await tester.pump();
 
-        // Should NOT set the new value (initialValue is applied only once)
+        // Should NOT set the new value (initialText is applied only once)
         expect(
-          bundle.webview.scriptsContaining('"setValue"').length,
+          bundle.webview.dispatched
+              .where((d) => d['method'] == 'document.setText')
+              .length,
           1,
-          reason: 'initialValue must only be applied during initial bootstrap',
+          reason: 'initialText must only be applied during initial bootstrap',
         );
       });
 
-      testWidgets('initialSelection applied after initialValue', (
-        tester,
-      ) async {
+      testWidgets('initialSelection applied after initialText', (tester) async {
         final bundle = await _createBundle();
         await tester.pumpWidget(
           _wrap(
             MonacoEditor(
               controller: bundle.controller,
-              initialValue: 'content',
+              initialText: 'content',
               initialSelection: const Range(
                 startLine: 1,
                 startColumn: 1,
@@ -238,9 +252,11 @@ void main() {
         );
         await tester.pump();
 
-        final scripts = bundle.webview.executed;
-        final valueIndex = scripts.indexWhere((s) => s.contains('setValue'));
-        final selIndex = scripts.indexWhere((s) => s.contains('setSelection'));
+        final methods = bundle.webview.dispatched
+            .map((d) => d['method'])
+            .toList();
+        final valueIndex = methods.indexOf('document.setText');
+        final selIndex = methods.indexOf('editor.setSelection');
 
         expect(valueIndex, greaterThanOrEqualTo(0));
         expect(selIndex, greaterThan(valueIndex));
@@ -281,9 +297,9 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.assertExecuted('updateOptions');
-        bundle.webview.assertExecuted('setTheme');
-        bundle.webview.assertExecuted('setLanguage');
+        bundle.webview.assertExecuted('editor.updateOptions');
+        bundle.webview.assertExecuted('editor.setTheme');
+        bundle.webview.assertExecuted('document.setLanguage');
       });
 
       testWidgets('same options do not trigger updates', (tester) async {
@@ -310,7 +326,7 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.assertNotExecuted('updateOptions');
+        bundle.webview.assertNotExecuted('editor.updateOptions');
       });
     });
 
@@ -328,7 +344,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 100));
           await tester.pumpAndSettle();
 
-          bundle.webview.assertExecuted('forceFocus');
+          bundle.webview.assertExecuted('focus.force');
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -345,7 +361,7 @@ void main() {
           );
           await tester.pumpAndSettle();
 
-          bundle.webview.assertNotExecuted('forceFocus');
+          bundle.webview.assertNotExecuted('focus.force');
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -358,7 +374,7 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.assertNotExecuted('forceFocus');
+        bundle.webview.assertNotExecuted('focus.force');
       });
     });
 
@@ -447,7 +463,7 @@ void main() {
           await gesture.up();
 
           expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
-          bundle.webview.assertExecuted('forceFocus');
+          bundle.webview.assertExecuted('focus.force');
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -479,7 +495,7 @@ void main() {
             bundle.webview.executed,
             isNot(contains('REQUEST_NATIVE_FOCUS')),
           );
-          bundle.webview.assertNotExecuted('forceFocus');
+          bundle.webview.assertNotExecuted('focus.force');
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -508,7 +524,7 @@ void main() {
             // Monaco reports the editor focused after the first click, but on
             // macOS that cached DOM focus is not proof of native input
             // readiness, so every primary click still routes a user intent.
-            bundle.webview.emitToChannel('flutterChannel', '{"event":"focus"}');
+            bundle.webview.emitEvent('focusChanged', {'focused': true});
             await tester.pump();
 
             // Without the native plugin (fake default: unsupported), the
@@ -523,9 +539,8 @@ void main() {
             await second.up();
 
             expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
-            bundle.webview.assertExecuted(
-              'forceFocus({ replayInputFocus: true })',
-            );
+            bundle.webview.assertExecuted('focus.force');
+            bundle.webview.assertExecuted('"replayInputFocus":true');
 
             // With a working native handoff, the same click verifies first
             // responder state and must NOT replay (no caret double-blink).
@@ -540,8 +555,8 @@ void main() {
             await third.up();
 
             expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
-            bundle.webview.assertExecuted('forceFocus()');
-            bundle.webview.assertNotExecuted('replayInputFocus');
+            bundle.webview.assertExecuted('"replayInputFocus":false');
+            bundle.webview.assertNotExecuted('"replayInputFocus":true');
           } finally {
             debugDefaultTargetPlatformOverride = null;
           }
@@ -570,7 +585,7 @@ void main() {
           // Monaco reports the editor focused after the first click; Windows
           // must not replay focus because WebView2 focus replay flickers the
           // caret and can tear down the context menu.
-          bundle.webview.emitToChannel('flutterChannel', '{"event":"focus"}');
+          bundle.webview.emitEvent('focusChanged', {'focused': true});
           await tester.pump();
 
           bundle.webview.executed.clear();
@@ -586,7 +601,7 @@ void main() {
             bundle.webview.executed,
             isNot(contains('REQUEST_NATIVE_FOCUS')),
           );
-          bundle.webview.assertNotExecuted('forceFocus');
+          bundle.webview.assertNotExecuted('focus.force');
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -613,12 +628,12 @@ void main() {
             await first.down(target);
             await tester.pumpAndSettle();
             await first.up();
-            bundle.webview.emitToChannel('flutterChannel', '{"event":"focus"}');
+            bundle.webview.emitEvent('focusChanged', {'focused': true});
             await tester.pump();
 
             // The editor silently loses native focus (alt-tab / dialog): Monaco
             // reports a blur while Flutter still thinks the view is focused.
-            bundle.webview.emitToChannel('flutterChannel', '{"event":"blur"}');
+            bundle.webview.emitEvent('focusChanged', {'focused': false});
             await tester.pump();
             bundle.webview.executed.clear();
 
@@ -632,7 +647,7 @@ void main() {
             await second.up();
 
             expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
-            bundle.webview.assertExecuted('forceFocus');
+            bundle.webview.assertExecuted('focus.force');
           } finally {
             debugDefaultTargetPlatformOverride = null;
           }
@@ -646,8 +661,8 @@ void main() {
       ) async {
         final bundle = await _createBundle();
         final calls = <String>[];
-        bundle.webview.injectCommandSuccess('getValue', value: 'A');
-        bundle.webview.injectCommandSuccess('getValue', value: 'B');
+        bundle.webview.injectCommandSuccess('document.getText', value: 'A');
+        bundle.webview.injectCommandSuccess('document.getText', value: 'B');
 
         await tester.pumpWidget(
           _wrap(
@@ -660,14 +675,8 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":false}',
-        );
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":false}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': false});
+        bundle.webview.emitEvent('contentChanged', {'isFlush': false});
 
         // Before debounce completes
         await tester.pump(const Duration(milliseconds: 10));
@@ -681,7 +690,10 @@ void main() {
       testWidgets('flush event bypasses debounce', (tester) async {
         final bundle = await _createBundle();
         final calls = <String>[];
-        bundle.webview.injectCommandSuccess('getValue', value: 'flushed');
+        bundle.webview.injectCommandSuccess(
+          'document.getText',
+          value: 'flushed',
+        );
 
         await tester.pumpWidget(
           _wrap(
@@ -694,10 +706,7 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":true}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': true});
         await tester.pump();
 
         expect(calls.length, 1);
@@ -709,7 +718,10 @@ void main() {
       ) async {
         final bundle = await _createBundle();
         final calls = <String>[];
-        bundle.webview.injectCommandSuccess('getValue', value: 'content');
+        bundle.webview.injectCommandSuccess(
+          'document.getText',
+          value: 'content',
+        );
 
         await tester.pumpWidget(
           _wrap(
@@ -722,17 +734,11 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":false}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': false});
         await tester.pump(const Duration(milliseconds: 200));
         expect(calls.length, 0);
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":true}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': true});
         await tester.pump();
         expect(calls.length, 1);
       });
@@ -751,14 +757,8 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":false}',
-        );
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":true}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': false});
+        bundle.webview.emitEvent('contentChanged', {'isFlush': true});
         await tester.pump();
 
         expect(flags, [false, true]);
@@ -768,8 +768,8 @@ void main() {
         final bundle = await _createBundle();
         final calls1 = <String>[];
         final calls2 = <String>[];
-        bundle.webview.injectCommandSuccess('getValue', value: 'v1');
-        bundle.webview.injectCommandSuccess('getValue', value: 'v2');
+        bundle.webview.injectCommandSuccess('document.getText', value: 'v1');
+        bundle.webview.injectCommandSuccess('document.getText', value: 'v2');
 
         await tester.pumpWidget(
           _wrap(
@@ -782,10 +782,7 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":true}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': true});
         await tester.pump();
         expect(calls1.length, 1);
 
@@ -801,10 +798,7 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":true}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': true});
         await tester.pump();
 
         expect(calls1.length, 1); // Original not called again
@@ -831,12 +825,16 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"selectionChanged","selection":{"startLineNumber":1,"startColumn":1,"endLineNumber":1,"endColumn":2}}',
-        );
-        bundle.webview.emitToChannel('flutterChannel', '{"event":"focus"}');
-        bundle.webview.emitToChannel('flutterChannel', '{"event":"blur"}');
+        bundle.webview.emitEvent('selectionChanged', {
+          'selection': {
+            'startLineNumber': 1,
+            'startColumn': 1,
+            'endLineNumber': 1,
+            'endColumn': 2,
+          },
+        });
+        bundle.webview.emitEvent('focusChanged', {'focused': true});
+        bundle.webview.emitEvent('focusChanged', {'focused': false});
         await tester.pump();
 
         expect(selectionCount, 1);
@@ -846,7 +844,7 @@ void main() {
 
       testWidgets('onLiveStats receives updates', (tester) async {
         final bundle = await _createBundle();
-        final stats = <LiveStats>[];
+        final stats = <MonacoLiveStats>[];
 
         await tester.pumpWidget(
           _wrap(
@@ -855,14 +853,11 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"stats","lineCount":10,"charCount":50}',
-        );
+        bundle.webview.emitEvent('stats', {'lineCount': 10, 'charCount': 50});
         await tester.pump();
 
         expect(stats.length, 1);
-        expect(stats.first.lineCount.value, 10);
+        expect(stats.first.lineCount, 10);
       });
     });
 
@@ -876,13 +871,17 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"stats","lineCount":25,"charCount":100,"cursorLine":5,"cursorColumn":10}',
-        );
+        bundle.webview.emitEvent('stats', {
+          'lineCount': 25,
+          'charCount': 100,
+          'cursorLine': 5,
+          'cursorColumn': 10,
+        });
+        // One pump delivers the protocol event, the next renders the update.
+        await tester.pump();
         await tester.pump();
 
-        expect(find.text('Ln 5:10'), findsOneWidget);
+        expect(find.text('Ln 5, Col 10'), findsOneWidget);
         expect(find.text('Ch 100'), findsOneWidget);
       });
 
@@ -893,16 +892,15 @@ void main() {
             MonacoEditor(
               controller: bundle.controller,
               statusBarBuilder: (context, stats) =>
-                  Text('Lines: ${stats.lineCount.value}'),
+                  Text('Lines: ${stats.lineCount}'),
             ),
           ),
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"stats","lineCount":42}',
-        );
+        bundle.webview.emitEvent('stats', {'lineCount': 42});
+        // One pump delivers the protocol event, the next renders the update.
+        await tester.pump();
         await tester.pump();
 
         expect(find.text('Lines: 42'), findsOneWidget);
@@ -930,10 +928,13 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"stats","lineCount":42,"cursorLine":2,"cursorColumn":3}',
-        );
+        bundle.webview.emitEvent('stats', {
+          'lineCount': 42,
+          'cursorLine': 2,
+          'cursorColumn': 3,
+        });
+        // One pump delivers the protocol event, the next renders the update.
+        await tester.pump();
         await tester.pump();
 
         final container = tester.widget<Container>(
@@ -946,7 +947,7 @@ void main() {
         );
         final decoration = container.decoration! as BoxDecoration;
         expect(decoration.color, Colors.black);
-        expect(find.text('Ln 2:3'), findsOneWidget);
+        expect(find.text('Ln 2, Col 3'), findsOneWidget);
       });
 
       testWidgets('status bar hidden when showStatusBar false', (tester) async {
@@ -968,8 +969,8 @@ void main() {
         final bundleA = await _createBundle();
         final bundleB = await _createBundle();
         final calls = <String>[];
-        bundleA.webview.injectCommandSuccess('getValue', value: 'A');
-        bundleB.webview.injectCommandSuccess('getValue', value: 'B');
+        bundleA.webview.injectCommandSuccess('document.getText', value: 'A');
+        bundleB.webview.injectCommandSuccess('document.getText', value: 'B');
 
         await tester.pumpWidget(
           _wrap(
@@ -994,26 +995,20 @@ void main() {
         await tester.pumpAndSettle();
 
         // Old controller event should not trigger callback
-        bundleA.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":true}',
-        );
+        bundleA.webview.emitEvent('contentChanged', {'isFlush': true});
         await tester.pump();
         expect(calls.length, 0);
 
         // New controller event should trigger
-        bundleB.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":true}',
-        );
+        bundleB.webview.emitEvent('contentChanged', {'isFlush': true});
         await tester.pump();
         expect(calls.length, 1);
         expect(calls.first, 'B');
       });
     });
 
-    group('customCss handling', () {
-      testWidgets('customCss change does not rebuild when not owned', (
+    group('page config handling', () {
+      testWidgets('page change does not rebuild when not owned', (
         tester,
       ) async {
         final bundle = await _createBundle();
@@ -1024,7 +1019,6 @@ void main() {
             MonacoEditor(
               controller: bundle.controller,
               onReady: (_) => readyCount++,
-              customCss: null,
             ),
           ),
         );
@@ -1035,7 +1029,9 @@ void main() {
             MonacoEditor(
               controller: bundle.controller,
               onReady: (_) => readyCount++,
-              customCss: 'body { background: red; }',
+              page: const MonacoPageConfig(
+                customCss: 'body { background: red; }',
+              ),
             ),
           ),
         );
@@ -1044,7 +1040,7 @@ void main() {
         expect(readyCount, 1); // Not rebuilt
       });
 
-      testWidgets('customCss change rebuilds when owned', (tester) async {
+      testWidgets('page change rebuilds when owned', (tester) async {
         var factoryCalls = 0;
         final webviews = <FakePlatformWebViewController>[];
 
@@ -1061,7 +1057,7 @@ void main() {
         }
 
         await tester.pumpWidget(
-          _wrap(MonacoEditor(controllerFactory: factory, customCss: null)),
+          _wrap(MonacoEditor(controllerFactory: factory)),
         );
         await tester.pump();
 
@@ -1069,7 +1065,9 @@ void main() {
           _wrap(
             MonacoEditor(
               controllerFactory: factory,
-              customCss: 'body { background: red; }',
+              page: const MonacoPageConfig(
+                customCss: 'body { background: red; }',
+              ),
             ),
           ),
         );
@@ -1102,7 +1100,6 @@ void main() {
           _wrap(
             MonacoEditor(
               controllerFactory: factory,
-              customCss: null,
               onReady: (_) => readyCount++,
             ),
           ),
@@ -1113,7 +1110,9 @@ void main() {
           _wrap(
             MonacoEditor(
               controllerFactory: factory,
-              customCss: 'body { background: red; }',
+              page: const MonacoPageConfig(
+                customCss: 'body { background: red; }',
+              ),
               onReady: (_) => readyCount++,
             ),
           ),
@@ -1134,7 +1133,7 @@ void main() {
       testWidgets('dispose cancels debounce timers', (tester) async {
         final bundle = await _createBundle();
         final calls = <String>[];
-        bundle.webview.injectCommandSuccess('getValue', value: 'A');
+        bundle.webview.injectCommandSuccess('document.getText', value: 'A');
 
         await tester.pumpWidget(
           _wrap(
@@ -1147,10 +1146,7 @@ void main() {
         );
         await tester.pump();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":false}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': false});
 
         // Dispose before debounce completes
         await tester.pumpWidget(const SizedBox.shrink());
@@ -1236,11 +1232,9 @@ void main() {
           reason: 'setBackgroundColor must hit the native WebView container',
         );
 
-        // Host page recolor was invoked through the bridge envelope.
+        // Host page recolor was invoked through the protocol dispatch.
         expect(
-          bundle.webview
-              .scriptsContaining('"setHostPageBackground"')
-              .isNotEmpty,
+          bundle.webview.scriptsContaining('page.setBackground').isNotEmpty,
           true,
           reason:
               'backgroundColor should also recolor Monaco\'s HTML host page',
@@ -1251,7 +1245,10 @@ void main() {
         'host-page background failure does not break initialization',
         (tester) async {
           final bundle = await _createBundle();
-          bundle.webview.throwOnContains('"setHostPageBackground"');
+          bundle.webview.injectCommandFailure(
+            'page.setBackground',
+            message: 'host page recolor failed',
+          );
 
           await tester.pumpWidget(
             _wrap(
@@ -1418,7 +1415,10 @@ void main() {
         tester,
       ) async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandFailure('setValue', message: 'fail');
+        bundle.webview.injectCommandFailure(
+          'document.setText',
+          message: 'fail',
+        );
 
         await tester.pumpWidget(
           _wrap(
@@ -1426,7 +1426,7 @@ void main() {
               data: const MonacoEditorThemeData(errorIconColor: Colors.purple),
               child: MonacoEditor(
                 controller: bundle.controller,
-                initialValue: 'trigger',
+                initialText: 'trigger',
               ),
             ),
           ),
@@ -1528,6 +1528,82 @@ void main() {
           expect(capturedTheme!.statusBarBackgroundColor, Colors.black);
         },
       );
+    });
+    group('ambient theme (D27)', () {
+      List<Object?> themeDispatches(FakePlatformWebViewController webview) {
+        return webview.dispatched
+            .where((d) => d['method'] == 'editor.setTheme')
+            .map((d) => (d['params']! as Map<String, Object?>)['theme'])
+            .toList();
+      }
+
+      Widget wrapWithBrightness(Brightness brightness, Widget child) {
+        return MaterialApp(
+          theme: ThemeData(brightness: brightness),
+          home: Scaffold(body: child),
+        );
+      }
+
+      testWidgets('null theme follows ambient brightness changes', (
+        tester,
+      ) async {
+        final bundle = await _createBundle();
+        Future<MonacoController> factory() async => bundle.controller;
+
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.light,
+            MonacoEditor(controllerFactory: factory),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).last, 'vs');
+
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.dark,
+            MonacoEditor(controllerFactory: factory),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).last, 'vs-dark');
+
+        // Same brightness again: deduped, no extra bridge traffic.
+        final dispatchCount = themeDispatches(bundle.webview).length;
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.dark,
+            MonacoEditor(controllerFactory: factory),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).length, dispatchCount);
+      });
+
+      testWidgets('explicit theme never reacts to brightness', (tester) async {
+        final bundle = await _createBundle();
+        Future<MonacoController> factory() async => bundle.controller;
+        const options = EditorOptions(theme: MonacoTheme.vsDark);
+
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.light,
+            MonacoEditor(controllerFactory: factory, options: options),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).last, 'vs-dark');
+        final dispatchCount = themeDispatches(bundle.webview).length;
+
+        await tester.pumpWidget(
+          wrapWithBrightness(
+            Brightness.dark,
+            MonacoEditor(controllerFactory: factory, options: options),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(themeDispatches(bundle.webview).length, dispatchCount);
+      });
     });
   });
 }

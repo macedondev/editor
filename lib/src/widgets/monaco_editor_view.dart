@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
+import 'package:flutter_monaco/src/widgets/monaco_status_bar.dart';
 
 /// An enumeration representing the connection state of the Monaco Editor.
 enum _ConnectionState {
@@ -78,15 +79,14 @@ class MonacoEditor extends StatefulWidget {
     super.key,
     this.controller,
     this.controllerFactory,
-    this.initialValue,
+    this.initialText,
     this.options = const EditorOptions(),
     this.initialSelection,
     this.autofocus = false,
-    this.customCss,
-    this.allowCdnFonts = false,
-    this.allowedConnectSources = const [],
-    this.readyTimeout,
+    this.page = const MonacoPageConfig(),
+    this.readyTimeout = const Duration(seconds: 20),
     this.onReady,
+    this.onError,
     this.onContentChanged,
     this.onRawContentChanged,
     this.fullTextOnFlushOnly = false,
@@ -119,9 +119,10 @@ class MonacoEditor extends StatefulWidget {
 
   /// The initial content to load into the editor.
   ///
-  /// Applied only when the editor is first created. To update content dynamically,
-  /// use [MonacoController.setValue].
-  final String? initialValue;
+  /// Applied only when the editor is first created (it rides the boot
+  /// command and paints in the first frame). To update content
+  /// dynamically, use `controller.document.setText`.
+  final String? initialText;
 
   /// Configuration options for the editor (theme, language, font size, etc.).
   ///
@@ -134,36 +135,29 @@ class MonacoEditor extends StatefulWidget {
   /// If `true`, the editor requests focus as soon as it becomes ready.
   final bool autofocus;
 
-  /// CSS injected into the editor's page (e.g., `@font-face` rules).
-  ///
-  /// Changing this property triggers a full reload of the editor.
-  final String? customCss;
-
-  /// If `true`, allows the editor to load fonts from remote URLs.
-  ///
-  /// **Security Note**: This enables network requests from the WebView.
-  /// Changing this property triggers a full reload.
-  final bool allowCdnFonts;
-
-  /// Extra Content-Security-Policy `connect-src` origins the editor page may
-  /// reach (e.g. `['ws://127.0.0.1:3000']` for a WebSocket language server).
-  ///
-  /// Required for `MonacoController.connectLanguageServer` with an
-  /// `LspWebSocketTransport`. Only used when this widget owns the controller
-  /// (no [controller] supplied). Changing this property triggers a full
-  /// reload.
-  ///
-  /// **Security Note**: Every listed origin becomes reachable from
-  /// JavaScript inside the editor.
-  final List<String> allowedConnectSources;
+  /// Page-level settings (custom CSS, CSP opt-ins such as CDN fonts and
+  /// WebSocket language-server origins). Only used when this widget owns
+  /// the controller (no [controller] supplied). Changing this property
+  /// triggers a full reload of the editor.
+  final MonacoPageConfig page;
 
   /// The maximum duration to wait for the editor to initialize before showing an error.
-  final Duration? readyTimeout;
+  final Duration readyTimeout;
 
   /// Callback invoked when the editor is fully initialized and ready.
   ///
   /// Provides the [MonacoController] for interaction.
   final ValueChanged<MonacoController>? onReady;
+
+  /// Callback invoked when a background editor operation fails.
+  ///
+  /// The widget performs bridge work outside any caller's await chain
+  /// (pulling text for [onContentChanged], re-applying [options], syncing
+  /// scroll handoff). Failures in that work land here. When `null`, they
+  /// are reported to [FlutterError.reportError] instead of being silently
+  /// swallowed. Boot failures render [errorBuilder] and are also routed
+  /// through this callback.
+  final void Function(Object error, StackTrace stackTrace)? onError;
 
   /// Callback invoked when the text content changes.
   ///
@@ -191,7 +185,7 @@ class MonacoEditor extends StatefulWidget {
   final VoidCallback? onBlur;
 
   /// Callback for receiving real-time editor statistics (cursor position, line count).
-  final ValueChanged<LiveStats>? onLiveStats;
+  final ValueChanged<MonacoLiveStats>? onLiveStats;
 
   /// Builder for the widget displayed while the editor is initializing.
   ///
@@ -208,7 +202,7 @@ class MonacoEditor extends StatefulWidget {
   final bool showStatusBar;
 
   /// Builder for a custom status bar widget.
-  final Widget Function(BuildContext context, LiveStats stats)?
+  final Widget Function(BuildContext context, MonacoLiveStats stats)?
   statusBarBuilder;
 
   /// The background color of the WebView container.
@@ -262,7 +256,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
 
   /// Subscriptions to controller events to be managed across the widget lifecycle.
   final List<StreamSubscription<dynamic>> _streamSubscriptions = [];
-  StreamSubscription<bool>? _contentSub;
+  StreamSubscription<MonacoContentChanged>? _contentSub;
   VoidCallback? _statsListener;
 
   /// Content sequence number for race condition prevention.
@@ -292,10 +286,35 @@ class _MonacoEditorState extends State<MonacoEditor> {
   bool _syncedWheelSource = false;
   bool _syncedTouchSource = false;
 
+  /// The theme most recently pushed to the editor, so ambient brightness
+  /// changes (D27) only produce bridge traffic when the resolved theme
+  /// actually flips.
+  MonacoTheme? _appliedResolvedTheme;
+
+  bool _bootstrappedOnce = false;
+
   @override
-  void initState() {
-    super.initState();
-    _bootstrap();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The first bootstrap runs here, not in initState: resolving a null
+    // options.theme (D27) reads Theme.of(context), which the framework
+    // forbids before initState completes.
+    if (!_bootstrappedOnce) {
+      _bootstrappedOnce = true;
+      _bootstrap();
+      return;
+    }
+    // D27: a null options.theme follows the surrounding brightness, so an
+    // ambient Theme change (e.g. the platform dark-mode toggle) re-resolves
+    // it. An explicit theme never reacts to brightness.
+    if (widget.options.theme != null) return;
+    if (_connectionState != _ConnectionState.ready || _controller == null) {
+      return;
+    }
+    final resolved = _resolveTheme();
+    if (resolved == _appliedResolvedTheme) return;
+    _appliedResolvedTheme = resolved;
+    _ignoreAsync(_controller!.setTheme(resolved));
   }
 
   @override
@@ -310,13 +329,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     }
 
     // If we OWN the controller and HTML-affecting knobs changed, rebuild.
-    final htmlKnobsChanged =
-        (oldWidget.customCss != widget.customCss) ||
-        (oldWidget.allowCdnFonts != widget.allowCdnFonts) ||
-        !listEquals(
-          oldWidget.allowedConnectSources,
-          widget.allowedConnectSources,
-        );
+    final htmlKnobsChanged = oldWidget.page != widget.page;
     if (_ownsController && htmlKnobsChanged) {
       _teardown(disposeOldController: true);
       _bootstrap();
@@ -341,12 +354,23 @@ class _MonacoEditorState extends State<MonacoEditor> {
       return;
     }
 
-    // If options change, apply them to the existing controller.
+    // If options change, apply only the fields that actually differ
+    // (sparse diff: unchanged fields are never re-sent, so Monaco state
+    // adjusted elsewhere is not clobbered).
     if (widget.options != oldWidget.options) {
-      _ignoreAsync(_controller!.updateOptions(widget.options));
-      // Explicitly update theme and language as they require separate bridge calls.
-      _ignoreAsync(_controller!.setThemeById(widget.options.effectiveThemeId));
-      _ignoreAsync(_controller!.setLanguage(widget.options.language));
+      final diff = _diffOptions(oldWidget.options, widget.options);
+      if (diff.toMonacoOptions().isNotEmpty) {
+        _ignoreAsync(_controller!.updateOptions(diff));
+      }
+      if (widget.options.theme != oldWidget.options.theme) {
+        final resolvedTheme = _resolveTheme();
+        _appliedResolvedTheme = resolvedTheme;
+        _ignoreAsync(_controller!.setTheme(resolvedTheme));
+      }
+      final language = widget.options.language;
+      if (language != null && language != oldWidget.options.language) {
+        _ignoreAsync(_controller!.document.setLanguage(language));
+      }
     }
 
     if (widget.backgroundColor != oldWidget.backgroundColor &&
@@ -375,14 +399,20 @@ class _MonacoEditorState extends State<MonacoEditor> {
     try {
       final ownsController = widget.controller == null;
       _ownsController = ownsController;
+      // Only the internal create path carries initialValue/options into the
+      // boot command; external controllers and factories get them applied
+      // after readiness below.
+      final usedInternalCreate =
+          widget.controller == null && widget.controllerFactory == null;
+      final bootTheme = _resolveTheme();
+      _appliedResolvedTheme = bootTheme;
       final controller =
           widget.controller ??
           await (widget.controllerFactory?.call() ??
               MonacoController.create(
-                options: widget.options,
-                customCss: widget.customCss,
-                allowCdnFonts: widget.allowCdnFonts,
-                allowedConnectSources: widget.allowedConnectSources,
+                options: widget.options.copyWith(theme: bootTheme),
+                initialText: widget.initialText,
+                page: widget.page,
                 readyTimeout: widget.readyTimeout,
               ));
 
@@ -402,7 +432,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
       }
 
       // Wait for the underlying web view to be ready.
-      await _controller!.onReady;
+      await _controller!.whenReady;
       if (!_isBootstrapCurrent(bootstrapToken)) {
         return;
       }
@@ -426,17 +456,21 @@ class _MonacoEditorState extends State<MonacoEditor> {
           debugPrint('[MonacoEditor] setHostPageBackgroundColor failed: $e');
         }
       }
-      // Ensure options are up-to-date in case they changed during bootstrap
-      if (_isBootstrapCurrent(bootstrapToken)) {
-        // We can't easily check if they differ from what we passed to create(),
-        // so we just re-apply them to be safe. This is cheap if no changes.
+      // The internal create path boots the editor with options, theme,
+      // language, and initial text already applied (two-phase boot); only
+      // externally supplied controllers need them applied here.
+      if (!usedInternalCreate && _isBootstrapCurrent(bootstrapToken)) {
         await _controller!.updateOptions(widget.options);
-        await _controller!.setThemeById(widget.options.effectiveThemeId);
-        await _controller!.setLanguage(widget.options.language);
-      }
-
-      if (widget.initialValue != null) {
-        await _controller!.setValue(widget.initialValue!);
+        final resolvedTheme = _resolveTheme();
+        _appliedResolvedTheme = resolvedTheme;
+        await _controller!.setTheme(resolvedTheme);
+        final language = widget.options.language;
+        if (language != null) {
+          await _controller!.document.setLanguage(language);
+        }
+        if (widget.initialText != null) {
+          await _controller!.document.setText(widget.initialText!);
+        }
         if (!_isBootstrapCurrent(bootstrapToken)) {
           return;
         }
@@ -453,7 +487,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!_isBootstrapCurrent(bootstrapToken)) return;
           _webFocusNode.requestFocus();
-          unawaited(_controller!.ensureEditorFocus(attempts: 3));
+          unawaited(_controller!.requestFocus());
         });
       }
 
@@ -466,6 +500,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
       }
     } catch (e, st) {
       if (!_isBootstrapCurrent(bootstrapToken)) return;
+      widget.onError?.call(e, st);
       _teardown(disposeOldController: _ownsController);
       setState(() {
         _connectionState = _ConnectionState.error;
@@ -482,6 +517,51 @@ class _MonacoEditorState extends State<MonacoEditor> {
         defaultTargetPlatform == TargetPlatform.iOS;
   }
 
+  /// The sparse difference between two option sets: only keys whose
+  /// serialized value changed survive. Fields that went from set to unset
+  /// cannot be "un-applied" and are dropped (Monaco keeps the last value).
+  static EditorOptions _diffOptions(EditorOptions before, EditorOptions after) {
+    final beforeJson = before.toJson();
+    final afterJson = after.toJson();
+    final diff = <String, dynamic>{};
+    for (final entry in afterJson.entries) {
+      if (!_jsonEquals(beforeJson[entry.key], entry.value)) {
+        diff[entry.key] = entry.value;
+      }
+    }
+    return EditorOptions.fromJson(diff);
+  }
+
+  static bool _jsonEquals(Object? a, Object? b) {
+    if (identical(a, b)) return true;
+    if (a is Map && b is Map) {
+      if (a.length != b.length) return false;
+      for (final key in a.keys) {
+        if (!b.containsKey(key) || !_jsonEquals(a[key], b[key])) return false;
+      }
+      return true;
+    }
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_jsonEquals(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    return a == b;
+  }
+
+  /// Resolves the effective theme: an explicit [MonacoEditor.options] theme
+  /// always wins; a null theme follows the surrounding Flutter brightness.
+  MonacoTheme _resolveTheme() {
+    final explicit = widget.options.theme;
+    if (explicit != null) return explicit;
+    final brightness = mounted ? Theme.of(context).brightness : Brightness.dark;
+    return brightness == Brightness.dark
+        ? MonacoDefaults.darkTheme
+        : MonacoDefaults.lightTheme;
+  }
+
   /// Subscribes to all relevant event streams from the controller.
   void _wireListeners() {
     if (_controller == null) return;
@@ -496,32 +576,48 @@ class _MonacoEditorState extends State<MonacoEditor> {
       );
       _streamSubscriptions.add(selectionSub);
     }
-    final focusSub = _controller!.onFocus.listen((_) {
-      _monacoReportsFocused = true;
-      widget.onFocus?.call();
+    final focusSub = _controller!.onFocusChanged.listen((focused) {
+      _monacoReportsFocused = focused;
+      if (focused) {
+        widget.onFocus?.call();
+      } else {
+        widget.onBlur?.call();
+      }
     });
     _streamSubscriptions.add(focusSub);
-    final blurSub = _controller!.onBlur.listen((_) {
-      _monacoReportsFocused = false;
-      widget.onBlur?.call();
-    });
-    _streamSubscriptions.add(blurSub);
 
     final scrollHandoffSub = _controller!.onScrollHandoff.listen(
       _handleScrollHandoff,
     );
     _streamSubscriptions.add(scrollHandoffSub);
 
-    _statsListener = () =>
-        widget.onLiveStats?.call(_controller!.liveStats.value);
-    _controller!.liveStats.addListener(_statsListener!);
+    _statsListener = () => widget.onLiveStats?.call(_controller!.stats.value);
+    _controller!.stats.addListener(_statsListener!);
   }
 
   void _ignoreAsync(Future<void> future) {
     unawaited(
-      future.catchError((e, st) {
-        debugPrint('[MonacoEditor] Async update error: $e');
+      future.catchError((Object e, StackTrace st) {
+        _reportAsyncError(e, st);
       }),
+    );
+  }
+
+  /// Routes a background failure to [MonacoEditor.onError], falling back to
+  /// [FlutterError.reportError] so nothing disappears silently.
+  void _reportAsyncError(Object error, StackTrace stackTrace) {
+    final handler = widget.onError;
+    if (handler != null) {
+      handler(error, stackTrace);
+      return;
+    }
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'flutter_monaco',
+        context: ErrorDescription('while running a MonacoEditor update'),
+      ),
     );
   }
 
@@ -611,7 +707,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _contentSub?.cancel();
     _contentSub = null;
 
-    _contentSub = _controller!.onContentChanged.listen((isFlush) {
+    _contentSub = _controller!.onContentChanged.listen((event) {
+      final isFlush = event.isFlush;
       // 1) Always surface raw signal if requested.
       widget.onRawContentChanged?.call(isFlush);
 
@@ -622,7 +719,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
       // 3) Flush = immediate fetch (no debounce), else debounced.
       Future<void> pullAndEmit() async {
         final seq = ++_contentSeq;
-        final text = await _controller!.getValue();
+        final text = await _controller!.document.getText();
         if (!mounted || seq != _contentSeq) return; // drop stale
         widget.onContentChanged!(text);
       }
@@ -655,7 +752,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _contentDebounceTimer = null;
 
     if (_controller != null && _statsListener != null) {
-      _controller!.liveStats.removeListener(_statsListener!);
+      _controller!.stats.removeListener(_statsListener!);
       _statsListener = null;
     }
   }
@@ -674,6 +771,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _syncedWheelSource = false;
     _syncedTouchSource = false;
     _pendingScrollHandoffDelta = 0;
+    _appliedResolvedTheme = null;
     if (disposeOldController) {
       controller?.dispose();
     }
@@ -703,12 +801,13 @@ class _MonacoEditorState extends State<MonacoEditor> {
     if (_controller == null) {
       if (_connectionState == _ConnectionState.error) {
         return widget.errorBuilder?.call(context, _error!, _stack) ??
-            _DefaultError(
+            MonacoDefaultError(
               error: _error!,
               onRetry: _ownsController ? _bootstrap : null,
             );
       }
-      return widget.loadingBuilder?.call(context) ?? const _DefaultLoading();
+      return widget.loadingBuilder?.call(context) ??
+          const MonacoDefaultLoading();
     }
 
     // On mobile, let the WebView own the full tap-to-keyboard chain.
@@ -743,8 +842,11 @@ class _MonacoEditorState extends State<MonacoEditor> {
                 return;
               }
               _webFocusNode.requestFocus();
-              unawaited(
-                _controller!.ensureEditorFocus(
+              // Routed through _ignoreAsync: a click during a boot that
+              // later fails must land in onError/FlutterError, not as an
+              // unhandled zone error from this queued focus request.
+              _ignoreAsync(
+                _controller!.requestFocus(
                   attempts: 1,
                   intent: MonacoFocusIntent.user,
                 ),
@@ -765,7 +867,8 @@ class _MonacoEditorState extends State<MonacoEditor> {
           webView,
           Positioned.fill(
             child:
-                widget.loadingBuilder?.call(context) ?? const _DefaultLoading(),
+                widget.loadingBuilder?.call(context) ??
+                const MonacoDefaultLoading(),
           ),
         ],
       );
@@ -778,7 +881,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
           Positioned.fill(
             child:
                 widget.errorBuilder?.call(context, _error!, _stack) ??
-                _DefaultError(
+                MonacoDefaultError(
                   error: _error!,
                   onRetry: _ownsController ? _bootstrap : null,
                 ),
@@ -799,13 +902,13 @@ class _MonacoEditorState extends State<MonacoEditor> {
       children: [
         Expanded(child: content),
         if (widget.statusBarBuilder != null)
-          ValueListenableBuilder<LiveStats>(
-            valueListenable: _controller!.liveStats,
+          ValueListenableBuilder<MonacoLiveStats>(
+            valueListenable: _controller!.stats,
             builder: (context, stats, _) =>
                 widget.statusBarBuilder!(context, stats),
           )
         else
-          _MonacoStatusBar(controller: _controller!),
+          MonacoStatusBar(controller: _controller!),
       ],
     );
   }
@@ -815,133 +918,5 @@ class _MonacoEditorState extends State<MonacoEditor> {
     _webFocusNode.dispose();
     _teardown(disposeOldController: _ownsController);
     super.dispose();
-  }
-}
-
-// -----------------------------------------------------------------------------
-// DEFAULT UI COMPONENTS
-// -----------------------------------------------------------------------------
-
-/// The default status bar, optimized to only rebuild when stats change.
-class _MonacoStatusBar extends StatelessWidget {
-  const _MonacoStatusBar({required this.controller});
-
-  final MonacoController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MonacoEditorTheme.of(context);
-    final style =
-        theme.statusBarTextStyle ??
-        Theme.of(context).textTheme.bodySmall ??
-        const TextStyle(fontSize: 12);
-
-    return ValueListenableBuilder<LiveStats>(
-      valueListenable: controller.liveStats,
-      builder: (context, stats, _) {
-        final entries = [
-          if (stats.cursorPosition != null) 'Ln ${stats.cursorPosition!.label}',
-          'Ch ${stats.charCount.value}',
-          if (stats.selectedLines.value > 0)
-            'Sel Ln ${stats.selectedLines.value}',
-          if (stats.selectedCharacters.value > 0)
-            'Sel Ch ${stats.selectedCharacters.value}',
-          if (stats.language != null) stats.language!,
-        ].where((s) => s.isNotEmpty).toList();
-
-        return Container(
-          padding:
-              theme.statusBarPadding ??
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          decoration: BoxDecoration(
-            color: theme.statusBarBackgroundColor,
-            border: Border(
-              top: BorderSide(
-                color:
-                    theme.statusBarBorderColor ??
-                    Theme.of(context).dividerColor,
-                width: 0.5,
-              ),
-            ),
-          ),
-          child: Wrap(
-            alignment: WrapAlignment.end,
-            spacing: theme.statusBarSpacing ?? 16,
-            runSpacing: 4,
-            children: [for (final entry in entries) Text(entry, style: style)],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _DefaultLoading extends StatelessWidget {
-  const _DefaultLoading();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = MonacoEditorTheme.of(context);
-    return ColoredBox(
-      color: theme.loadingBackgroundColor ?? Colors.transparent,
-      child: Center(
-        child: SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(
-            strokeWidth: 3,
-            color: theme.loadingIndicatorColor,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DefaultError extends StatelessWidget {
-  const _DefaultError({required this.error, this.onRetry});
-
-  final Object error;
-  final VoidCallback? onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final materialTheme = Theme.of(context);
-    final theme = MonacoEditorTheme.of(context);
-    final titleStyle =
-        theme.errorTitleStyle ?? materialTheme.textTheme.titleMedium;
-    final style = theme.errorMessageStyle ?? materialTheme.textTheme.bodyMedium;
-
-    return ColoredBox(
-      color: theme.errorBackgroundColor ?? Colors.transparent,
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.error_outline,
-                color: theme.errorIconColor ?? materialTheme.colorScheme.error,
-                size: 36,
-              ),
-              const SizedBox(height: 16),
-              Text('Failed to Initialize Editor', style: titleStyle),
-              const SizedBox(height: 8),
-              Text('$error', textAlign: TextAlign.center, style: style),
-              if (onRetry != null) ...[
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Retry'),
-                  style: theme.retryButtonStyle,
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

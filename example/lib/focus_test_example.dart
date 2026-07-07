@@ -30,7 +30,7 @@ class _FocusTestExampleState extends State<FocusTestExample> {
         fontSize: 14,
       ),
     );
-    await _controller!.setValue(
+    await _controller!.document.setText(
       '// Monaco Editor\nlet message = "Hello World";',
     );
     setState(() {});
@@ -115,8 +115,9 @@ class _FocusTestExampleState extends State<FocusTestExample> {
                     onPressed: () async {
                       Navigator.pop(context);
                       // Send dialog text to Monaco
-                      final current = await _controller?.getValue() ?? '';
-                      await _controller?.setValue(
+                      final doc = _controller?.document;
+                      final current = await doc?.getText() ?? '';
+                      await doc?.setText(
                         '$current\n// From dialog: $dialogText',
                       );
                     },

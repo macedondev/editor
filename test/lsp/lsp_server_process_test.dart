@@ -13,64 +13,55 @@ void main() {
   final hasCat = !Platform.isWindows;
 
   group('LspServerProcess', () {
-    test(
-      'round-trips framed messages through a real process',
-      () async {
-        final server = await LspServerProcess.start('cat', []);
-        addTearDown(server.stop);
+    test('round-trips framed messages through a real process', () async {
+      if (!hasCat) return markTestSkipped('requires a POSIX cat binary');
+      final server = await LspServerProcess.start('cat', []);
+      addTearDown(server.stop);
 
-        final received = <Map<String, Object?>>[];
-        final sub = server.transport.fromServer.listen(received.add);
-        addTearDown(sub.cancel);
+      final received = <Map<String, Object?>>[];
+      final sub = server.transport.fromServer.listen(received.add);
+      addTearDown(sub.cancel);
 
-        server.transport.toServer({
-          'jsonrpc': '2.0',
-          'id': 1,
-          'method': 'initialize',
-          'params': {'processId': null},
-        });
-        server.transport.toServer({
-          'jsonrpc': '2.0',
-          'method': 'initialized',
-          'params': <String, Object?>{},
-        });
+      server.transport.toServer({
+        'jsonrpc': '2.0',
+        'id': 1,
+        'method': 'initialize',
+        'params': {'processId': null},
+      });
+      server.transport.toServer({
+        'jsonrpc': '2.0',
+        'method': 'initialized',
+        'params': <String, Object?>{},
+      });
 
-        await _poll(() => received.length == 2);
-        expect(received[0]['method'], 'initialize');
-        expect(received[1]['method'], 'initialized');
-      },
-      skip: hasCat ? false : 'requires a POSIX cat binary',
-    );
+      await _poll(() => received.length == 2);
+      expect(received[0]['method'], 'initialize');
+      expect(received[1]['method'], 'initialized');
+    });
 
-    test(
-      'stop() closes stdin and reaps the process',
-      () async {
-        final server = await LspServerProcess.start('cat', []);
-        expect(server.isStopped, isFalse);
+    test('stop() closes stdin and reaps the process', () async {
+      if (!hasCat) return markTestSkipped('requires a POSIX cat binary');
+      final server = await LspServerProcess.start('cat', []);
+      expect(server.isStopped, isFalse);
 
-        final code = await server.stop();
-        expect(code, 0); // cat exits cleanly on stdin EOF
-        expect(server.isStopped, isTrue);
+      final code = await server.stop();
+      expect(code, 0); // cat exits cleanly on stdin EOF
+      expect(server.isStopped, isTrue);
 
-        // Idempotent.
-        expect(await server.stop(), 0);
-      },
-      skip: hasCat ? false : 'requires a POSIX cat binary',
-    );
+      // Idempotent.
+      expect(await server.stop(), 0);
+    });
 
-    test(
-      'fromServer closes when the process exits',
-      () async {
-        final server = await LspServerProcess.start('cat', []);
+    test('fromServer closes when the process exits', () async {
+      if (!hasCat) return markTestSkipped('requires a POSIX cat binary');
+      final server = await LspServerProcess.start('cat', []);
 
-        final done = Completer<void>();
-        server.transport.fromServer.listen((_) {}, onDone: done.complete);
+      final done = Completer<void>();
+      server.transport.fromServer.listen((_) {}, onDone: done.complete);
 
-        await server.stop();
-        await done.future.timeout(const Duration(seconds: 5));
-      },
-      skip: hasCat ? false : 'requires a POSIX cat binary',
-    );
+      await server.stop();
+      await done.future.timeout(const Duration(seconds: 5));
+    });
 
     test('start() surfaces spawn failures', () async {
       expect(

@@ -8,69 +8,67 @@ import '../fakes/fake_platform_webview_controller.dart';
 
 /// Drives the Dart side of the LSP bridge protocol against the fake WebView.
 ///
-/// The manager talks to JavaScript exclusively through
-/// `flutterMonacoInvokeAsync(requestId, method, args)` scripts (recorded by
-/// the fake) and listens for `invokeResult` / `lspStatus` / `lspMessage`
-/// events on the `flutterChannel`. This harness extracts issued invokes and
-/// emits the events a real page would produce.
+/// Every `lsp.*` command now rides the protocol v3 dispatch envelope: calls
+/// are recorded in [FakePlatformWebViewController.dispatched] and resolve
+/// from `response` envelopes posted through the `flutterChannel`. By default
+/// the fake auto-answers every dispatch with success, so simple flows just
+/// await the controller call. Tests that need precise response sequencing
+/// (reconnect choreography, hung handshakes) set `webView.autoRespond =
+/// false` and answer through this harness instead.
 class LspBridgeHarness {
   LspBridgeHarness(this.webView);
 
   final FakePlatformWebViewController webView;
-  final Set<String> _consumedRequestIds = {};
+  final Set<String> _consumedDispatchIds = {};
 
-  static final RegExp _invokePattern = RegExp(
-    r'window\.flutterMonacoInvokeAsync\("([^"]+)",\s*"([^"]+)",\s*(\[.*\])\)',
-    dotAll: true,
-  );
-
-  /// Returns the oldest not-yet-consumed invoke of [method], waiting for it
-  /// to be issued if necessary.
-  Future<({String requestId, List<Object?> args})> waitForInvoke(
+  /// Returns the oldest not-yet-consumed dispatch of [method], waiting for
+  /// it to be issued if necessary.
+  Future<({String requestId, Map<String, Object?> params})> waitForDispatch(
     String method, {
     int maxTurns = 200,
   }) async {
     for (var i = 0; i < maxTurns; i++) {
-      for (final script in webView.executed) {
-        final match = _invokePattern.firstMatch(script);
-        if (match == null) continue;
-        final requestId = match.group(1)!;
-        if (match.group(2) != method) continue;
-        if (_consumedRequestIds.contains(requestId)) continue;
-        _consumedRequestIds.add(requestId);
-        final args = (jsonDecode(match.group(3)!) as List).cast<Object?>();
-        return (requestId: requestId, args: args);
+      for (final call in webView.dispatched) {
+        if (call['method'] != method) continue;
+        final requestId = call['id']! as String;
+        if (_consumedDispatchIds.contains(requestId)) continue;
+        _consumedDispatchIds.add(requestId);
+        return (
+          requestId: requestId,
+          params: (call['params']! as Map).cast<String, Object?>(),
+        );
       }
       await Future<void>.delayed(Duration.zero);
     }
     fail(
-      'No "$method" invoke was issued. Executed scripts:\n'
-      '${webView.executed.join('\n')}',
+      'No "$method" dispatch was issued. Dispatched calls:\n'
+      '${webView.dispatched.join('\n')}',
     );
   }
 
   void respondOk(String requestId, {Object? value = true}) {
     _emit({
-      'event': 'invokeResult',
-      'requestId': requestId,
+      'v': 3,
+      'kind': 'response',
+      'id': requestId,
       'ok': true,
-      'isUndefined': false,
+      'undefined': false,
       'value': value,
     });
   }
 
   void respondError(String requestId, String message) {
     _emit({
-      'event': 'invokeResult',
-      'requestId': requestId,
+      'v': 3,
+      'kind': 'response',
+      'id': requestId,
       'ok': false,
       'error': {'name': 'Error', 'message': message},
     });
   }
 
   void emitStatus(String connectionId, String status, {String? errorMessage}) {
-    _emit({
-      'event': 'lspStatus',
+    webView.emitEvent('lspStatus', {
       'connectionId': connectionId,
       'status': status,
       'error': errorMessage == null
@@ -80,18 +78,18 @@ class LspBridgeHarness {
   }
 
   void emitLspMessage(String connectionId, Map<String, Object?> message) {
-    _emit({
-      'event': 'lspMessage',
+    webView.emitEvent('lspMessage', {
       'connectionId': connectionId,
       'message': message,
     });
   }
 
-  /// Answers connect + auto-acknowledges every subsequent invoke of
-  /// [method]. Used for fire-and-forget disconnects.
+  /// Waits for the next dispatch of [method] and acknowledges it with a
+  /// success response. Used when manually driving fire-and-forget
+  /// disconnects.
   Future<void> acknowledge(String method) async {
-    final invoke = await waitForInvoke(method);
-    respondOk(invoke.requestId);
+    final dispatch = await waitForDispatch(method);
+    respondOk(dispatch.requestId);
   }
 
   void _emit(Map<String, Object?> payload) {
@@ -126,20 +124,16 @@ void main() {
     test(
       'resolves after the JS handshake and registers the connection',
       () async {
-        final connectFuture = controller.connectLanguageServer(
+        final connection = await controller.connectLanguageServer(
           id: 'py',
           transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
         );
 
-        final invoke = await harness.waitForInvoke('lsp.connect');
-        expect(invoke.args[0], 'py');
-        expect(invoke.args[1], {
-          'kind': 'webSocket',
-          'url': 'ws://localhost:1',
+        final connect = await harness.waitForDispatch('lsp.connect');
+        expect(connect.params, {
+          'id': 'py',
+          'transport': {'kind': 'webSocket', 'url': 'ws://localhost:1'},
         });
-
-        harness.respondOk(invoke.requestId);
-        final connection = await connectFuture;
 
         expect(connection.id, 'py');
         expect(connection.isOpen, isTrue);
@@ -150,13 +144,10 @@ void main() {
     );
 
     test('emits connecting then open on stateChanges', () async {
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'py',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
       // The open state is already current; further transitions stream.
       expect(connection.state.status, LspConnectionStatus.open);
@@ -164,13 +155,10 @@ void main() {
     });
 
     test('throws on duplicate ids while connected', () async {
-      final connectFuture = controller.connectLanguageServer(
+      await controller.connectLanguageServer(
         id: 'dup',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      await connectFuture;
 
       expect(
         () => controller.connectLanguageServer(
@@ -206,18 +194,20 @@ void main() {
     });
 
     test('propagates JS connect failures and registers nothing', () async {
+      webView.injectCommandFailure(
+        'lsp.connect',
+        message: 'WebSocket handshake refused',
+      );
+
       final connectFuture = controller.connectLanguageServer(
         id: 'broken',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
       );
 
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondError(invoke.requestId, 'WebSocket handshake refused');
-
       await expectLater(
         connectFuture,
         throwsA(
-          isA<MonacoJavaScriptException>().having(
+          isA<MonacoJavaScriptError>().having(
             (e) => e.message,
             'message',
             contains('handshake refused'),
@@ -230,39 +220,38 @@ void main() {
     });
 
     test('times out when the handshake never completes', () async {
+      webView.autoRespond = false;
+
       final connectFuture = controller.connectLanguageServer(
         id: 'slow',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
         initializationTimeout: const Duration(milliseconds: 50),
       );
 
-      await harness.waitForInvoke('lsp.connect');
+      await harness.waitForDispatch('lsp.connect');
 
       await expectLater(connectFuture, throwsA(isA<TimeoutException>()));
       expect(controller.languageServerConnections, isEmpty);
       // Best-effort teardown was attempted.
-      await harness.waitForInvoke('lsp.disconnect');
+      await harness.waitForDispatch('lsp.disconnect');
     });
   });
 
   group('disconnect', () {
     test('closes the connection and completes whenClosed', () async {
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'py',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
       final states = <LspConnectionState>[];
       connection.stateChanges.listen(states.add);
 
-      final disconnectFuture = connection.disconnect();
-      await harness.acknowledge('lsp.disconnect');
-      await disconnectFuture;
+      await connection.disconnect();
       await connection.whenClosed;
 
+      final disconnect = await harness.waitForDispatch('lsp.disconnect');
+      expect(disconnect.params, {'id': 'py'});
       expect(connection.state.status, LspConnectionStatus.closed);
       expect(states.last.status, LspConnectionStatus.closed);
       expect(controller.languageServerConnections, isEmpty);
@@ -273,19 +262,14 @@ void main() {
     });
 
     test('completes even when the JS side fails', () async {
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'py',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
-      final disconnectFuture = controller.disconnectLanguageServer('py');
-      final disconnectInvoke = await harness.waitForInvoke('lsp.disconnect');
-      harness.respondError(disconnectInvoke.requestId, 'page went away');
+      webView.injectCommandFailure('lsp.disconnect', message: 'page went away');
 
-      await disconnectFuture;
+      await controller.disconnectLanguageServer('py');
       expect(connection.state.status, LspConnectionStatus.closed);
     });
   });
@@ -302,27 +286,34 @@ void main() {
         ),
       );
 
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      expect(invoke.args[1], {'kind': 'bridged'});
-
       fromServer
         ..add({'jsonrpc': '2.0', 'id': 1, 'result': {}})
         ..add({'jsonrpc': '2.0', 'method': 'window/logMessage'});
-      harness.respondOk(invoke.requestId);
       await connectFuture;
       await pumpMicrotasks();
 
-      final deliveries = webView.scriptsContaining('deliverServerMessage');
+      final connect = await harness.waitForDispatch('lsp.connect');
+      expect(connect.params['transport'], {'kind': 'bridged'});
+
+      final deliveries = webView.dispatched
+          .where((d) => d['method'] == 'lsp.deliverServerMessage')
+          .toList();
       expect(deliveries, hasLength(2));
-      expect(deliveries[0], contains('"id":1'));
-      expect(deliveries[1], contains('window/logMessage'));
-      // Ordering: the connect invoke must have been issued before the first
-      // delivery so the JS side has registered the transport.
-      final connectIndex = webView.executed.indexWhere(
-        (s) => s.contains('lsp.connect'),
+      expect(deliveries[0]['params'], {
+        'id': 'bridged',
+        'message': {'jsonrpc': '2.0', 'id': 1, 'result': <String, Object?>{}},
+      });
+      expect(deliveries[1]['params'], {
+        'id': 'bridged',
+        'message': {'jsonrpc': '2.0', 'method': 'window/logMessage'},
+      });
+      // Ordering: the connect dispatch must have been issued before the
+      // first delivery so the JS side has registered the transport.
+      final connectIndex = webView.dispatched.indexWhere(
+        (d) => d['method'] == 'lsp.connect',
       );
-      final deliverIndex = webView.executed.indexWhere(
-        (s) => s.contains('deliverServerMessage'),
+      final deliverIndex = webView.dispatched.indexWhere(
+        (d) => d['method'] == 'lsp.deliverServerMessage',
       );
       expect(connectIndex, lessThan(deliverIndex));
 
@@ -333,16 +324,13 @@ void main() {
       final received = <Map<String, Object?>>[];
       final fromServer = StreamController<Map<String, Object?>>();
 
-      final connectFuture = controller.connectLanguageServer(
+      await controller.connectLanguageServer(
         id: 'bridged',
         transport: LspBridgedTransport(
           fromServer: fromServer.stream,
           toServer: received.add,
         ),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      await connectFuture;
 
       harness.emitLspMessage('bridged', {
         'jsonrpc': '2.0',
@@ -353,6 +341,7 @@ void main() {
         'jsonrpc': '2.0',
         'method': 'textDocument/didOpen',
       });
+      await pumpMicrotasks();
 
       expect(received, hasLength(2));
       expect(received[0]['method'], 'initialize');
@@ -366,7 +355,7 @@ void main() {
       var onCloseCalls = 0;
       final fromServer = StreamController<Map<String, Object?>>();
 
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'bridged',
         transport: LspBridgedTransport(
           fromServer: fromServer.stream,
@@ -374,12 +363,8 @@ void main() {
           onClose: () async => onCloseCalls++,
         ),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
       await fromServer.close();
-      await harness.acknowledge('lsp.disconnect');
       await connection.whenClosed;
 
       expect(connection.state.status, LspConnectionStatus.closed);
@@ -390,19 +375,15 @@ void main() {
     test('fails the connection when the server stream errors', () async {
       final fromServer = StreamController<Map<String, Object?>>();
 
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'bridged',
         transport: LspBridgedTransport(
           fromServer: fromServer.stream,
           toServer: (_) {},
         ),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
       fromServer.addError(StateError('server crashed'));
-      await harness.acknowledge('lsp.disconnect');
       await connection.whenClosed;
 
       expect(connection.state.status, LspConnectionStatus.failed);
@@ -415,7 +396,7 @@ void main() {
       var onCloseCalls = 0;
       final fromServer = StreamController<Map<String, Object?>>();
 
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'bridged',
         transport: LspBridgedTransport(
           fromServer: fromServer.stream,
@@ -423,13 +404,8 @@ void main() {
           onClose: () async => onCloseCalls++,
         ),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
-      final disconnectFuture = connection.disconnect();
-      await harness.acknowledge('lsp.disconnect');
-      await disconnectFuture;
+      await connection.disconnect();
       await pumpMicrotasks();
 
       expect(onCloseCalls, 1);
@@ -439,26 +415,26 @@ void main() {
 
   group('unexpected transport drops', () {
     test('without a reconnect policy the connection closes', () async {
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'ws',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
       harness.emitStatus('ws', 'closed', errorMessage: 'socket dropped');
-      await harness.acknowledge('lsp.disconnect');
       await connection.whenClosed;
 
       expect(connection.state.status, LspConnectionStatus.closed);
       expect(
-        (connection.state.error as MonacoJavaScriptException?)?.message,
+        (connection.state.error as MonacoJavaScriptError?)?.message,
         contains('socket dropped'),
       );
     });
 
     test('with a reconnect policy the connection reopens', () async {
+      // Drive responses manually: the test must observe the intermediate
+      // connecting state before the second connect resolves.
+      webView.autoRespond = false;
+
       final connectFuture = controller.connectLanguageServer(
         id: 'ws',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
@@ -467,7 +443,7 @@ void main() {
           maxAttempts: 3,
         ),
       );
-      final first = await harness.waitForInvoke('lsp.connect');
+      final first = await harness.waitForDispatch('lsp.connect');
       harness.respondOk(first.requestId);
       final connection = await connectFuture;
 
@@ -477,7 +453,7 @@ void main() {
       // Drop the transport: expect JS cleanup, then a fresh connect.
       harness.emitStatus('ws', 'closed', errorMessage: 'network blip');
       await harness.acknowledge('lsp.disconnect');
-      final second = await harness.waitForInvoke('lsp.connect');
+      final second = await harness.waitForDispatch('lsp.connect');
       expect(connection.state.status, LspConnectionStatus.connecting);
       expect(connection.state.reconnectAttempt, 1);
 
@@ -497,6 +473,8 @@ void main() {
     });
 
     test('exhausted reconnect attempts fail the connection', () async {
+      webView.autoRespond = false;
+
       final connectFuture = controller.connectLanguageServer(
         id: 'ws',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
@@ -505,13 +483,13 @@ void main() {
           maxAttempts: 1,
         ),
       );
-      final first = await harness.waitForInvoke('lsp.connect');
+      final first = await harness.waitForDispatch('lsp.connect');
       harness.respondOk(first.requestId);
       final connection = await connectFuture;
 
       harness.emitStatus('ws', 'closed', errorMessage: 'gone');
       await harness.acknowledge('lsp.disconnect');
-      final retry = await harness.waitForInvoke('lsp.connect');
+      final retry = await harness.waitForDispatch('lsp.connect');
       harness.respondError(retry.requestId, 'still down');
       await harness.acknowledge('lsp.disconnect');
       await connection.whenClosed;
@@ -523,38 +501,30 @@ void main() {
 
   group('experimental request escape hatches', () {
     test('sendRequest forwards to the page and returns the result', () async {
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'py',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
-      final requestFuture = connection.sendRequest('pyright/ping', {'x': 1});
-      final request = await harness.waitForInvoke('lsp.sendRequest');
-      expect(request.args, [
-        'py',
-        'pyright/ping',
-        {'x': 1},
-      ]);
-      harness.respondOk(request.requestId, value: {'pong': true});
+      webView.injectCommandSuccess('lsp.sendRequest', value: {'pong': true});
+      final result = await connection.sendRequest('pyright/ping', {'x': 1});
 
-      expect(await requestFuture, {'pong': true});
+      final request = await harness.waitForDispatch('lsp.sendRequest');
+      expect(request.params, {
+        'id': 'py',
+        'method': 'pyright/ping',
+        'params': {'x': 1},
+      });
+      expect(result, {'pong': true});
     });
 
     test('sendRequest throws when the connection is not open', () async {
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'py',
         transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
-      final disconnectFuture = connection.disconnect();
-      await harness.acknowledge('lsp.disconnect');
-      await disconnectFuture;
+      await connection.disconnect();
 
       expect(() => connection.sendRequest('x'), throwsStateError);
       expect(() => connection.sendNotification('x'), throwsStateError);
@@ -566,7 +536,7 @@ void main() {
       var onCloseCalls = 0;
       final fromServer = StreamController<Map<String, Object?>>();
 
-      final connectFuture = controller.connectLanguageServer(
+      final connection = await controller.connectLanguageServer(
         id: 'bridged',
         transport: LspBridgedTransport(
           fromServer: fromServer.stream,
@@ -574,9 +544,6 @@ void main() {
           onClose: () async => onCloseCalls++,
         ),
       );
-      final invoke = await harness.waitForInvoke('lsp.connect');
-      harness.respondOk(invoke.requestId);
-      final connection = await connectFuture;
 
       controller.dispose();
       await connection.whenClosed;

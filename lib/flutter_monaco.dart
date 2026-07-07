@@ -35,8 +35,9 @@
 ///   ),
 /// );
 ///
-/// await controller.setValue('print("Hello, World!")');
-/// final content = await controller.getValue();
+/// await controller.whenReady;
+/// await controller.document.setText('print("Hello, World!")');
+/// final content = await controller.document.getText();
 /// ```
 ///
 /// ## Platform Support
@@ -56,14 +57,37 @@
 /// - [Issue Tracker](https://github.com/omar-hanafy/flutter_monaco/issues)
 library;
 
-export 'src/core/monaco_actions.dart' show MonacoAction;
-
 // Core exports
-export 'src/core/monaco_assets.dart' show MonacoAssets;
-export 'src/core/monaco_constants.dart' show MonacoConstants;
-export 'src/core/monaco_controller.dart'
-    show MonacoController, MonacoFocusIntent;
-export 'src/core/monaco_js_error.dart' show MonacoJavaScriptException;
+export 'src/common/defaults.dart' show MonacoDefaults, MonacoFontStacks;
+export 'src/common/exceptions.dart'
+    show
+        MonacoDisposedError,
+        MonacoException,
+        MonacoJavaScriptError,
+        MonacoProtocolError,
+        MonacoTimeoutError;
+export 'src/assets/asset_diagnostics.dart' show MonacoAssetDiagnostics;
+export 'src/assets/monaco_assets.dart' show MonacoAssets;
+export 'src/editor/controller.dart' show MonacoController;
+export 'src/common/monaco_page_config.dart'
+    show MonacoCapabilities, MonacoPageConfig;
+export 'src/diff/diff_controller.dart' show MonacoDiffController;
+export 'src/diff/diff_options.dart' show MonacoDiffOptions;
+export 'src/editor/completions.dart'
+    show CompletionProvider, MonacoCompletionRegistration;
+export 'src/editor/custom_actions.dart' show MonacoActionRegistration;
+export 'src/editor/decorations.dart' show MonacoDecorationSet;
+export 'src/editor/document.dart' show MonacoDocument;
+export 'src/editor/events.dart'
+    show
+        MonacoContentChanged,
+        MonacoEvent,
+        MonacoFocusChanged,
+        MonacoScrollHandoffEvent,
+        MonacoSelectionChanged,
+        MonacoUnknownEvent;
+export 'src/editor/focus_coordinator.dart' show MonacoFocusIntent;
+export 'src/editor/view_state.dart' show MonacoViewState;
 
 // LSP exports
 export 'src/lsp/lsp_connection.dart' show LanguageServerConnection;
@@ -80,48 +104,63 @@ export 'src/lsp/lsp_transport.dart'
 export 'src/lsp/lsp_types.dart'
     show LspConnectionState, LspConnectionStatus, LspReconnectPolicy;
 
-// Model exports
-export 'src/models/editor_options.dart' show EditorOptions;
-export 'src/models/monaco_enums.dart'
+// Options exports
+export 'src/options/action.dart' show MonacoAction;
+export 'src/options/editor_options.dart' show EditorOptions;
+export 'src/options/language.dart' show MonacoLanguage;
+export 'src/options/option_enums.dart'
     show
         AutoClosingBehavior,
         CursorBlinking,
         CursorStyle,
-        MonacoFont,
-        MonacoLanguage,
-        MonacoTheme,
-        RenderWhitespace,
-        DiagnosticsSeverity;
-export 'src/models/monaco_scroll_handoff.dart'
+        DiagnosticsSeverity,
+        MonacoBaseTheme,
+        MonacoFoldingControls,
+        MonacoLineHighlight,
+        MonacoLineNumbers,
+        MonacoMinimapSide,
+        MonacoScrollbarVisibility,
+        MonacoWordWrap,
+        RenderWhitespace;
+export 'src/options/sub_options.dart'
     show
-        MonacoScrollHandoff,
-        MonacoScrollHandoffDetails,
-        MonacoScrollHandoffMode,
-        MonacoScrollHandoffSource;
-export 'src/models/monaco_theme_definition.dart'
+        MonacoGuidesOptions,
+        MonacoMinimapOptions,
+        MonacoPadding,
+        MonacoScrollbarOptions,
+        MonacoStickyScroll;
+export 'src/options/theme.dart' show MonacoTheme;
+export 'src/options/theme_definition.dart'
     show MonacoThemeDefinition, MonacoThemeRule;
-export 'src/models/monaco_types.dart'
+
+// Type exports
+export 'src/types/completion.dart'
     show
         CompletionItem,
         CompletionItemKind,
         CompletionList,
         CompletionRequest,
-        DecorationOptions,
-        EditOperation,
-        EditorState,
-        FindMatch,
-        FindOptions,
-        InsertTextRule,
-        LiveStats,
-        MarkerData,
-        MarkerSeverity,
-        Position,
-        Range,
-        RelatedInformation,
-        JsonDiagnosticsOptions,
-        JsonDiagnosticsSchema;
+        InsertTextRule;
+export 'src/types/decorations.dart' show DecorationOptions;
+export 'src/types/geometry.dart' show Position, Range;
+export 'src/types/json_diagnostics.dart'
+    show JsonDiagnosticsOptions, JsonDiagnosticsSchema;
+export 'src/types/keybinding.dart'
+    show MonacoActionDescriptor, MonacoKey, MonacoKeybinding;
+export 'src/types/markers.dart'
+    show MarkerData, MarkerSeverity, RelatedInformation;
+export 'src/types/scroll_handoff.dart'
+    show
+        MonacoScrollHandoff,
+        MonacoScrollHandoffDetails,
+        MonacoScrollHandoffMode,
+        MonacoScrollHandoffSource;
+export 'src/types/stats.dart' show EditorState, MonacoLiveStats;
+export 'src/types/text.dart'
+    show EditOperation, FindMatch, FindOptions, MonacoTextChange;
 
 // Widget exports
+export 'src/widgets/monaco_diff_editor.dart' show MonacoDiffEditor;
 export 'src/widgets/monaco_editor_view.dart' show MonacoEditor;
 export 'src/widgets/monaco_focus_guard.dart' show MonacoFocusGuard;
 export 'src/widgets/monaco_overlay_boundary.dart' show MonacoOverlayBoundary;

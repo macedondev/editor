@@ -3,9 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('Monaco enums', () {
-    test('fromId falls back to defaults', () {
-      expect(MonacoTheme.fromId('unknown'), MonacoTheme.vsDark);
-      expect(MonacoLanguage.fromId('unknown'), MonacoLanguage.markdown);
+    test('option enum fromId falls back to defaults', () {
       expect(CursorBlinking.fromId('unknown'), CursorBlinking.blink);
       expect(CursorStyle.fromId('unknown'), CursorStyle.line);
       expect(RenderWhitespace.fromId('unknown'), RenderWhitespace.selection);
@@ -17,6 +15,25 @@ void main() {
         DiagnosticsSeverity.fromId('unknown'),
         DiagnosticsSeverity.warning,
       );
+    });
+
+    test('theme and language ids are open sets with no fallback', () {
+      const theme = MonacoTheme('unknown');
+      expect(theme.id, 'unknown');
+      expect(theme.isBuiltIn, false);
+      expect(theme.label, isNull);
+
+      const language = MonacoLanguage('unknown');
+      expect(language.id, 'unknown');
+      expect(language.isBuiltIn, false);
+      expect(language.label, isNull);
+    });
+
+    test('builtIn catalogs expose the bundled ids', () {
+      expect(MonacoTheme.builtIn, contains(MonacoTheme.vsDark));
+      expect(MonacoTheme.vsDark.isBuiltIn, true);
+      expect(MonacoLanguage.builtIn, contains(MonacoLanguage.dart));
+      expect(MonacoLanguage.dart.isBuiltIn, true);
     });
 
     test('ids match expected values', () {

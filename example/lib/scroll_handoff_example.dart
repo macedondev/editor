@@ -100,7 +100,7 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
           ? MonacoTheme.vsDark
           : MonacoTheme.vs,
       fontSize: 13,
-      minimap: longContent,
+      minimap: MonacoMinimapOptions(enabled: longContent),
       scrollBeyondLastLine: longContent && _scrollBeyondLastLine,
     );
   }
@@ -161,7 +161,7 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
                         'scrolling',
                     height: 180,
                     child: MonacoEditor(
-                      initialValue: _shortSnippet,
+                      initialText: _shortSnippet,
                       options: _options(longContent: false),
                       scrollHandoff: _activeConfig,
                     ),
@@ -180,7 +180,7 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
                     label: 'Long editor with edge handoff',
                     height: 380,
                     child: MonacoEditor(
-                      initialValue: _longSnippet,
+                      initialText: _longSnippet,
                       options: _options(longContent: true),
                       scrollHandoff: _activeConfig,
                     ),
@@ -199,7 +199,7 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
                     label: 'Handoff always disabled',
                     height: 260,
                     child: MonacoEditor(
-                      initialValue: _longSnippet,
+                      initialText: _longSnippet,
                       options: _options(longContent: true),
                     ),
                   ),

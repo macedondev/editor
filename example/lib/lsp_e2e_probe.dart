@@ -75,13 +75,13 @@ class _ProbeAppState extends State<ProbeApp> {
         return _finish(false, 'monaco.lsp namespace missing');
       }
 
-      final uri = await controller.createModel(
-        _brokenPython,
-        language: 'python',
+      final document = await controller.openDocument(
+        text: _brokenPython,
+        language: MonacoLanguage.python,
         uri: Uri.parse('file:///probe/main.py'),
       );
-      await controller.setModel(uri);
-      _log('model created: $uri');
+      await controller.activateDocument(document);
+      _log('document opened: ${document.uri}');
 
       _log('spawning pyright at $_pyrightBin ...');
       final server = await LspServerProcess.start(_pyrightBin, ['--stdio']);
@@ -102,7 +102,6 @@ class _ProbeAppState extends State<ProbeApp> {
       for (var i = 0; i < 90; i++) {
         final count = await controller.evaluateJavaScript<int>(
           "monaco.editor.getModelMarkers({ owner: 'lsp' }).length",
-          defaultValue: 0,
         );
         if ((count ?? 0) > 0) {
           final messages = await controller.evaluateJavaScript<String>(
@@ -120,7 +119,6 @@ class _ProbeAppState extends State<ProbeApp> {
           _log('post-disconnect state = ${connection.state.status}');
           final cleared = await controller.evaluateJavaScript<int>(
             "monaco.editor.getModelMarkers({ owner: 'lsp' }).length",
-            defaultValue: -1,
           );
           _log('markers after disconnect = $cleared');
           return _finish(

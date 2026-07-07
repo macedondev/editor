@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_monaco/flutter_monaco.dart';
@@ -7,13 +6,13 @@ import 'package:flutter_test/flutter_test.dart';
 import '../fakes/fake_platform_webview_controller.dart';
 
 Future<List<String>> _loadActionValues() async {
-  final file = File('lib/src/core/monaco_actions.dart');
+  final file = File('lib/src/options/action.dart');
   if (!await file.exists()) {
-    throw StateError('monaco_actions.dart not found');
+    throw StateError('action.dart not found');
   }
   final contents = await file.readAsString();
   final regex = RegExp(
-    r"static const String\s+(\w+)\s*=\s*'([^']*)';",
+    r"static const\s+\w+\s*=\s*MonacoAction\(\s*'([^']*)',?\s*\)",
     multiLine: true,
     dotAll: true,
   );
@@ -23,7 +22,7 @@ Future<List<String>> _loadActionValues() async {
   }
   final values = <String>[];
   for (final match in matches) {
-    final value = match.group(2);
+    final value = match.group(1);
     if (value == null || value.isEmpty) {
       throw StateError('MonacoAction value missing');
     }
@@ -42,26 +41,26 @@ void main() {
     });
 
     test('core action ids match expected values', () {
-      expect(MonacoAction.formatDocument, 'editor.action.formatDocument');
-      expect(MonacoAction.find, 'actions.find');
+      expect(MonacoAction.formatDocument.id, 'editor.action.formatDocument');
+      expect(MonacoAction.find.id, 'actions.find');
       expect(
-        MonacoAction.startFindReplaceAction,
+        MonacoAction.startFindReplaceAction.id,
         'editor.action.startFindReplaceAction',
       );
-      expect(MonacoAction.toggleWordWrap, 'editor.action.toggleWordWrap');
-      expect(MonacoAction.selectAll, 'editor.action.selectAll');
-      expect(MonacoAction.undo, 'undo');
-      expect(MonacoAction.redo, 'redo');
+      expect(MonacoAction.toggleWordWrap.id, 'editor.action.toggleWordWrap');
+      expect(MonacoAction.selectAll.id, 'editor.action.selectAll');
+      expect(MonacoAction.undo.id, 'undo');
+      expect(MonacoAction.redo.id, 'redo');
       expect(
-        MonacoAction.clipboardCutAction,
+        MonacoAction.clipboardCutAction.id,
         'editor.action.clipboardCutAction',
       );
       expect(
-        MonacoAction.clipboardCopyAction,
+        MonacoAction.clipboardCopyAction.id,
         'editor.action.clipboardCopyAction',
       );
       expect(
-        MonacoAction.clipboardPasteAction,
+        MonacoAction.clipboardPasteAction.id,
         'editor.action.clipboardPasteAction',
       );
     });
@@ -75,19 +74,16 @@ void main() {
       );
 
       for (final actionId in values) {
-        await controller.executeAction(actionId);
+        await controller.executeAction(MonacoAction(actionId));
       }
 
       final executedIds = <String>{};
-      // The envelope dispatcher invokes flutterMonaco.executeAction via
-      // window.flutterMonacoInvoke("executeAction", [<id>, <args>]).
-      final regex = RegExp(
-        r'flutterMonacoInvoke\("executeAction",\s*\[(".*?")',
-      );
-      for (final script in webview.executed) {
-        final match = regex.firstMatch(script);
-        if (match == null) continue;
-        executedIds.add(jsonDecode(match.group(1)!));
+      // Every command rides the v3 wire as FlutterMonaco.dispatch with
+      // method editor.executeAction and params {actionId, args}.
+      for (final call in webview.dispatched) {
+        if (call['method'] != 'editor.executeAction') continue;
+        final params = call['params']! as Map<String, Object?>;
+        executedIds.add(params['actionId']! as String);
       }
 
       for (final actionId in values) {

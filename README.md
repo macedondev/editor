@@ -18,20 +18,24 @@ Check the [live demo here](https://omar-hanafy.github.io/flutter-monaco/) to try
 
 - 🎨 **Full Monaco Editor** - The same editor that powers VS Code
 - 🌐 **100+ Language Support** - Syntax highlighting for all major languages
-- 🎭 **Multiple Themes** - Dark, Light, and High Contrast themes
-- 💾 **Versioned Asset Caching** - Efficient one-time asset installation
-- 🖥️ **Cross-Platform** - Works on Android, iOS, macOS, Windows, and Web
-- ⚡ **Multiple Editors** - Support for unlimited independent editor instances
-- 📊 **Live Statistics** - Real-time line/character counts and selection info
-- 🎯 **Type-safe API** - Comprehensive typed bindings for Monaco's JavaScript API
-- 🧠 **Custom IntelliSense** - Register multiple completion providers (static or remote)
+- 🎭 **Multiple Themes** - Dark, Light, High Contrast, and custom themes; the default theme follows your app's brightness
+- 🔀 **Diff Editor** - `MonacoDiffEditor` widget and headless `MonacoDiffController` for side-by-side or inline diffs
+- ⌨️ **Custom Actions & Keybindings** - Define editor actions in Dart with typed keybindings (Cmd/Ctrl+S save hooks, command palette, context menu)
+- 📑 **Multi-Document Editing** - One editor, many documents: open, switch, and edit models with independent undo stacks and dirty tracking
 - 🔌 **Language Server Protocol** - Connect real language servers (pyright, typescript-language-server, gopls, ...) for server-grade completions, diagnostics, hover, rename, and more
+- 🧠 **Custom IntelliSense** - Register multiple completion providers (static or remote)
+- 📡 **Typed Events** - A sealed `MonacoEvent` union plus typed streams for content, selection, and focus changes
+- 🚨 **Typed Errors** - A sealed `MonacoException` hierarchy; bridge failures throw instead of returning silent defaults
+- 🛰️ **Protocol v3 Wire** - One request-correlated JSON envelope channel that behaves identically on Android, iOS, macOS, Windows, and Web
+- 🎯 **Type-safe API** - Extension-type ids (`MonacoTheme`, `MonacoLanguage`, `MonacoAction`) with const catalogs over open sets
 - 🔍 **Find & Replace** - Full programmatic find/replace with regex support
-- 🎭 **Decorations & Markers** - Add highlights, errors, warnings to your code
-- 📡 **Event Streams** - Listen to content changes, selection, focus events
+- 🖍️ **Decorations & Markers** - Independent decoration sets and owner-scoped markers for highlights, errors, warnings
+- 📊 **Live Statistics** - Real-time line/character counts and selection info
 - 🎨 **Themeable Chrome** - Customize loading, error, and status-bar UI via `MonacoEditorTheme`
-- 🧰 **Typed Actions** - `MonacoAction` constants cover Monaco's full command surface (fold, indent, comment, format, find, and more)
 - 🖱️ **Edge Scroll Handoff** - Opt-in: wheel/trackpad scrolling continues into the surrounding page once the editor hits its scroll edge
+- 💾 **Versioned Asset Caching** - Efficient one-time asset installation
+- ⚡ **Multiple Editors** - Support for unlimited independent editor instances
+- 🖥️ **Cross-Platform** - Works on Android, iOS, macOS, Windows, and Web
 
 > **⚠️ Platform Support:** Currently supports **Android**, **iOS**, **macOS**, **Windows**, and **Web**. Linux is **not supported** at this time.
 
@@ -69,99 +73,11 @@ dependencies:
   flutter_monaco: ^<latest version>
 ```
 
-## Migrating from another Flutter code editor
-
-If you're moving from another Flutter code editor package (such as `flutter_code_editor`), keep your existing settings model and toolbar wiring - map them into Monaco's typed APIs instead of replacing your app structure.
-
-### 1. Map app settings to `EditorOptions`
-
-```dart
-class CodeEditorSettings {
-  const CodeEditorSettings({
-    required this.languageId,
-    required this.themeId,
-    required this.fontSize,
-    required this.tabSize,
-    required this.wordWrap,
-  });
-
-  final String languageId;
-  final String themeId; // built-in id ("vs-dark") or custom theme id
-  final double fontSize;
-  final int tabSize;
-  final bool wordWrap;
-}
-
-EditorOptions toMonacoOptions(CodeEditorSettings s) {
-  return EditorOptions(
-    language: MonacoLanguage.fromId(s.languageId),
-    theme: MonacoTheme.vsDark,
-    themeId: s.themeId, // overrides theme when set; custom themes work too
-    fontSize: s.fontSize,
-    tabSize: s.tabSize,
-    wordWrap: s.wordWrap,
-  );
-}
-```
-
-### 2. Persist and register custom themes once
-
-Use `MonacoThemeDefinition` for custom syntax themes that should round-trip with your app settings:
-
-```dart
-const appDark = MonacoThemeDefinition(
-  id: 'app-dark',
-  base: MonacoTheme.vsDark,
-  rules: [
-    MonacoThemeRule(token: 'comment', foreground: '6A9955', fontStyle: 'italic'),
-  ],
-  colors: {
-    'editor.background': '#1E1E1E',
-    'editor.foreground': '#D4D4D4',
-  },
-);
-
-await controller.defineTheme(appDark);
-await controller.setThemeById('app-dark'); // or set EditorOptions.themeId
-```
-
-For Monaco theme JSON exported elsewhere, use `controller.defineThemeFromJson(id, data)`.
-
-### 3. Style the editor chrome with `MonacoEditorTheme`
-
-Customize the built-in loading/error/status-bar widgets without replacing them:
-
-```dart
-MonacoEditorTheme(
-  data: MonacoEditorThemeData(
-    statusBarBackgroundColor: Theme.of(context).colorScheme.surface,
-    statusBarBorderColor: Theme.of(context).dividerColor,
-    loadingIndicatorColor: Theme.of(context).colorScheme.primary,
-  ),
-  child: MonacoEditor(options: options, showStatusBar: true),
-);
-```
-
-### 4. Wire toolbar buttons through the controller
-
-Dispatch any Monaco command via `executeAction` with a typed `MonacoAction` constant:
-
-```dart
-await controller.executeAction(MonacoAction.foldAll);
-await controller.executeAction(MonacoAction.unfoldAll);
-await controller.executeAction(MonacoAction.commentLine);
-await controller.executeAction(MonacoAction.indentLines);
-await controller.executeAction(MonacoAction.outdentLines);
-await controller.executeAction(MonacoAction.formatDocument);
-```
-
-`MonacoAction` exposes the full set of Monaco's built-in command ids as autocomplete-friendly constants. For commands not enumerated (e.g. custom actions registered via Monaco's `editor.addCommand`), pass the raw id string to `executeAction` instead.
-
-### 5. Backgrounds
-
-`setBackgroundColor` recolors the native WebView container. `setHostPageBackgroundColor` recolors Monaco's HTML host page (more reliable on macOS). To recolor Monaco's editor surface itself, set `editor.background` in a `MonacoThemeDefinition` rather than relying on these.
+> Upgrading from 2.x? See [Migrating from 2.x to 3.0](#migrating-from-2x-to-30).
 
 ## Quick Start
+
+The `MonacoEditor` widget owns the whole lifecycle: it creates a controller, shows loading and error chrome, and hands you the ready controller via `onReady`. This works the same on every platform, including web.
 
 ```dart
 import 'package:flutter/material.dart';
@@ -174,11 +90,14 @@ void main() {
       theme: ThemeData.light(),
       darkTheme: ThemeData.dark(),
       home: Scaffold(
-        appBar: AppBar(
-          title: const Text('Monaco Editor'),
-        ),
-        body: const MonacoEditor(
+        appBar: AppBar(title: const Text('Monaco Editor')),
+        body: MonacoEditor(
+          initialText: 'void main() {\n  print("Hello, Monaco!");\n}\n',
+          options: const EditorOptions(language: MonacoLanguage.dart),
           showStatusBar: true,
+          onReady: (controller) {
+            // The full controller API is available here.
+          },
         ),
       ),
     ),
@@ -186,102 +105,151 @@ void main() {
 }
 ```
 
-## Type-Safe Enums
+Leave `EditorOptions.theme` unset and the editor follows your app's brightness (dark mode gets `vs-dark`, light mode gets `vs`) and reacts to platform dark-mode changes. Set an explicit theme and it always wins.
 
-Flutter Monaco provides type-safe enums for all configuration options, preventing runtime errors from invalid string values:
+### Using the controller directly
+
+`MonacoController.create` returns immediately on every platform; await `whenReady` before treating the editor as live. Content and model operations live on `controller.document`; editor-level operations (theme, actions, view state, focus) stay on the controller.
 
 ```dart
-// Languages - 70+ programming languages supported
-const EditorOptions(
-  language: MonacoLanguage.typescript,  // Instead of 'typescript'
-  theme: MonacoTheme.vsDark,           // Instead of 'vs-dark'
-  cursorBlinking: CursorBlinking.smooth,
-  cursorStyle: CursorStyle.block,
-  renderWhitespace: RenderWhitespace.boundary,
-  autoClosingBrackets: AutoClosingBehavior.languageDefined,
-  autoClosingQuotes: AutoClosingBehavior.languageDefined,
+final controller = await MonacoController.create(
+  options: const EditorOptions(
+    language: MonacoLanguage.python,
+    fontSize: 16,
+  ),
+  initialText: 'print("Hello, World!")',
 );
+await controller.whenReady;
 
-// Dynamic language selection (when loading from user preferences, etc.)
-final language = MonacoLanguage.fromId('python');  // Convert string to enum
-await controller.setLanguage(language);
+// Content lives on the document handle.
+final text = await controller.document.getText();
+await controller.document.setText('print("Hi!")');
+await controller.document.setLanguage(MonacoLanguage.javascript);
 
-// Theme selection with dynamic conversion
-final theme = MonacoTheme.fromId('vs-dark');  // Convert string to enum
-await controller.setTheme(theme);
+// Editor-level operations stay on the controller.
+await controller.setTheme(MonacoTheme.vsDark);
+await controller.executeAction(MonacoAction.formatDocument);
 ```
 
-### Available Enums
+Display a self-created controller by passing it to the widget (`MonacoEditor(controller: controller)`); the widget renders it without creating its own.
 
-**MonacoTheme**
+> **Dot shorthands:** `MonacoTheme`, `MonacoLanguage`, and `MonacoAction` are extension types with const catalogs, so with Dart 3.10+ enum shorthands call sites like `executeAction(.formatDocument)` and `setTheme(.vsDark)` work out of the box.
 
-- `MonacoTheme.vs` - Light theme
-- `MonacoTheme.vsDark` - Dark theme
-- `MonacoTheme.hcBlack` - High contrast dark
-- `MonacoTheme.hcLight` - High contrast light
+## Documents and Multi-Document Editing
 
-**MonacoLanguage** (70+ languages including)
+The editor is a viewport; documents are Monaco models you open, switch, and edit independently. `controller.document` always tracks the active document, while `openDocument` returns handles pinned to a URI.
 
-- `MonacoLanguage.javascript`, `MonacoLanguage.typescript`, `MonacoLanguage.python`
-- `MonacoLanguage.dart`, `MonacoLanguage.java`, `MonacoLanguage.csharp`
-- `MonacoLanguage.go`, `MonacoLanguage.rust`, `MonacoLanguage.swift`
-- `MonacoLanguage.html`, `MonacoLanguage.css`, `MonacoLanguage.scss`
-- `MonacoLanguage.json`, `MonacoLanguage.yaml`, `MonacoLanguage.xml`
-- `MonacoLanguage.markdown`, `MonacoLanguage.sql`, `MonacoLanguage.dockerfile`
-- And many more...
+```dart
+// Open each file once with a stable file:/// URI. Opening does not activate.
+final mainDart = await controller.openDocument(
+  text: dartSource,
+  language: MonacoLanguage.dart,
+  uri: Uri.parse('file:///demo/main.dart'),
+);
+final notes = await controller.openDocument(
+  text: '# Notes\n',
+  language: MonacoLanguage.markdown,
+  uri: Uri.parse('file:///demo/NOTES.md'),
+);
 
-**CursorBlinking**
+// Switch the visible document; every document keeps its own undo stack.
+await controller.activateDocument(mainDart);
 
-- `CursorBlinking.blink` - Default blinking
-- `CursorBlinking.smooth` - Smooth fade animation
-- `CursorBlinking.phase` - Phase animation
-- `CursorBlinking.expand` - Expand animation
-- `CursorBlinking.solid` - No blinking
+// Pinned handles edit their model even while another document is visible.
+await notes.insert(const Position(line: 1, column: 1), 'TODO: review\n');
 
-**CursorStyle**
+// Dirty tracking per document.
+final dirty = await mainDart.isDirty();
+await mainDart.markSaved();
 
-- `CursorStyle.line` - Vertical line (default)
-- `CursorStyle.block` - Block cursor
-- `CursorStyle.underline` - Underline cursor
-- `CursorStyle.lineThin` - Thin vertical line
-- `CursorStyle.blockOutline` - Outlined block
-- `CursorStyle.underlineThin` - Thin underline
+// Enumerate, look up, and close.
+final open = await controller.listDocuments();
+final byUri = controller.documentByUri(Uri.parse('file:///demo/main.dart'));
+await notes.close();
+```
 
-**RenderWhitespace**
+Every `MonacoDocument` (including the active-tracking `controller.document`) exposes the full text API: `getText`, `setText`, `lineCount`, `lineAt`, `getLines`, `insert`, `deleteRange`, `replaceRange`, `applyEdits`, `findMatches`, `replaceMatches`, `getWordAt`, `isDirty`, `markSaved`, `getLanguage`, `setLanguage`, `setMarkers`, and `clearMarkers`.
 
-- `RenderWhitespace.none` - Don't render whitespace
-- `RenderWhitespace.boundary` - Render whitespace at word boundaries
-- `RenderWhitespace.selection` - Render whitespace in selection
-- `RenderWhitespace.trailing` - Render trailing whitespace
-- `RenderWhitespace.all` - Render all whitespace
+Content-change events carry the document URI, so one stream can keep per-tab dirty markers accurate:
 
-**AutoClosingBehavior (Brackets and Quotes)**
+```dart
+controller.onContentChanged.listen((event) async {
+  final uri = event.documentUri;
+  // event.isFlush, event.changes, event.truncated are also available.
+});
+```
 
-- `AutoClosingBehavior.always` - Always auto-close brackets
-- `AutoClosingBehavior.languageDefined` - Use language defaults
-- `AutoClosingBehavior.beforeWhitespace` - Auto-close before whitespace
-- `AutoClosingBehavior.never` - Never auto-close
+Language servers key their state on these URIs, so open documents with stable `file:///...` URIs when using LSP. See `example/lib/multi_editor_example.dart` for a complete tabbed-editor demo.
+
+## Decorations
+
+Decorations are handle-based: each `MonacoDecorationSet` is an independent owner, so search highlights and lint underlines (for example) never clobber each other.
+
+```dart
+final highlights = await controller.createDecorationSet();
+
+await highlights.set([
+  DecorationOptions.line(
+    range: Range.lines(5, 5),
+    className: 'highlight-line', // CSS class from MonacoPageConfig.customCss
+  ),
+  DecorationOptions.inlineClass(
+    range: Range.singleLine(10, startColumn: 3, endColumn: 12),
+    className: 'squiggly-word',
+    hoverMessage: 'Did you mean "flutter"?',
+  ),
+]);
+
+await highlights.clear();   // remove the decorations, keep the set
+await highlights.dispose(); // release the set
+```
+
+`DecorationOptions.line`, `.inlineClass`, and `.glyphMargin` cover the common cases; the raw `options` map accepts any Monaco `IModelDecorationOptions` key. Ship the CSS classes via `MonacoPageConfig(customCss: ...)`.
+
+## Custom Actions and Keybindings
+
+Define editor actions in Dart with `controller.addAction`. The action gets a keybinding, shows up in the command palette (F1), and can be placed in the context menu. This is the way to intercept Cmd/Ctrl+S:
+
+```dart
+final save = await controller.addAction(
+  const MonacoActionDescriptor(
+    id: MonacoAction('demo.save'),
+    label: 'Save',
+    keybindings: [MonacoKeybinding(key: MonacoKey.keyS, ctrlCmd: true)],
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: 1,
+  ),
+  () async {
+    final text = await controller.document.getText();
+    await saveToDisk(text);
+  },
+);
+
+// Later, remove the action (keybinding and menu entry included):
+await save.dispose();
+```
+
+`MonacoKeybinding` composes a `MonacoKey` with `ctrlCmd` (Cmd on macOS, Ctrl elsewhere), `shift`, `alt`, and `winCtrl` modifiers. Multiple keybindings per action are supported.
+
+Built-in editor commands run through `executeAction` with the `MonacoAction` catalog (~386 typed command ids):
+
+```dart
+await controller.executeAction(MonacoAction.formatDocument);
+await controller.executeAction(MonacoAction.commentLine);
+await controller.executeAction(MonacoAction.foldAll);
+// Any command id works, including ones not in the catalog:
+await controller.executeAction(MonacoAction('my.custom.command'));
+```
 
 ## Custom IntelliSense Completions
 
-Monaco already knows how to merge results from multiple completion providers. Flutter Monaco now exposes this capability with a tiny, type-safe API that keeps all of the heavy lifting in Dart. Register static keyword/snippet lists or dynamic providers that call your own services.
+Monaco merges results from multiple completion providers. Register static keyword/snippet lists or dynamic providers that call your own services; each registration returns a `MonacoCompletionRegistration` you can dispose at any time.
 
 ```dart
-// Note: On web, prefer MonacoEditor with onReady instead of calling create.
-final controller = await MonacoController.create(
-  options: const EditorOptions(
-    language: MonacoLanguage.typescript,
-    theme: MonacoTheme.vsDark,
-  ),
-);
-
 // Static completions (keywords/snippets/etc.)
-await controller.registerStaticCompletions(
+final keywords = await controller.registerStaticCompletions(
   id: 'keywords',
-  languages: [
-    MonacoLanguage.typescript.id,
-    MonacoLanguage.javascript.id,
-  ],
+  languages: const [MonacoLanguage.typescript, MonacoLanguage.javascript],
   triggerCharacters: const [' ', '.'],
   items: const [
     CompletionItem(
@@ -289,22 +257,21 @@ await controller.registerStaticCompletions(
       kind: CompletionItemKind.snippet,
       detail: 'Begin a pipeline section',
       documentation: 'Expands to a snippet with placeholders.',
-      insertText: 'pipeline(${1:source}) {\n  ${2:// body}\n}',
+      insertText: 'pipeline(\${1:source}) {\n  \${2:// body}\n}',
       insertTextRules: {InsertTextRule.insertAsSnippet},
     ),
     CompletionItem(
       label: 'logger.info',
       kind: CompletionItemKind.method,
       detail: 'Log a message at INFO level',
-      documentation: 'Simple helper around window.logger',
     ),
   ],
 );
 
 // Dynamic completions - call your own API or local data
-await controller.registerCompletionSource(
+final acmeApi = await controller.registerCompletions(
   id: 'acme-api',
-  languages: [MonacoLanguage.typescript.id],
+  languages: const [MonacoLanguage.typescript],
   triggerCharacters: const ['.', '_'],
   provider: (CompletionRequest request) async {
     // You get request.language, uri, cursor position, current line, etc.
@@ -334,6 +301,9 @@ await controller.registerCompletionSource(
     );
   },
 );
+
+// Need to remove a provider? Dispose its registration:
+await acmeApi.dispose();
 ```
 
 Helper to grab the token before the cursor:
@@ -351,12 +321,57 @@ String _currentWord(CompletionRequest request) {
 
 `CompletionRequest` includes useful metadata:
 
-- `providerId`, `requestId` – identify the provider and respond to Monaco.
-- `language`, `uri` – the model that triggered the request.
-- `position`, `defaultRange`, `lineText` – cursor info plus the word range Monaco wants you to replace.
-- `triggerKind`, `triggerCharacter` – what caused the completion (manual `Ctrl+Space`, character, etc.).
+- `providerId`, `requestId` - identify the provider and the request.
+- `language`, `uri` - the model that triggered the request.
+- `position`, `defaultRange`, `lineText` - cursor info plus the word range Monaco wants you to replace.
+- `triggerKind`, `triggerCharacter` - what caused the completion (manual `Ctrl+Space`, character, etc.).
 
-Need to remove a provider? Call `controller.unregisterCompletionSource(id)` at any time. You can register as many providers as you need. Monaco merges them and sorts via each item's `sortText`.
+You can register as many providers as you need. Monaco merges them and sorts via each item's `sortText`.
+
+## Diff Editor
+
+`MonacoDiffEditor` renders an original/modified pair side by side or inline, with the same loading/error chrome as `MonacoEditor`:
+
+```dart
+MonacoDiffEditor(
+  original: originalSource,
+  modified: modifiedSource,
+  language: MonacoLanguage.dart,
+  diffOptions: const MonacoDiffOptions(renderSideBySide: true),
+  onReady: (controller) => _diffController = controller,
+)
+```
+
+`MonacoDiffOptions` covers `renderSideBySide`, `readOnly`, `originalEditable`, `ignoreTrimWhitespace`, `renderMarginRevertIcon`, plus an `extra` map for any other Monaco diff option.
+
+For headless use, create the controller yourself:
+
+```dart
+final diff = await MonacoDiffController.create(
+  original: before,
+  modified: after,
+  language: MonacoLanguage.json,
+  diff: const MonacoDiffOptions(renderSideBySide: false),
+);
+await diff.whenReady;
+
+await diff.setTexts(
+  original: v1,
+  modified: v2,
+  language: MonacoLanguage.dart,
+);
+await diff.revealNextChange();
+await diff.revealPreviousChange();
+
+final merged = await diff.getModifiedText();
+final changedBlocks = await diff.getLineChangeCount();
+
+await diff.updateOptions(const EditorOptions(fontSize: 13));
+await diff.updateDiffOptions(const MonacoDiffOptions(renderSideBySide: true));
+await diff.setTheme(MonacoTheme.vsDark);
+```
+
+Try it: `flutter run -t lib/diff_example.dart` in `example/`.
 
 ## Language Server Protocol (LSP)
 
@@ -396,10 +411,16 @@ The editor page's Content-Security-Policy blocks all network connections by defa
 
 ```dart
 final controller = await MonacoController.create(
-  allowedConnectSources: ['ws://127.0.0.1:3000'], // CSP connect-src opt-in
+  page: const MonacoPageConfig(
+    allowedConnectSources: ['ws://127.0.0.1:3000'], // CSP connect-src opt-in
+  ),
 );
 // or on the widget:
-MonacoEditor(allowedConnectSources: ['wss://lsp.example.com'])
+MonacoEditor(
+  page: const MonacoPageConfig(
+    allowedConnectSources: ['wss://lsp.example.com'],
+  ),
+)
 ```
 
 > Browser WebSockets cannot carry custom headers. If your server needs auth,
@@ -451,74 +472,11 @@ final connection = await controller.connectLanguageServer(
 
 ### Good to know
 
-- **Model URIs matter.** Language servers key their state on document URIs - create models with stable `file:///...` URIs (`createModel(..., uri: ...)`) instead of relying on Monaco's default `inmemory://` model.
+- **Document URIs matter.** Language servers key their state on document URIs - open documents with stable `file:///...` URIs (`openDocument(..., uri: ...)`) instead of relying on Monaco's default `inmemory://` model.
 - **Diagnostics owner.** LSP diagnostics appear as Monaco markers under the owner `'lsp'`; they're cleared automatically when the last connection closes.
 - **Multiple servers.** Allowed, but Monaco synchronizes *all* models to every connected server and all LSP diagnostics share one marker owner - prefer one server per editor unless your servers handle disjoint files.
 - **Multiple editors.** Each `MonacoController` is an isolated WebView with its own JavaScript context; connect each editor separately (most servers handle multiple client connections fine).
 - **Try it:** `flutter run -t lib/lsp_example.dart` in `example/` demonstrates both the WebSocket and the local stdio paths.
-
-## Multiple Editors Example
-
-Create a multi-editor layout with different languages and themes. This approach works on all platforms including web:
-
-```dart
-class MultiEditorView extends StatefulWidget {
-  @override
-  State<MultiEditorView> createState() => _MultiEditorViewState();
-}
-
-class _MultiEditorViewState extends State<MultiEditorView> {
-  MonacoController? _dartController;
-  MonacoController? _jsController;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Dart editor
-        Expanded(
-          child: MonacoEditor(
-            initialValue: '// Dart code\nvoid main() {}',
-            options: const EditorOptions(
-              language: MonacoLanguage.dart,
-              theme: MonacoTheme.vsDark,
-            ),
-            onReady: (c) => setState(() => _dartController = c),
-          ),
-        ),
-        const Divider(height: 1),
-        // JavaScript editor
-        Expanded(
-          child: MonacoEditor(
-            initialValue: '// JavaScript code\nfunction main() {}',
-            options: const EditorOptions(
-              language: MonacoLanguage.javascript,
-              theme: MonacoTheme.vs,  // Light theme
-            ),
-            onReady: (c) => setState(() => _jsController = c),
-          ),
-        ),
-      ],
-    );
-  }
-}
-```
-
-Alternative for native platforms only: if you need more control, you can still use `MonacoController.create()` directly:
-
-```dart
-// Native platforms only. On web, use MonacoEditor and onReady instead.
-Future<void> _initializeEditors() async {
-  _dartController = await MonacoController.create(
-    options: const EditorOptions(
-      language: MonacoLanguage.dart,
-      theme: MonacoTheme.vsDark,
-    ),
-  );
-  await _dartController!.setValue('// Dart code');
-  setState(() {});
-}
-```
 
 ## Edge Scroll Handoff
 
@@ -572,95 +530,225 @@ Touch forwarding is a separate, **experimental** opt-in (`mobileTouch: true`). I
 
 See `example/lib/scroll_handoff_example.dart` for a full page with short, long, and handoff-disabled editors.
 
+## Migrating from 2.x to 3.0
+
+3.0 is a ground-up rebuild of the package's spine: one wire protocol, a document/editor split, sparse options, typed errors, and typed events. The LSP API, the scroll handoff feature, the focus engineering, and the web overlay widgets are unchanged. The table below is complete against the 2.3.0 public API; the `(Dxx)` tags reference the numbered design decisions recorded in the v3 blueprint (`upcoming/v3.md` in the repository).
+
+### Symbol-level changes
+
+| 2.3.0 | 3.0 | Migration |
+|---|---|---|
+| `MonacoAction.foldAll` (a `String`) | `MonacoAction.foldAll` (a `MonacoAction`) | append `.id` where a raw String is required; call sites into `executeAction` unchanged textually |
+| `controller.executeAction(String, [dynamic args])` | `executeAction(MonacoAction, {Object? args})` | wrap raw ids: `MonacoAction(id)`; args becomes named |
+| `MonacoTheme` enum | `MonacoTheme` extension type | `MonacoTheme.vsDark` unchanged textually; `MonacoTheme.values` -> `MonacoTheme.builtIn`; `MonacoTheme.fromId(s)` -> `MonacoTheme(s)` |
+| `MonacoLanguage` enum | `MonacoLanguage` extension type | same pattern; `fromId(s)` -> `MonacoLanguage(s)` |
+| `EditorOptions.themeId`, `effectiveThemeId` | deleted | `EditorOptions(theme: MonacoTheme('app-dark'))` |
+| `controller.setThemeById(String)` | deleted | `setTheme(MonacoTheme(id))` |
+| `controller.defineThemeFromJson(id, map)` | deleted | `defineTheme(MonacoThemeDefinition.fromMonacoThemeData(id, map))` |
+| `EditorOptions` full-state semantics | sparse semantics (D09) | initial options: unchanged construction; `updateOptions` now changes only provided fields (the old reset behavior was almost never intended; to force a full reset, pass a fully-populated options object, e.g. `MonacoDefaults.editorOptions.merge(...)`) |
+| `EditorOptions.padding: Map<String,int>?` | `MonacoPadding` | `MonacoPadding(top: 10)` |
+| `EditorOptions.minimap/wordWrap/lineNumbers: bool` | `MonacoMinimapOptions` / `MonacoWordWrap` / `MonacoLineNumbers` | `minimap: MonacoMinimapOptions(enabled: true)`, `wordWrap: .on`, `lineNumbers: .on` |
+| `MonacoConstants` | deleted | `MonacoDefaults.editorOptions` etc. |
+| `MonacoFont` | `MonacoFontStacks` statics | `MonacoFont.jetBrainsMono.value` -> `MonacoFontStacks.jetBrainsMono` |
+| `MonacoJavaScriptException` | `MonacoJavaScriptError` (extends sealed `MonacoException`) | rename in catches |
+| `getValue({defaultValue})` / `getLineCount({defaultValue})` / `getLineContent(...)` / `getLinesContent(...)` | `controller.document.getText()` / `lineCount()` / `lineAt()` / `getLines(start, end)`; all throw on failure (D06) | wrap in try/catch where fallback behavior is desired |
+| `setValue(v)` | `controller.document.setText(v)` | |
+| `setLanguage(lang)` | `controller.document.setLanguage(lang)` | |
+| `applyEdits/insertText/deleteRange/replaceRange` | same names on `controller.document` (`insertText` -> `insert`) | |
+| `deleteLine(n)` | `document.deleteRange(Range.lines(n, n))` | |
+| `findMatches/replaceMatches` | same names on `controller.document` | |
+| `hasUnsavedChanges()/markSaved()` | `document.isDirty()/markSaved()` | |
+| `setMarkers/setErrorMarkers/setWarningMarkers/clearMarkers/clearAllMarkers` | `document.setMarkers(markers, owner:)/clearMarkers(owner:)` (severity conveniences and the 3-owner clearAll are deleted) | build `MarkerData.error(...)` lists; clear owners explicitly |
+| `setDecorations/addInlineDecorations/addLineDecorations/clearDecorations` | `createDecorationSet()` + `set/clear/dispose` | one set per concern; `DecorationOptions.inlineClass/line` factories unchanged |
+| `createModel/setModel/disposeModel/listModels` | `openDocument/activateDocument/document.close()/listDocuments` | |
+| `format()/find()/replace()/toggleWordWrap()/selectAll()/undo()/redo()/cut()/copy()/paste()/foldAll()/unfoldAll()/toggleLineComment()/indentLines()/outdentLines()` | deleted (D19) | `executeAction(.formatDocument)`, `.find` -> `MonacoAction.find`, replace -> `.startFindReplaceAction`, toggleLineComment -> `.commentLine`, others map to the same-named `MonacoAction` constants |
+| `focus()` / `ensureEditorFocus({attempts, interval, intent})` | `requestFocus({intent})` (D20) | attempts/interval internalized (same defaults) |
+| `releaseNativeInputFocus()` | `releaseNativeFocus()` | rename |
+| `liveStats` (`ValueNotifier<LiveStats>`) | `stats` (`ValueListenable<MonacoLiveStats>`) | labels moved to UI; `.value.lineCount` is now an `int` |
+| `getStatistics()` | `stats.value` | |
+| `onContentChanged: Stream<bool>` | `Stream<MonacoContentChanged>` | `isFlush` is a field |
+| `onFocus`/`onBlur` streams | `onFocusChanged: Stream<bool>` | `.where((f) => f)` / `.where((f) => !f)` |
+| `getEditorState()` | same name, one round trip, `theme` populated, `hasUnsavedChanges` -> `isDirty` | |
+| `saveViewState(): Map` / `restoreViewState(Map)` | `captureViewState(): MonacoViewState` / `restoreViewState(MonacoViewState)` | persist via `toJson()` |
+| `evaluateJavaScript` / `runJavaScript` / `runJavaScriptReturningResultRaw` | unchanged | |
+| `registerCompletionSource(...): Future<String>` / `unregisterCompletionSource(id)` | `registerCompletions(...): Future<MonacoCompletionRegistration>` / `registration.dispose()`; `languages` is now `List<MonacoLanguage>` | |
+| `create({options, customCss, allowCdnFonts, allowedConnectSources, readyTimeout})` | `create({options, initialText, page, readyTimeout})`; returns immediately, use `whenReady` (D05) | native callers relying on blocking create: `final c = await MonacoController.create(...); await c.whenReady;` |
+| `onReady` future getter | `whenReady` | rename |
+| `MonacoEditor.initialValue` | `MonacoEditor.initialText` | rename |
+| `MonacoEditor.customCss/allowCdnFonts/allowedConnectSources` | `MonacoEditor.page: MonacoPageConfig` | wrap |
+| `MonacoAssets.htmlGenerationVersion` / `generateIndexHtml` | deleted (D03/D25) | none needed; regeneration is automatic |
+| `MonacoAssets.indexHtmlPath` / `MonacoAssets.assetBaseDir` | internal | apps needing paths use `assetInfo().path` |
+| `MonacoAssets.assetInfo(): Map` | `Future<MonacoAssetDiagnostics>` | typed fields |
+| `LiveStats` | `MonacoLiveStats` | see stats row above |
+| LSP exports (all) | unchanged | none |
+| `MonacoScrollHandoff` family, `MonacoEditorTheme(Data)`, `MonacoFocusGuard`, `MonacoOverlayBoundary`, `MonacoRouteObserver`, `MonacoScaffold`, `Position`, `Range`, `MarkerData`, `DecorationOptions`, `EditOperation`, `CompletionItem/List/Request/Kind`, `FindMatch`, `FindOptions`, `InsertTextRule`, `JsonDiagnostics*`, `MonacoThemeDefinition/Rule` (except `base` type) | unchanged | none |
+
+### Behavioral changes
+
+1. Reads throw typed exceptions instead of returning defaults.
+2. `create` never blocks on readiness; commands issued before ready are ordered FIFO after ready (this preserves the old queue's last-write-wins outcome for consecutive `setText` calls).
+3. `updateOptions` is sparse: only the fields you set are sent to Monaco.
+4. No markdown/vs-dark boot flash; the first painted frame uses the requested options.
+5. Unknown JS events no longer `debugPrint` as unhandled; they surface as `MonacoUnknownEvent`.
+6. `MonacoThemeDefinition.base` is `MonacoBaseTheme` (was the `MonacoTheme` enum); `fromJson` maps the same four id strings.
+7. `EditorOptions.fromJson` parses only the 3.0 `toJson` shape (strict keys, typed sub-options). It does not read 2.x-era `theme`/`themeId` string blobs; apps that persisted hand-built 2.x option JSON re-serialize once with 3.0 `toJson`.
+
 ## API Reference
+
+A tour of the main surface. The complete reference lives on [pub.dev](https://pub.dev/documentation/flutter_monaco/latest/).
+
+### Typed ids: themes, languages, actions
+
+`MonacoTheme`, `MonacoLanguage`, and `MonacoAction` are zero-cost extension types over `String` with const catalogs. The catalogs give you autocomplete; the constructors keep the sets open:
+
+```dart
+MonacoTheme.vsDark            // vs, vsDark, hcBlack, hcLight
+MonacoLanguage.typescript     // 85 built-in language ids
+MonacoAction.formatDocument   // ~386 Monaco command ids
+
+MonacoTheme('app-dark')       // custom theme ids are first-class
+MonacoLanguage('mylang')      // contributed languages too
+MonacoAction('my.command')    // and arbitrary command ids
+
+MonacoTheme.builtIn           // catalog lists (replaces enum .values)
+```
+
+Closed sets stay enums: `CursorBlinking`, `CursorStyle`, `RenderWhitespace`, `AutoClosingBehavior`, `MonacoWordWrap`, `MonacoLineNumbers`, `MonacoLineHighlight`, `MonacoFoldingControls`, `MonacoScrollbarVisibility`, `MonacoBaseTheme`, `MarkerSeverity`, `DiagnosticsSeverity`.
 
 ### MonacoController
 
-Main controller for interacting with the editor:
-
 ```dart
-// Content management
-await controller.setValue('const x = 42;');
-String content = await controller.getValue();
+// Lifecycle: create returns immediately on every platform.
+final controller = await MonacoController.create();
+await controller.whenReady;
+print(controller.isReady);                      // true
+print(controller.capabilities.monacoVersion);   // '0.55.1'
 
-// Language and theme (type-safe enums)
-await controller.setLanguage(MonacoLanguage.javascript);
+// Content and models: controller.document (see Documents section above)
+await controller.document.setText('const x = 42;');
+final content = await controller.document.getText();
+
+// Language and theme
+await controller.document.setLanguage(MonacoLanguage.javascript);
 await controller.setTheme(MonacoTheme.vsDark);
+final theme = await controller.getTheme();
 
-// Editor actions
-await controller.format();           // Format document
-await controller.find();             // Open find dialog
-await controller.replace();          // Open replace dialog
-await controller.selectAll();        // Select all text
-await controller.undo();             // Undo last action
-await controller.redo();             // Redo last undone action
+// Built-in editor actions
+await controller.executeAction(MonacoAction.formatDocument);
+await controller.executeAction(MonacoAction.find);
+await controller.executeAction(MonacoAction.selectAll);
 
-// Clipboard
-await controller.cut();
-await controller.copy();
-await controller.paste();
-
-// Navigation
+// Navigation and view
+await controller.revealLine(100, center: true);
+await controller.revealRange(Range.lines(10, 20));
 await controller.scrollToTop();
 await controller.scrollToBottom();
-await controller.revealLine(100);    // Jump to line 100
-await controller.focus();            // Request focus
 
-// Custom actions (type-safe action ids)
-await controller.executeAction(MonacoAction.toggleLineComment);
-// Or use a raw Monaco action id string if needed:
-// await controller.executeAction('editor.action.commentLine');
+// Selection and cursor
+final selection = await controller.getSelection();
+await controller.setSelection(Range.lines(1, 3));
+final cursor = await controller.getCursorPosition();
+await controller.setCursorPosition(const Position(line: 1, column: 1));
 
-// JavaScript escape hatch for uncovered Monaco APIs
-await controller.runJavaScript('''
-  monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
-    validate: true,
-    schemas: [{
-      uri: 'http://my-schema',
-      fileMatch: ['*'],
-      schema: { type: 'object' }
-    }]
-  });
-''');
+// View state: persist and restore scroll/cursor/folding across sessions
+final viewState = await controller.captureViewState();
+final json = viewState.toJson(); // store it anywhere
+await controller.restoreViewState(viewState);
 
-final editorCount = await controller.evaluateJavaScript<int>(
-  'monaco.editor.getEditors().length',
-);
+// One-round-trip snapshot of everything
+final state = await controller.getEditorState();
+print('${state.lineCount} lines, dirty: ${state.isDirty}, '
+    'language: ${state.language}, theme: ${state.theme}');
 
-final rawEditorCount = await controller.runJavaScriptReturningResultRaw(
-  'monaco.editor.getEditors().length',
-);
+// Focus
+await controller.requestFocus(intent: MonacoFocusIntent.user);
+final hasFocus = await controller.hasNativeInputFocus();
+await controller.releaseNativeFocus();
 
-// Live statistics
-controller.liveStats.addListener(() {
-  final stats = controller.liveStats.value;
-  print('Lines: ${stats.lineCount.value}');
-  print('Characters: ${stats.charCount.value}');
-  print('Selected: ${stats.selectedCharacters.value}');
+// Live statistics (typed fields; render labels in your own UI)
+controller.stats.addListener(() {
+  final stats = controller.stats.value;
+  print('Lines: ${stats.lineCount}, chars: ${stats.charCount}, '
+      'selected: ${stats.selectedCharacters}');
 });
-
-// Event streams
-controller.onContentChanged.listen((isFlush) {
-  print('Content changed (full replace: $isFlush)');
-});
-
-controller.onSelectionChanged.listen((range) {
-  print('Selection: $range');
-});
-
-controller.onFocus.listen((_) => print('Editor focused'));
-controller.onBlur.listen((_) => print('Editor blurred'));
 ```
 
-For a full set of bundled action IDs, use `MonacoAction` (exported by this
-package) to avoid stringly-typed calls.
+### Events
 
-### JavaScript Escape Hatch
+`controller.events` is a sealed `MonacoEvent` union you can switch over exhaustively; typed convenience streams cover the common cases:
 
-For Monaco APIs not yet wrapped by the typed Dart API, `MonacoController`
-provides an advanced JavaScript escape hatch. Prefer typed methods such as
-`setValue`, `getSelection`, `setMarkers`, and `executeAction` when they cover
-your use case.
+```dart
+controller.onContentChanged.listen((change) {
+  // change.documentUri, change.isFlush,
+  // change.changes (structured ranges, null when truncated),
+  // change.truncated
+});
+controller.onSelectionChanged.listen((Range? range) => print('Selection: $range'));
+controller.onFocusChanged.listen((focused) => print(focused ? 'Focus' : 'Blur'));
+controller.onScrollHandoff.listen((details) => print(details.deltaY));
+
+controller.events.listen((event) {
+  switch (event) {
+    case MonacoContentChanged():
+    case MonacoSelectionChanged():
+    case MonacoFocusChanged():
+    case MonacoScrollHandoffEvent():
+    case MonacoUnknownEvent(): // forward compatibility, never dropped
+      break;
+  }
+});
+```
+
+### Errors
+
+Every bridge failure surfaces as a typed exception under the sealed `MonacoException` base; reads throw instead of returning silent defaults:
+
+```dart
+try {
+  final text = await controller.document.getText();
+} on MonacoTimeoutError {
+  // the bridge did not answer in time (also catchable as TimeoutException)
+} on MonacoJavaScriptError catch (e) {
+  // the JS side threw; e.name, e.stack, e.operation carry details
+} on MonacoDisposedError {
+  // controller used after dispose
+} on MonacoException catch (e) {
+  // sealed base: everything above plus MonacoProtocolError
+  print('${e.operation}: ${e.message}');
+}
+```
+
+### Find, replace, and markers
+
+```dart
+// Find and replace (on the document)
+final matches = await controller.document.findMatches(
+  'TODO',
+  options: const FindOptions(matchCase: true, wholeWord: true),
+);
+final replaced = await controller.document.replaceMatches(
+  r'colou?r',
+  'color',
+  options: const FindOptions(isRegex: true),
+);
+
+// Markers are grouped by owner; owners never clobber each other
+await controller.document.setMarkers(
+  [
+    MarkerData.error(
+      range: Range.lines(10, 10),
+      message: 'Undefined variable',
+      code: 'E001',
+    ),
+  ],
+  owner: 'my-linter',
+);
+await controller.document.clearMarkers(owner: 'my-linter');
+```
+
+### JavaScript escape hatch
+
+For Monaco APIs not yet wrapped by the typed Dart API, `MonacoController` provides an advanced JavaScript escape hatch. Prefer typed methods when they cover your use case.
 
 | Method | Use case |
 | --- | --- |
@@ -670,14 +758,7 @@ your use case.
 
 ```dart
 await controller.runJavaScript('''
-  monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
-    validate: true,
-    schemas: [{
-      uri: 'http://my-schema',
-      fileMatch: ['*'],
-      schema: { type: 'object' }
-    }]
-  });
+  monaco.editor.getEditors().forEach((e) => e.render());
 ''');
 
 final editorCount = await controller.evaluateJavaScript<int>(
@@ -685,17 +766,7 @@ final editorCount = await controller.evaluateJavaScript<int>(
 );
 ```
 
-Use raw result access only when you specifically need platform-native WebView
-behavior:
-
-```dart
-final raw = await controller.runJavaScriptReturningResultRaw(
-  'monaco.editor.getEditors().length',
-);
-```
-
-These methods do not sanitize input. Do not concatenate untrusted strings into
-a script. Use `jsonEncode` to safely embed dynamic values:
+These methods do not sanitize input. Do not concatenate untrusted strings into a script. Use `jsonEncode` to safely embed dynamic values:
 
 ```dart
 import 'dart:convert';
@@ -707,43 +778,6 @@ await controller.runJavaScript('window.setName("$userInput")');
 await controller.runJavaScript(
   'window.setName(${jsonEncode(userInput)})',
 );
-```
-
-### Advanced Features
-
-```dart
-// Find and replace
-final matches = await controller.findMatches(
-  'TODO',
-  options: const FindOptions(
-    isRegex: false,
-    matchCase: true,
-    wholeWord: true,
-  ),
-);
-print('Found ${matches.length} TODOs');
-
-// Add error markers
-await controller.setErrorMarkers([
-  MarkerData.error(
-    range: Range.lines(10, 10),
-    message: 'Undefined variable',
-    code: 'E001',
-  ),
-]);
-
-// Add decorations (highlights)
-await controller.addLineDecorations(
-  [5, 10, 15],  // Line numbers
-  'highlight-line',  // CSS class
-);
-
-// Work with multiple models
-final uri = await controller.createModel(
-  'console.log("New file");',
-  language: MonacoLanguage.javascript.id,
-);
-await controller.setModel(uri);
 ```
 
 ### JSON Diagnostics
@@ -775,78 +809,98 @@ void _onEditorReady(MonacoController controller) {
 }
 ```
 
-**DiagnosticsSeverity** values:
-- `DiagnosticsSeverity.error` - Red squiggly underline
-- `DiagnosticsSeverity.warning` - Yellow squiggly underline
-- `DiagnosticsSeverity.ignore` - Suppress diagnostics
+**Note on `fileMatch`:** Patterns match against the Monaco model URI, not file paths. Use `['*']` to apply a schema to all JSON models, or open documents with meaningful URIs via `controller.openDocument(..., uri: ...)`.
 
-**Options reference:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `validate` | `bool?` | Enable schema validation |
-| `allowComments` | `bool?` | Tolerate comments in JSON |
-| `enableSchemaRequest` | `bool?` | Load remote schemas on demand via `fetch` |
-| `schemaValidation` | `DiagnosticsSeverity?` | Severity for schema validation errors |
-| `schemaRequest` | `DiagnosticsSeverity?` | Severity for schema fetch failures |
-| `trailingCommas` | `DiagnosticsSeverity?` | Severity for trailing commas |
-| `comments` | `DiagnosticsSeverity?` | Severity for comments (overrides `allowComments`) |
-| `schemas` | `List<JsonDiagnosticsSchema>?` | Schema definitions and file associations |
-
-**Note on `fileMatch`:** Patterns match against the Monaco model URI, not file paths. Use `['*']` to apply a schema to all JSON models, or set a meaningful model URI when calling `controller.createModel()`.
-
-**Note on `enableSchemaRequest`:** Remote schema fetching requires the schema host to be allowed by the Content Security Policy. The default CSP uses `connect-src 'self' blob:`, which blocks external hosts. This package does not currently expose a public API for adding external hosts to `connect-src`, so prefer inline `schema` maps or schemas hosted where the current CSP already permits requests.
+**Note on `enableSchemaRequest`:** Remote schema fetching requires the schema host to be allowed by the Content-Security-Policy. The default CSP uses `connect-src 'self' blob:`; allow additional hosts with `MonacoPageConfig(allowedConnectSources: [...])` or prefer inline `schema` maps.
 
 ### EditorOptions
 
-Configure the editor appearance and behavior with type-safe enums:
+`EditorOptions` is sparse: every field is nullable, and only the fields you set are sent to Monaco. At boot, the widget merges your options over `MonacoDefaults.editorOptions` (the curated base: word wrap on, minimap off, line numbers on, fontSize 14, tab size 4, and so on). After boot, `updateOptions` changes only what you pass:
 
 ```dart
-const EditorOptions(
+const options = EditorOptions(
   language: MonacoLanguage.javascript,
-  theme: MonacoTheme.vsDark,      // vs, vsDark, hcBlack, hcLight
   fontSize: 14,
-  fontFamily: 'Consolas, monospace',
-  lineHeight: 1.4,                // Multiplier (< 8) or pixels (>= 8)
-  wordWrap: true,                  // or false
-  minimap: false,
-  lineNumbers: true,               // or false
+  fontFamily: MonacoFontStacks.jetBrainsMono,
+  lineHeight: 1.4,                            // multiplier (< 8) or pixels (>= 8)
+  wordWrap: MonacoWordWrap.on,
+  lineNumbers: MonacoLineNumbers.on,
+  minimap: MonacoMinimapOptions(enabled: false),
+  padding: MonacoPadding(top: 10),
+  scrollbar: MonacoScrollbarOptions(
+    vertical: MonacoScrollbarVisibility.auto,
+  ),
+  guides: MonacoGuidesOptions(bracketPairs: true, indentation: true),
+  stickyScroll: MonacoStickyScroll(enabled: true),
   rulers: [80, 120],
   tabSize: 2,
   insertSpaces: true,
   readOnly: false,
-  automaticLayout: true,           // Auto-resize with container
-  scrollBeyondLastLine: true,
-  smoothScrolling: false,
-  cursorBlinking: CursorBlinking.blink,    // blink, smooth, phase, expand, solid
-  cursorStyle: CursorStyle.line,           // line, block, underline, lineThin, blockOutline, underlineThin
-  renderWhitespace: RenderWhitespace.selection,  // none, boundary, selection, trailing, all
+  cursorBlinking: CursorBlinking.smooth,
+  cursorStyle: CursorStyle.line,
+  renderWhitespace: RenderWhitespace.selection,
+  autoClosingBrackets: AutoClosingBehavior.languageDefined,
   bracketPairColorization: true,
-  formatOnPaste: false,
-  formatOnType: false,
-  quickSuggestions: true,
-  parameterHints: true,
-  hover: true,
-  contextMenu: true,
-  mouseWheelZoom: false,
-  autoClosingBrackets: AutoClosingBehavior.languageDefined,  // always, languageDefined, beforeWhitespace, never
-  autoClosingQuotes: AutoClosingBehavior.languageDefined,    // always, languageDefined, beforeWhitespace, never
+  // Escape hatch: raw Monaco options merged last; these keys win.
+  extra: {
+    'unicodeHighlight': {'ambiguousCharacters': false},
+  },
 );
+
+// Later: changes ONLY the font size, nothing else.
+await controller.updateOptions(const EditorOptions(fontSize: 16));
 ```
 
-### MonacoAssets
+- `theme: null` follows the ambient Flutter brightness and reacts to platform dark-mode changes; an explicit theme always wins.
+- `merge(other)` layers options (non-null fields of `other` win) - useful for settings screens.
+- `MonacoFontStacks` provides ready-made monospace font stack strings (`jetBrainsMono`, `firaCodePrimary`, `cascadiaCodePrimary`, `sfMono`, ...).
 
-Manage Monaco Editor assets:
+### Custom themes
+
+```dart
+const appDark = MonacoThemeDefinition(
+  id: 'app-dark',
+  base: MonacoBaseTheme.vsDark,
+  rules: [
+    MonacoThemeRule(token: 'comment', foreground: '6A9955', fontStyle: 'italic'),
+  ],
+  colors: {
+    'editor.background': '#1E1E1E',
+    'editor.foreground': '#D4D4D4',
+  },
+);
+
+await controller.defineTheme(appDark);
+await controller.setTheme(MonacoTheme('app-dark'));
+// or boot with it: EditorOptions(theme: MonacoTheme('app-dark'))
+```
+
+For Monaco theme JSON exported elsewhere, use `MonacoThemeDefinition.fromMonacoThemeData(id, data)`.
+
+To style the editor's Flutter chrome (loading, error, and status-bar widgets), wrap the editor in a `MonacoEditorTheme`:
+
+```dart
+MonacoEditorTheme(
+  data: MonacoEditorThemeData(
+    statusBarBackgroundColor: Theme.of(context).colorScheme.surface,
+    loadingIndicatorColor: Theme.of(context).colorScheme.primary,
+  ),
+  child: MonacoEditor(showStatusBar: true),
+)
+```
+
+Backgrounds: `setBackgroundColor` recolors the native WebView container, `setHostPageBackgroundColor` recolors Monaco's HTML host page (more reliable on macOS). To recolor Monaco's editor surface itself, set `editor.background` in a `MonacoThemeDefinition`.
+
+### MonacoAssets
 
 ```dart
 // One-time initialization (called automatically)
 await MonacoAssets.ensureReady();
 
-// Get asset information
+// Typed asset diagnostics
 final info = await MonacoAssets.assetInfo();
-print('Monaco cache: ${info['path']}');
-print('Total size: ${info['totalSizeMB']} MB');
-print('File count: ${info['fileCount']}');
+print('Monaco ${info.monacoVersion} at ${info.path}');
+print('${info.fileCount} files, ${info.totalSizeMB.toStringAsFixed(1)} MB');
 
 // Clear cache (forces re-extraction on next use)
 await MonacoAssets.clearCache();
@@ -958,6 +1012,12 @@ MonacoEditor(
 
 ## Architecture
 
+### Wire protocol v3
+
+- **One channel, one contract.** Every Dart-to-JS command travels through a single request-correlated JSON envelope; every JS-to-Dart message (responses, events, completion/action requests, logs) is a versioned envelope on one channel. No platform-specific result decoding exists anywhere, so behavior is identical on Android, iOS, macOS, Windows, and Web, and every failure surfaces as a typed `MonacoException`.
+- **Bridge JavaScript is real files.** The editor bridge ships as plain `.js` assets (`assets/monaco/bridge/`), not Dart string literals. The host HTML is generated internally and rewritten on every load, so a package upgrade can never serve a stale bridge.
+- **Two-phase boot.** The page announces readiness with a protocol/version/capability handshake, Dart sends one boot command carrying options, initial text, language, and theme, and the editor is created already configured - no default-theme flash and no post-ready patching. The handshake is exposed as `controller.capabilities` (`protocolVersion`, `monacoVersion`, `lsp`, `diff`).
+
 ### Asset Management
 
 The plugin uses a versioned cache system:
@@ -1018,11 +1078,11 @@ The plugin uses a versioned cache system:
 - Modern browser with ES6+ support (Chrome, Firefox, Safari, Edge)
 - No additional configuration required
 
-> **Important:** On web, use `MonacoEditor` with `onReady`, or await `controller.onReady` after the widget is mounted. `MonacoController.create()` returns before the editor is ready on web, and it will time out if called before the iframe is in the DOM. See the [Web Usage](#web-usage) section below.
+> **Important:** On web, use `MonacoEditor` with `onReady`, or await `controller.whenReady` after the widget is mounted. The iframe must be in the DOM before the editor can finish booting. See the [Web Usage](#web-usage) section below.
 
 ## Web Usage
 
-On web, the Monaco Editor runs inside an iframe that must be mounted in the DOM before initialization can complete. This means you should **not** call `MonacoController.create()` before the widget tree is built (e.g., in `initState`).
+On web, the Monaco Editor runs inside an iframe that must be mounted in the DOM before initialization can complete. This means you should **not** create a controller and await `whenReady` before the widget tree is built (e.g., in `initState`).
 
 **Recommended pattern for web:**
 
@@ -1043,10 +1103,9 @@ class _MyEditorState extends State<MyEditor> {
   @override
   Widget build(BuildContext context) {
     return MonacoEditor(
-      initialValue: 'print("Hello!");',
+      initialText: 'print("Hello!");',
       options: const EditorOptions(
         language: MonacoLanguage.dart,
-        theme: MonacoTheme.vsDark,
       ),
       onReady: _onEditorReady,
     );
@@ -1057,11 +1116,10 @@ class _MyEditorState extends State<MyEditor> {
 This pattern works on all platforms and is the recommended approach. The `MonacoEditor` widget handles controller lifecycle internally and provides the controller via `onReady` callback once initialized.
 
 **Why this matters on web:**
-- On web, `MonacoController.create()` returns before Monaco signals "ready"
-- Use `controller.onReady` or the `MonacoEditor` `onReady` callback for readiness
-- The iframe must be in the DOM for Monaco JS to initialize
-- Calling `create()` in `initState` (before `build`) can cause a timeout
-- Native platforms do not have this constraint because WebView initialization is different
+- `MonacoController.create()` returns immediately on every platform; readiness is signaled by `controller.whenReady`
+- The iframe must be attached to the DOM for Monaco JS to initialize, so `whenReady` cannot complete until the editor's widget is in the tree
+- Awaiting `whenReady` in `initState` (before `build`) will therefore time out
+- The `MonacoEditor` widget sequences attachment, boot, and readiness for you
 
 ### Mobile browsers (iOS Safari, Android Chrome)
 
@@ -1084,19 +1142,25 @@ You can try the [live web demo here](https://omar-hanafy.github.io/flutter-monac
 
 The [example](example/) directory contains a full demonstration app with:
 
-- Basic single editor setup
+- Basic single editor setup with completions and a Cmd/Ctrl+S save action
 - Language and theme switching
-- Multi-editor layout (3 editors simultaneously)
+- Multi-document editor (tabs over one editor, dirty tracking)
+- Diff editor with side-by-side / inline toggle
+- LSP demos (WebSocket and local stdio server)
+- Edge scroll handoff playground
 - Live statistics display
-- Content extraction and manipulation
-- Cross-editor content copying
 
-Run the example:
+Run the examples:
 
 ```bash
 cd example
-flutter run -d macos  # or android, ios, windows, chrome
+flutter run -d macos                                     # main demo
+flutter run -d macos -t lib/diff_example.dart            # diff editor
+flutter run -d macos -t lib/lsp_example.dart             # language servers
+flutter run -d macos -t lib/scroll_handoff_example.dart  # edge scroll handoff
 ```
+
+Replace `-d macos` with `android`, `ios`, `windows`, or `chrome` as needed.
 
 ## Important Notes
 
@@ -1108,24 +1172,13 @@ Monaco Editor assets are **automatically bundled** with this plugin. You do not 
 - Versioned caching for fast subsequent loads
 - Automatic cleanup when updating versions
 
-### Content Queuing
+### Commands Before Ready
 
-The controller automatically queues content and language changes made before the editor is ready. Your content won't be lost even if you call `setValue()` immediately after creating the controller.
-
-### Event Handling
-
-For advanced users, you can listen to raw JavaScript events:
-
-```dart
-controller.onContentChanged.listen((isFlush) { });
-controller.onSelectionChanged.listen((range) { });
-controller.onFocus.listen((_) { });
-controller.onBlur.listen((_) { });
-```
+Every controller command awaits readiness internally: calls issued before the editor is ready are queued and run in FIFO order once it is. Calling `controller.document.setText(...)` immediately after `create` is safe; the last write wins, exactly as you would expect.
 
 ### Marker Owners
 
-When using markers (diagnostics), the `clearAllMarkers()` method only clears markers from known owners ('flutter', 'flutter-errors', 'flutter-warnings'). Custom owners must be tracked and cleared separately.
+Markers are grouped by `owner`. `document.setMarkers(markers, owner: 'my-linter')` replaces that owner's markers and `document.clearMarkers(owner: 'my-linter')` clears them; different owners never interfere. LSP diagnostics live under the `'lsp'` owner and are managed automatically.
 
 ## Troubleshooting
 
@@ -1173,8 +1226,8 @@ If Monaco assets fail to load:
 If the editor becomes unresponsive:
 
 1. Check that JavaScript is enabled in the WebView
-2. Verify the HTML file was generated correctly
-3. Look for JavaScript errors in the console output
+2. Look for JavaScript errors in the console output
+3. Check `controller.whenReady` for a typed boot error (`MonacoTimeoutError`, `MonacoJavaScriptError`, ...)
 
 ### Multiple editors performance
 

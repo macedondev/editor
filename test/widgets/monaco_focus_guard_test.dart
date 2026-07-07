@@ -27,7 +27,7 @@ void main() {
       );
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump();
-      expect(webview.executed.join('\n').contains('forceFocus'), true);
+      expect(webview.executed.join('\n').contains('focus.force'), true);
     });
 
     testWidgets('didPopNext triggers ensureEditorFocus', (tester) async {
@@ -72,7 +72,7 @@ void main() {
 
       Navigator.of(tester.element(find.text('next'))).pop();
       await tester.pumpAndSettle();
-      expect(webview.executed.join('\n').contains('forceFocus'), true);
+      expect(webview.executed.join('\n').contains('focus.force'), true);
     });
 
     testWidgets('modal route toggles interaction', (tester) async {

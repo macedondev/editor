@@ -278,7 +278,7 @@ import 'package:flutter_monaco/flutter_monaco.dart';
 
 // Simply use the widget - no controller setup needed!
 MonacoEditor(
-  initialValue: 'print("Hello!");',
+  initialText: 'print("Hello!");',
   options: EditorOptions(
     language: MonacoLanguage.dart,
     theme: MonacoTheme.vsDark,
@@ -438,7 +438,11 @@ MonacoEditor(
   Future<void> _registerCompletions(MonacoController controller) async {
     await controller.registerStaticCompletions(
       id: 'demo-snippets',
-      languages: ['dart', 'typescript', 'javascript'],
+      languages: const [
+        MonacoLanguage.dart,
+        MonacoLanguage.typescript,
+        MonacoLanguage.javascript,
+      ],
       triggerCharacters: ['.'],
       items: [
         const CompletionItem(
@@ -465,15 +469,15 @@ MonacoEditor(
     if (_controller == null || index == _activeFileIndex) return;
 
     // Save current content
-    final currentContent = await _controller!.getValue();
+    final currentContent = await _controller!.document.getText();
     _fileContents[_activeFileIndex] = currentContent;
 
     // Load new file
     final file = _files[index];
     final content = _fileContents[index] ?? file.content;
 
-    await _controller!.setLanguage(file.language);
-    await _controller!.setValue(content);
+    await _controller!.document.setLanguage(file.language);
+    await _controller!.document.setText(content);
 
     setState(() => _activeFileIndex = index);
   }
@@ -482,7 +486,7 @@ MonacoEditor(
     if (_controller == null) return;
 
     final timestamp = TimeOfDay.now().format(context);
-    final code = await _controller!.getValue();
+    final code = await _controller!.document.getText();
     final file = _files[_activeFileIndex];
 
     String output = '[$timestamp] Running ${file.name}...\n\n';
@@ -514,7 +518,7 @@ MonacoEditor(
 
   void _copyCode() async {
     if (_controller == null) return;
-    final code = await _controller!.getValue();
+    final code = await _controller!.document.getText();
     await Clipboard.setData(ClipboardData(text: code));
 
     if (mounted) {
@@ -662,7 +666,9 @@ MonacoEditor(
             value: _minimap,
             onChanged: (val) {
               setState(() => _minimap = val);
-              _controller?.updateOptions(EditorOptions(minimap: val));
+              _controller?.updateOptions(
+                EditorOptions(minimap: MonacoMinimapOptions(enabled: val)),
+              );
             },
           ),
           const SizedBox(width: 8),
@@ -674,7 +680,11 @@ MonacoEditor(
             value: _wordWrap,
             onChanged: (val) {
               setState(() => _wordWrap = val);
-              _controller?.updateOptions(EditorOptions(wordWrap: val));
+              _controller?.updateOptions(
+                EditorOptions(
+                  wordWrap: val ? MonacoWordWrap.on : MonacoWordWrap.off,
+                ),
+              );
             },
           ),
 
@@ -684,7 +694,8 @@ MonacoEditor(
           IconButton(
             icon: const Icon(Icons.format_align_left, size: 20),
             tooltip: 'Format Code',
-            onPressed: () => _controller?.format(),
+            onPressed: () =>
+                _controller?.executeAction(MonacoAction.formatDocument),
             color: Colors.white70,
           ),
           IconButton(
@@ -957,14 +968,13 @@ MonacoEditor(
   Widget _buildEditor(_SampleFile file) {
     return MonacoEditor(
       key: ValueKey('editor-${file.name}'),
-      initialValue: _fileContents[_activeFileIndex] ?? file.content,
+      initialText: _fileContents[_activeFileIndex] ?? file.content,
       options: EditorOptions(
         language: file.language,
         theme: _currentTheme,
         fontSize: _fontSize,
-        wordWrap: _wordWrap,
-        minimap: _minimap,
-        automaticLayout: true,
+        wordWrap: _wordWrap ? MonacoWordWrap.on : MonacoWordWrap.off,
+        minimap: MonacoMinimapOptions(enabled: _minimap),
       ),
       backgroundColor: const Color(0xFF1E1E1E),
       onReady: _onEditorReady,
@@ -1054,10 +1064,13 @@ MonacoEditor(
       child: Row(
         children: [
           if (_controller != null)
-            ValueListenableBuilder<LiveStats>(
-              valueListenable: _controller!.liveStats,
+            ValueListenableBuilder<MonacoLiveStats>(
+              valueListenable: _controller!.stats,
               builder: (context, stats, _) {
-                final pos = stats.cursorPosition?.label ?? '1:1';
+                final cursor = stats.cursorPosition;
+                final pos = cursor != null
+                    ? '${cursor.line}:${cursor.column}'
+                    : '1:1';
                 return Text(
                   'Ln $pos',
                   style: const TextStyle(color: Colors.white, fontSize: 12),

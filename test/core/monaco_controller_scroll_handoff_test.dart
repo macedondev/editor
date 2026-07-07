@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/widgets.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,15 +19,14 @@ Future<_Bundle> _createBundle() async {
   return _Bundle(controller, webview);
 }
 
-String _payload({
+Map<String, Object?> _payload({
   Object? source = 'wheel',
   Object? deltaX = 0,
   Object? deltaY = 24,
   bool atTop = false,
   bool atBottom = true,
 }) {
-  return jsonEncode({
-    'event': 'scrollHandoff',
+  return {
     'source': ?source,
     'deltaX': ?deltaX,
     'deltaY': ?deltaY,
@@ -37,7 +34,7 @@ String _payload({
     'atBottom': atBottom,
     'atLeft': true,
     'atRight': true,
-  });
+  };
 }
 
 void main() {
@@ -52,7 +49,7 @@ void main() {
       final sub = bundle.controller.onScrollHandoff.listen(events.add);
       addTearDown(sub.cancel);
 
-      bundle.webview.emitToChannel('flutterChannel', _payload(deltaY: 44.5));
+      bundle.webview.emitEvent('scrollHandoff', _payload(deltaY: 44.5));
       await Future<void>.delayed(Duration.zero);
 
       expect(events, hasLength(1));
@@ -69,8 +66,8 @@ void main() {
       final sub = bundle.controller.onScrollHandoff.listen(events.add);
       addTearDown(sub.cancel);
 
-      bundle.webview.emitToChannel(
-        'flutterChannel',
+      bundle.webview.emitEvent(
+        'scrollHandoff',
         _payload(source: 'touch', deltaY: -8),
       );
       await Future<void>.delayed(Duration.zero);
@@ -88,13 +85,10 @@ void main() {
       final sub = bundle.controller.onScrollHandoff.listen(events.add);
       addTearDown(sub.cancel);
 
-      bundle.webview.emitToChannel(
-        'flutterChannel',
-        _payload(source: 'gamepad'),
-      );
-      bundle.webview.emitToChannel('flutterChannel', _payload(source: null));
-      bundle.webview.emitToChannel('flutterChannel', _payload(deltaY: null));
-      bundle.webview.emitToChannel('flutterChannel', _payload(deltaY: 'ten'));
+      bundle.webview.emitEvent('scrollHandoff', _payload(source: 'gamepad'));
+      bundle.webview.emitEvent('scrollHandoff', _payload(source: null));
+      bundle.webview.emitEvent('scrollHandoff', _payload(deltaY: null));
+      bundle.webview.emitEvent('scrollHandoff', _payload(deltaY: 'ten'));
       await Future<void>.delayed(Duration.zero);
 
       expect(events, isEmpty);
@@ -115,7 +109,7 @@ void main() {
       addTearDown(firstSub.cancel);
       addTearDown(secondSub.cancel);
 
-      first.webview.emitToChannel('flutterChannel', _payload());
+      first.webview.emitEvent('scrollHandoff', _payload());
       await Future<void>.delayed(Duration.zero);
 
       expect(firstEvents, hasLength(1));
@@ -138,10 +132,13 @@ void main() {
 
       await bundle.controller.setScrollHandoffSources(wheel: true);
 
-      final scripts = bundle.webview.scriptsContaining('"setScrollHandoff"');
-      expect(scripts, hasLength(1));
-      expect(scripts.single, contains('"wheel":true'));
-      expect(scripts.single, contains('"touch":false'));
+      final calls = bundle.webview.dispatched
+          .where((d) => d['method'] == 'page.setScrollHandoff')
+          .toList();
+      expect(calls, hasLength(1));
+      final params = calls.single['params']! as Map<String, Object?>;
+      expect(params['wheel'], isTrue);
+      expect(params['touch'], isFalse);
     });
 
     test('defaults to disabling both sources', () async {
@@ -150,10 +147,13 @@ void main() {
 
       await bundle.controller.setScrollHandoffSources();
 
-      final scripts = bundle.webview.scriptsContaining('"setScrollHandoff"');
-      expect(scripts, hasLength(1));
-      expect(scripts.single, contains('"wheel":false'));
-      expect(scripts.single, contains('"touch":false'));
+      final calls = bundle.webview.dispatched
+          .where((d) => d['method'] == 'page.setScrollHandoff')
+          .toList();
+      expect(calls, hasLength(1));
+      final params = calls.single['params']! as Map<String, Object?>;
+      expect(params['wheel'], isFalse);
+      expect(params['touch'], isFalse);
     });
   });
 }

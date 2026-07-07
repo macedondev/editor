@@ -1,0 +1,203 @@
+// flutter_monaco bridge - boot orchestration (protocol v3 two-phase boot).
+// The stats emitter and event wiring are ported verbatim from the 2.3.0
+// generated page; the editor is created from the page.boot command's
+// parameters so the first painted frame already uses the requested options,
+// text, language, and theme (no markdown/vs-dark flash).
+/* eslint-disable */
+'use strict';
+window.__FMB = window.__FMB || {};
+
+(function () {
+  // page.boot arrives from Dart after lifecycle:pageReady. Editor creation
+  // needs BOTH editor.main loaded AND the boot parameters; whichever finishes
+  // last triggers the create.
+  var bootResolve = null;
+  var bootPromise = new Promise(function (resolve) { bootResolve = resolve; });
+  var booted = false;
+
+  window.FlutterMonaco.register('page.boot', function (params) {
+    if (booted) {
+      throw new Error('page.boot may only be dispatched once per page.');
+    }
+    booted = true;
+    bootResolve(params || {});
+    return true;
+  });
+
+  // All bridge scripts have parsed and every command (including page.boot
+  // above) is registered - only now is it safe for Dart to dispatch.
+  window.FlutterMonaco.announcePageReady();
+
+  function _startMonaco() {
+      console.log('[Monaco HTML] Attempting to require editor.main...');
+      try {
+        require(
+          ['vs/editor/editor.main'],
+          function () {
+            console.log('[Monaco] SUCCESS: editor.main.js has loaded. Initializing editor...');
+
+            bootPromise.then(function (params) {
+              window.__FM_BOOT = params;
+              if ((params.mode || 'editor') === 'diff') {
+                // Diff mode (Phase 11): two models in a createDiffEditor,
+                // driven by the diff.* registry. Single-editor emitters and
+                // feature sections are skipped by design; diff-api wires a
+                // stats-lite feed instead. The onDidCreateEditor handler
+                // below is never registered here - it would fire for BOTH
+                // inner editors of the diff pair.
+                var diffCtx = {};
+                (window.__FMB || {}).diffApi(diffCtx);
+                diffCtx.bootDiff(params);
+                window.FlutterMonaco.lifecycle('ready');
+                console.log('[Monaco] Diff Editor is ready and the Flutter bridge is installed.');
+                return;
+              }
+
+              monaco.editor.onDidCreateEditor(function (editor) {
+              window.editor = editor;
+
+              var FMB = window.__FMB || {};
+              var ctx = {};
+              FMB.core(ctx);
+              FMB.focusHelpers(ctx);
+              const { E, post, postMessageToFlutter } = ctx;
+
+              // Send live statistics updates
+              const sendStats = () => {
+                if (!editor.getModel() || !editor.getSelection()) return;
+                const model = editor.getModel(), selection = editor.getSelection(), selections = editor.getSelections() || [];
+                const position = editor.getPosition();
+                postMessageToFlutter({
+                  event: 'stats',
+                  lineCount: model.getLineCount(),
+                  charCount: model.getValueLength(),
+                  selLines: selection.isEmpty() ? 0 : (selection.endLineNumber - selection.startLineNumber + 1),
+                  selChars: selection.isEmpty() ? 0 : model.getValueInRange(selection).length,
+                  caretCount: selections.length,
+                  language: model.getLanguageId ? model.getLanguageId() : monaco.editor.getModelLanguage(model),
+                  cursorLine: position?.lineNumber,
+                  cursorColumn: position?.column,
+                });
+              };
+              editor.onDidChangeModelContent(sendStats);
+              editor.onDidChangeCursorSelection(sendStats);
+              sendStats();
+
+                E().onDidChangeModelContent(e => {
+                  // D15: ship the per-change deltas unless their combined
+                  // text exceeds 64 KiB - then omit them and flag truncated
+                  // so Dart consumers know to pull the full text instead.
+                  var model = E().getModel();
+                  var changes = [];
+                  var totalLength = 0;
+                  for (var i = 0; i < e.changes.length; i++) {
+                    var c = e.changes[i];
+                    totalLength += (c.text || '').length;
+                    changes.push({ range: c.range, text: c.text });
+                  }
+                  var truncated = totalLength > 65536;
+                  post('contentChanged', {
+                    uri: model && model.uri ? model.uri.toString() : null,
+                    isFlush: e.isFlush,
+                    changes: truncated ? undefined : changes,
+                    truncated: truncated,
+                  });
+                });
+                E().onDidChangeCursorSelection(e => post('selectionChanged', {
+                  selection: e.selection && {
+                    startLineNumber: e.selection.startLineNumber,
+                    startColumn: e.selection.startColumn,
+                    endLineNumber: e.selection.endLineNumber,
+                    endColumn: e.selection.endColumn
+                  }
+                }));
+                E().onDidFocusEditorWidget(() => post('focusChanged', { focused: true }));
+                E().onDidBlurEditorWidget(() => post('focusChanged', { focused: false }));
+
+              FMB.editorApi(ctx);
+              FMB.focusMobile(ctx);
+              if (FMB.viewportFit) FMB.viewportFit(ctx);
+              FMB.completions(ctx);
+              FMB.actions(ctx);
+              FMB.scrollHandoff(ctx);
+              FMB.lsp(ctx);
+
+              // Boot-requested scroll handoff sources (off by default; the
+              // module installs listeners only for enabled sources).
+              var bootScrollHandoff = (window.__FM_BOOT || {}).scrollHandoff || {};
+              if (bootScrollHandoff.wheel || bootScrollHandoff.touch) {
+                window.flutterMonaco.setScrollHandoff({
+                  wheel: !!bootScrollHandoff.wheel,
+                  touch: !!bootScrollHandoff.touch,
+                });
+              }
+
+              window.FlutterMonaco.lifecycle('ready');
+              console.log('[Monaco] Editor is ready and the Flutter bridge is installed.');
+            });
+
+              // The editor is born configured: sparse Monaco options from
+              // Dart, plus the initial text/language/theme, in one create.
+              var options = Object.assign({}, params.options || {});
+              options.value = typeof params.text === 'string' ? params.text : '';
+              options.language = params.language || 'plaintext';
+              options.theme = params.theme || 'vs';
+              if (options.automaticLayout === undefined) {
+                options.automaticLayout = true;
+              }
+              monaco.editor.create(
+                document.getElementById('editor-container'),
+                options
+              );
+            }).catch(function (e) {
+              console.error('[Monaco] FATAL: editor creation failed. Error:', e);
+              window.FlutterMonaco.lifecycle('fatal', {
+                error: {
+                  name: e && e.name ? String(e.name) : 'Error',
+                  message: 'Editor creation failed: ' + (e && e.message ? e.message : e),
+                  stack: e && e.stack ? String(e.stack) : null,
+                },
+              });
+            });
+          },
+          function (error) {
+            console.error('[Monaco] FATAL: require() failed to load editor.main.js. Error:', error);
+            if (window.FlutterMonaco) {
+              window.FlutterMonaco.lifecycle('fatal', {
+                error: {
+                  name: 'RequireError',
+                  message: 'Failed to load editor.main: ' + error,
+                  stack: null,
+                },
+              });
+            }
+          }
+        );
+      } catch (e) {
+        console.error('[Monaco] FATAL: A critical error occurred trying to call require(). Error:', e);
+        if (window.FlutterMonaco) {
+          window.FlutterMonaco.lifecycle('fatal', {
+            error: {
+              name: 'RequireError',
+              message: 'require() call failed: ' + e,
+              stack: e && e.stack ? String(e.stack) : null,
+            },
+          });
+        }
+      }
+  }
+
+  if (window.__FM_PAGE && window.__FM_PAGE.platform === 'web') {
+    // Web: loader.js is injected dynamically; wait for it before require().
+    var _initMonaco = function () {
+      if (!window._monacoLoaderReady) {
+        window._initMonacoWhenReady = _initMonaco;
+        return;
+      }
+      _startMonaco();
+    };
+    _initMonaco();
+  } else {
+    _startMonaco();
+  }
+})();

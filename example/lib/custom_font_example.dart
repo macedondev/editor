@@ -35,7 +35,7 @@ class _CustomFontExampleState extends State<CustomFontExample> {
       );
 
       // Set sample code that demonstrates ligatures
-      await _controller!.setValue('''
+      await _controller!.document.setText('''
 // Font Ligatures Demo
 // If you have Fira Code or similar font installed,
 // you should see ligatures for these operators:
@@ -94,13 +94,15 @@ const not = !value;
           theme: MonacoTheme.vsDark,
           language: MonacoLanguage.javascript,
         ),
-        customCss: '''
+        page: const MonacoPageConfig(
+          customCss: '''
           @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap');
         ''',
-        allowCdnFonts: true, // Must be true to allow CDN fonts
+          allowCdnFonts: true, // Must be true to allow CDN fonts
+        ),
       );
 
-      await _controller!.setValue('''
+      await _controller!.document.setText('''
 // Using Fira Code from Google Fonts
 // This demonstrates loading fonts from CDN
 
@@ -144,24 +146,26 @@ const features = {
           theme: MonacoTheme.vsDark,
           language: MonacoLanguage.javascript,
         ),
-        customCss:
-            '''
+        page: MonacoPageConfig(
+          customCss:
+              '''
           @font-face {
             font-family: 'MyCustomFont';
             src: url('data:font/woff2;base64,$mockBase64Font') format('woff2');
             font-weight: normal;
             font-style: normal;
           }
-          
+
           /* Additional custom styles */
           .monaco-editor .line-numbers {
             color: #858585 !important;
           }
         ''',
-        // No need for allowCdnFonts when using base64
+          // No need for allowCdnFonts when using base64
+        ),
       );
 
-      await _controller!.setValue('''
+      await _controller!.document.setText('''
 // Using embedded base64 font
 // This is the most secure way to use custom fonts
 // as it doesn't require external resources

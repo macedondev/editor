@@ -7,7 +7,7 @@ const String kMidnightThemeId = 'flutter-monaco-midnight';
 /// apps can ship their own Monaco themes (not just the built-in four).
 final MonacoThemeDefinition kMidnightTheme = MonacoThemeDefinition(
   id: kMidnightThemeId,
-  base: MonacoTheme.vsDark,
+  base: MonacoBaseTheme.vsDark,
   rules: const [
     MonacoThemeRule(
       token: 'comment',

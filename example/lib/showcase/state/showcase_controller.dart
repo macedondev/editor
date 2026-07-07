@@ -22,13 +22,13 @@ enum PlaygroundTheme {
     PlaygroundTheme.midnight => 'Midnight (custom)',
   };
 
-  /// The Monaco theme id to apply via [MonacoController.setThemeById].
-  String get monacoId => switch (this) {
-    PlaygroundTheme.dark => MonacoTheme.vsDark.id,
-    PlaygroundTheme.light => MonacoTheme.vs.id,
-    PlaygroundTheme.hcDark => MonacoTheme.hcBlack.id,
-    PlaygroundTheme.hcLight => MonacoTheme.hcLight.id,
-    PlaygroundTheme.midnight => kMidnightThemeId,
+  /// The Monaco theme to apply via [MonacoController.setTheme].
+  MonacoTheme get monacoTheme => switch (this) {
+    PlaygroundTheme.dark => MonacoTheme.vsDark,
+    PlaygroundTheme.light => MonacoTheme.vs,
+    PlaygroundTheme.hcDark => MonacoTheme.hcBlack,
+    PlaygroundTheme.hcLight => MonacoTheme.hcLight,
+    PlaygroundTheme.midnight => const MonacoTheme(kMidnightThemeId),
   };
 
   bool get isDark =>
@@ -90,13 +90,20 @@ class ShowcaseController extends ChangeNotifier {
   MonacoController? _editor;
   bool get isEditorReady => _editor != null;
 
+  /// Owner key for the markers demo's diagnostics.
+  static const String _demoMarkerOwner = 'showcase-demo';
+
+  /// Decoration set backing the decorations demo; created lazily so demos
+  /// can highlight lines without clobbering other decorations.
+  MonacoDecorationSet? _demoDecorations;
+
   /// The underlying Monaco controller, available after [attachEditor].
   /// Used by [MonacoFocusGuard] for web overlay handling.
   MonacoController? get monaco => _editor;
 
   /// Live editor stats (cursor, line/char counts). Null until the editor is
   /// attached.
-  ValueListenable<LiveStats>? get liveStats => _editor?.liveStats;
+  ValueListenable<MonacoLiveStats>? get liveStats => _editor?.stats;
 
   /// Stable options used to create the editor widget. Computed once.
   late final EditorOptions initialEditorOptions = _buildOptions();
@@ -109,28 +116,33 @@ class ShowcaseController extends ChangeNotifier {
     language: _language,
     theme: _playgroundTheme.isDark ? MonacoTheme.vsDark : MonacoTheme.vs,
     fontSize: _fontSize,
-    wordWrap: _wordWrap,
-    minimap: _minimap,
-    lineNumbers: _lineNumbers,
+    wordWrap: _wordWrap ? MonacoWordWrap.on : MonacoWordWrap.off,
+    minimap: MonacoMinimapOptions(enabled: _minimap),
+    lineNumbers: _lineNumbers ? MonacoLineNumbers.on : MonacoLineNumbers.off,
     readOnly: _readOnly,
-    automaticLayout: true,
     scrollBeyondLastLine: false,
-    padding: const {'top': 16, 'bottom': 16},
+    padding: const MonacoPadding(top: 16, bottom: 16),
   );
 
   /// Called from [MonacoEditor.onReady]: registers the custom theme and
   /// completion snippets, then syncs the current theme.
   Future<void> attachEditor(MonacoController controller) async {
     _editor = controller;
+    _demoDecorations = null; // Any previous set died with its controller.
     try {
       await controller.defineTheme(kMidnightTheme);
       await controller.registerStaticCompletions(
         id: 'showcase-snippets',
-        languages: const ['dart', 'typescript', 'javascript', 'python'],
+        languages: const [
+          MonacoLanguage.dart,
+          MonacoLanguage.typescript,
+          MonacoLanguage.javascript,
+          MonacoLanguage.python,
+        ],
         triggerCharacters: const ['.'],
         items: kDemoCompletions,
       );
-      await controller.setThemeById(_playgroundTheme.monacoId);
+      await controller.setTheme(_playgroundTheme.monacoTheme);
     } catch (e) {
       debugPrint('[ShowcaseController] attachEditor failed: $e');
     }
@@ -145,7 +157,9 @@ class ShowcaseController extends ChangeNotifier {
       _metadata = await _metadataLoader.load();
       final editor = _editor;
       if (editor != null && _language == MonacoLanguage.json) {
-        await editor.setValue(sampleFor(_language, metadata: _metadata));
+        await editor.document.setText(
+          sampleFor(_language, metadata: _metadata),
+        );
       }
     } catch (e) {
       debugPrint('[ShowcaseController] metadata load failed: $e');
@@ -180,7 +194,7 @@ class ShowcaseController extends ChangeNotifier {
   }
 
   void _applyTheme() {
-    _editor?.setThemeById(_playgroundTheme.monacoId);
+    _editor?.setTheme(_playgroundTheme.monacoTheme);
   }
 
   // --- Language ---
@@ -192,10 +206,15 @@ class ShowcaseController extends ChangeNotifier {
     notifyListeners();
     final editor = _editor;
     if (editor == null) return;
-    await editor.clearAllMarkers();
-    await editor.clearDecorations();
-    await editor.setLanguage(language);
-    await editor.setValue(sampleFor(language, metadata: _metadata));
+    await _clearDemoArtifacts(editor);
+    await editor.document.setLanguage(language);
+    await editor.document.setText(sampleFor(language, metadata: _metadata));
+  }
+
+  /// Removes the markers and decorations left behind by the feature demos.
+  Future<void> _clearDemoArtifacts(MonacoController editor) async {
+    await editor.document.clearMarkers(owner: _demoMarkerOwner);
+    await _demoDecorations?.clear();
   }
 
   // --- Options ---
@@ -238,21 +257,21 @@ class ShowcaseController extends ChangeNotifier {
 
   // --- Quick actions ---
 
-  void format() => _editor?.format();
-  void find() => _editor?.find();
-  void foldAll() => _editor?.foldAll();
+  void format() => _editor?.executeAction(MonacoAction.formatDocument);
+  void find() => _editor?.executeAction(MonacoAction.find);
+  void foldAll() => _editor?.executeAction(MonacoAction.foldAll);
 
-  Future<String> currentValue() async => await _editor?.getValue() ?? '';
+  Future<String> currentValue() async =>
+      await _editor?.document.getText() ?? '';
 
   Future<void> reset() async {
     final editor = _editor;
     _hint = null;
     notifyListeners();
     if (editor == null) return;
-    await editor.clearAllMarkers();
-    await editor.clearDecorations();
-    await editor.setLanguage(_language);
-    await editor.setValue(sampleFor(_language, metadata: _metadata));
+    await _clearDemoArtifacts(editor);
+    await editor.document.setLanguage(_language);
+    await editor.document.setText(sampleFor(_language, metadata: _metadata));
   }
 
   /// Scrolls the page to the playground (used by feature-card "Try it" links).
@@ -272,9 +291,9 @@ class ShowcaseController extends ChangeNotifier {
     _language = MonacoLanguage.json;
     notifyListeners();
     if (editor == null) return;
-    await editor.clearDecorations();
-    await editor.setLanguage(MonacoLanguage.json);
-    await editor.setValue(kInvalidJsonSample);
+    await _demoDecorations?.clear();
+    await editor.document.setLanguage(MonacoLanguage.json);
+    await editor.document.setText(kInvalidJsonSample);
     await editor.setJsonDiagnostics(kJsonDiagnostics);
     _setHint(
       'Invalid fields are underlined - hover a squiggle for the schema '
@@ -287,11 +306,13 @@ class ShowcaseController extends ChangeNotifier {
     _language = MonacoLanguage.javascript;
     notifyListeners();
     if (editor == null) return;
-    await editor.clearDecorations();
-    await editor.setLanguage(MonacoLanguage.javascript);
-    await editor.setValue(kMarkersDemoCode);
-    await editor.setErrorMarkers(kDemoErrorMarkers);
-    await editor.setWarningMarkers(kDemoWarningMarkers);
+    await _demoDecorations?.clear();
+    await editor.document.setLanguage(MonacoLanguage.javascript);
+    await editor.document.setText(kMarkersDemoCode);
+    await editor.document.setMarkers([
+      ...kDemoErrorMarkers,
+      ...kDemoWarningMarkers,
+    ], owner: _demoMarkerOwner);
     _setHint(
       'Error + warning squiggles with overview-ruler ticks - hover to '
       'read each message.',
@@ -301,16 +322,22 @@ class ShowcaseController extends ChangeNotifier {
   Future<void> runDecorationsDemo() async {
     final editor = _editor;
     if (editor == null) return;
-    final lineCount = editor.liveStats.value.lineCount.value;
+    final lineCount = editor.stats.value.lineCount;
     if (lineCount <= 0) return;
     final targets = <int>[
       1,
       if (lineCount >= 3) 3,
       if (lineCount >= 5) 5,
     ].where((line) => line <= lineCount).toList();
-    await editor.clearDecorations();
-    await editor.addLineDecorations(targets, 'demo-line-highlight');
-    _setHint('Lines highlighted with setDecorations + injected CSS.');
+    final decorations = _demoDecorations ??= await editor.createDecorationSet();
+    await decorations.set([
+      for (final line in targets)
+        DecorationOptions.line(
+          range: Range.lines(line, line),
+          className: 'demo-line-highlight',
+        ),
+    ]);
+    _setHint('Lines highlighted with a MonacoDecorationSet + injected CSS.');
   }
 
   void _setHint(String message) {

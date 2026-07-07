@@ -108,14 +108,12 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
         options: const EditorOptions(
           language: MonacoLanguage.dart,
           theme: MonacoTheme.vsDark,
-          fontSize: 14,
-          wordWrap: true,
-          minimap: false,
         ),
       );
 
-      await controller.setValue(_sampleCode);
+      await controller.document.setText(_sampleCode);
       await _registerCompletionSources(controller);
+      await _registerSaveAction(controller);
 
       setState(() {
         _controller = controller;
@@ -132,14 +130,14 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
   Future<void> _registerCompletionSources(MonacoController controller) async {
     await controller.registerStaticCompletions(
       id: 'keywords',
-      languages: [MonacoLanguage.dart.id, MonacoLanguage.javascript.id],
+      languages: const [MonacoLanguage.dart, MonacoLanguage.javascript],
       triggerCharacters: const [' ', '.'],
       items: _keywordCompletions,
     );
 
-    await controller.registerCompletionSource(
+    await controller.registerCompletions(
       id: 'acme-api',
-      languages: [MonacoLanguage.dart.id],
+      languages: const [MonacoLanguage.dart],
       triggerCharacters: const ['.', '_'],
       provider: (request) async {
         final token = _extractCurrentWord(request);
@@ -155,6 +153,31 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
         return CompletionList(
           suggestions: suggestions,
           isIncomplete: token.isEmpty,
+        );
+      },
+    );
+  }
+
+  /// Dart-defined editor action: Cmd/Ctrl+S runs a Flutter save hook
+  /// instead of the browser save dialog. Also reachable from the command
+  /// palette and the editor context menu.
+  Future<void> _registerSaveAction(MonacoController controller) async {
+    await controller.addAction(
+      const MonacoActionDescriptor(
+        id: MonacoAction('demo.save'),
+        label: 'Save (Flutter handler)',
+        keybindings: [MonacoKeybinding(key: MonacoKey.keyS, ctrlCmd: true)],
+        contextMenuGroupId: 'navigation',
+        contextMenuOrder: 1,
+      ),
+      () async {
+        final text = await controller.document.getText();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved ${text.length} characters via Cmd/Ctrl+S'),
+            duration: const Duration(seconds: 2),
+          ),
         );
       },
     );
@@ -190,7 +213,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
               setState(() {
                 _currentLanguage = language;
               });
-              await _controller?.setLanguage(MonacoLanguage.fromId(language));
+              await _controller?.document.setLanguage(MonacoLanguage(language));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'dart', child: Text('Dart')),
@@ -211,7 +234,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
               setState(() {
                 _currentTheme = theme;
               });
-              await _controller?.setTheme(MonacoTheme.fromId(theme));
+              await _controller?.setTheme(MonacoTheme(theme));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'vs-dark', child: Text('Dark')),
@@ -227,7 +250,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
             icon: const Icon(Icons.format_align_left),
             tooltip: 'Format Document',
             onPressed: () async {
-              await _controller?.format();
+              await _controller?.executeAction(MonacoAction.formatDocument);
             },
           ),
         ],
@@ -246,12 +269,12 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
                 const Spacer(),
                 // Live stats
                 if (_controller != null)
-                  ValueListenableBuilder<LiveStats>(
-                    valueListenable: _controller!.liveStats,
+                  ValueListenableBuilder<MonacoLiveStats>(
+                    valueListenable: _controller!.stats,
                     builder: (context, stats, _) {
                       return Text(
-                        'Lines: ${stats.lineCount.value} | '
-                        'Chars: ${stats.charCount.value}',
+                        'Lines: ${stats.lineCount} | '
+                        'Chars: ${stats.charCount}',
                       );
                     },
                   ),
@@ -335,7 +358,7 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
           FloatingActionButton.extended(
             heroTag: 'content',
             onPressed: () async {
-              final content = await _controller?.getValue();
+              final content = await _controller?.document.getText();
               if (content != null && context.mounted) {
                 showDialog(
                   context: context,

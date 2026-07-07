@@ -69,16 +69,16 @@ class FeaturesSection extends StatelessWidget {
         icon: Icons.error_outline_rounded,
         title: 'Markers & decorations',
         body: 'Surface errors, warnings, and line highlights programmatically.',
-        snippet: 'controller.setErrorMarkers([...]);',
+        snippet: 'controller.document.setMarkers([...]);',
         onTry: () => _go(controller.runMarkersDemo),
       ),
       FeatureCard(
         icon: Icons.terminal_rounded,
         title: 'Full controller API',
         body:
-            'getValue, edits, find/replace, folding, live stats and much '
+            'documents, edits, find/replace, custom actions, live stats and '
             'more.',
-        snippet: 'final code = await controller.getValue();',
+        snippet: 'final code = await controller.document.getText();',
         onTry: () => _go(controller.runDecorationsDemo),
       ),
     ];

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
@@ -32,11 +31,7 @@ class _ThrowingWebViewController implements PlatformWebViewController {
   }
 
   @override
-  Future<void> load({
-    String? customCss,
-    bool allowCdnFonts = false,
-    List<String> allowedConnectSources = const [],
-  }) async {
+  Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) async {
     if (throwOnLoadFile) {
       throw StateError('loadFile failed');
     }
@@ -116,30 +111,39 @@ void main() {
       }
     });
 
-    test('disposes webview when loadFile throws', () async {
-      final webview = _ThrowingWebViewController(throwOnLoadFile: true);
-      PlatformWebViewFactory.debugCreateOverride = () => webview;
+    test(
+      'load failure surfaces on whenReady; dispose releases webview',
+      () async {
+        final webview = _ThrowingWebViewController(throwOnLoadFile: true);
+        PlatformWebViewFactory.debugCreateOverride = () => webview;
 
-      await expectLater(
-        () => MonacoController.create(),
-        throwsA(isA<StateError>()),
-      );
+        final controller = await MonacoController.create();
+        await expectLater(controller.whenReady, throwsA(isA<StateError>()));
+        expect(controller.isReady, false);
 
-      expect(webview.disposed, true);
-    });
+        controller.dispose();
+        expect(webview.disposed, true);
+      },
+    );
 
-    test('disposes webview when ready times out', () async {
-      final webview = _ThrowingWebViewController();
-      PlatformWebViewFactory.debugCreateOverride = () => webview;
+    test(
+      'ready timeout surfaces on whenReady; dispose releases webview',
+      () async {
+        final webview = _ThrowingWebViewController();
+        PlatformWebViewFactory.debugCreateOverride = () => webview;
 
-      await expectLater(
-        () => MonacoController.create(
+        final controller = await MonacoController.create(
           readyTimeout: const Duration(milliseconds: 10),
-        ),
-        throwsA(isA<TimeoutException>()),
-      );
+        );
+        await expectLater(
+          controller.whenReady,
+          throwsA(isA<MonacoTimeoutError>()),
+        );
+        expect(controller.isReady, false);
 
-      expect(webview.disposed, true);
-    });
+        controller.dispose();
+        expect(webview.disposed, true);
+      },
+    );
   });
 }

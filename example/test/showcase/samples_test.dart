@@ -50,7 +50,7 @@ void main() {
       ]);
       expect(
         (decoded['features'] as Map<String, dynamic>)['typedLanguages'],
-        MonacoLanguage.values.length,
+        MonacoLanguage.builtIn.length,
       );
     });
   });

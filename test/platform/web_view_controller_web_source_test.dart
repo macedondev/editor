@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   String webControllerSource() =>
-      File('lib/src/platform/web_view_controller/web.dart').readAsStringSync();
+      File('lib/src/platform/webview_web.dart').readAsStringSync();
 
   test('web focus handler only amplifies Monaco focus on desktop', () {
     final source = webControllerSource();
@@ -17,6 +17,10 @@ void main() {
     expect(focusBlockEnd, greaterThan(focusBlockStart));
 
     final focusBlock = source.substring(focusBlockStart, focusBlockEnd);
+    // Focus now rides the protocol v3 focusChanged event envelope.
+    expect(focusBlock, contains("json['kind'] == 'event'"));
+    expect(focusBlock, contains("json['name'] == 'focusChanged'"));
+    expect(focusBlock, contains("focusData['focused'] == true"));
     expect(
       focusBlock,
       contains('FocusManager.instance.primaryFocus?.unfocus();'),
@@ -48,7 +52,17 @@ void main() {
   test('web error messages fail the current load attempt', () {
     final source = webControllerSource();
 
-    expect(source, contains("eventName == 'error' && !_isReady"));
+    // Load-readiness rides the protocol v3 'pageReady' lifecycle envelope
+    // (editor readiness is MonacoProtocol's concern, not the web view's).
+    expect(source, contains("json['kind'] == 'lifecycle'"));
+    expect(source, contains("lifecycleName == 'pageReady'"));
+    // Failures before pageReady must fail the in-flight load attempt:
+    // lifecycle fatals, plus the legacy {event:'error'} shape still posted
+    // by the inline loader-failure handler in the HTML head (it runs before
+    // core.js exists).
+    expect(source, contains('!_isReady'));
+    expect(source, contains("lifecycleName == 'fatal'"));
+    expect(source, contains("json?['event'] == 'error'"));
     expect(source, contains('_readyCompleter.completeError'));
     expect(source, contains('Unknown Monaco load error'));
   });
