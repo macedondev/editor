@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 
@@ -63,6 +64,20 @@ class FakePlatformWebViewController implements PlatformWebViewController {
 
   /// Loaded file paths.
   final List<String> loadedFiles = [];
+
+  /// Every parsed dispatch call, in order ({id, method, params}).
+  final List<Map<String, Object?>> dispatched = [];
+
+  /// Dynamic responder consulted before the default success envelope.
+  /// Return a non-null value to answer the method with it.
+  Object? Function(String method, Map<String, Object?> params)?
+  dispatchResolver;
+
+  /// When false, dispatch calls are recorded but never answered (tests that
+  /// drive responses manually or assert timeout behavior).
+  bool autoRespond = true;
+
+  int _eventSeq = 0;
 
   @override
   Future<void> initialize() async {
@@ -171,6 +186,103 @@ class FakePlatformWebViewController implements PlatformWebViewController {
       throw StateError('Fake runJavaScript error for: $script');
     }
     executed.add(script);
+    _maybeRespondToDispatch(script);
+  }
+
+  /// Parses a `FlutterMonaco.dispatch({...})` script and posts the matching
+  /// protocol v3 response envelope through the channel, like the real page.
+  void _maybeRespondToDispatch(String script) {
+    final call = parseDispatch(script);
+    if (call == null) return;
+
+    dispatched.add(call);
+    if (!autoRespond) return;
+
+    final id = call['id'] as String;
+    final method = call['method'] as String;
+
+    for (var i = 0; i < _commandInjections.length; i++) {
+      final injection = _commandInjections[i];
+      if (method.contains(injection.methodMatch)) {
+        _commandInjections.removeAt(i);
+        _postResponse(id, injection);
+        return;
+      }
+    }
+
+    final resolver = dispatchResolver;
+    if (resolver != null) {
+      final result = resolver(method, call['params'] as Map<String, Object?>);
+      if (result != null) {
+        _postResponse(
+          id,
+          _CommandInjection.success(methodMatch: method, value: result),
+        );
+        return;
+      }
+    }
+
+    _postResponse(
+      id,
+      _CommandInjection.success(methodMatch: method, isUndefined: true),
+    );
+  }
+
+  /// Extracts the dispatch payload from [script], or null when the script is
+  /// not a dispatch call.
+  static Map<String, Object?>? parseDispatch(String script) {
+    const marker = 'FlutterMonaco.dispatch(';
+    final start = script.indexOf(marker);
+    if (start < 0) return null;
+    final jsonStart = start + marker.length;
+    final jsonEnd = script.lastIndexOf(')');
+    if (jsonEnd <= jsonStart) return null;
+    try {
+      final decoded = jsonDecode(script.substring(jsonStart, jsonEnd));
+      return decoded is Map<String, Object?> ? decoded : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  void _postResponse(String id, _CommandInjection injection) {
+    final envelope = injection.toResponseEnvelope(id);
+    scheduleMicrotask(() {
+      tryEmitToChannel('flutterChannel', envelope);
+    });
+  }
+
+  /// Emits a protocol v3 event envelope through the channel.
+  void emitEvent(String name, Map<String, Object?> data) {
+    tryEmitToChannel(
+      'flutterChannel',
+      jsonEncode({
+        'v': 3,
+        'kind': 'event',
+        'seq': ++_eventSeq,
+        'name': name,
+        'data': data,
+      }),
+    );
+  }
+
+  /// Emits the pageReady + ready lifecycle pair (a booted page).
+  void emitReadyLifecycle({String monacoVersion = 'test'}) {
+    tryEmitToChannel(
+      'flutterChannel',
+      jsonEncode({
+        'v': 3,
+        'kind': 'lifecycle',
+        'name': 'pageReady',
+        'protocolVersion': 3,
+        'monacoVersion': monacoVersion,
+        'capabilities': ['lsp'],
+      }),
+    );
+    tryEmitToChannel(
+      'flutterChannel',
+      jsonEncode({'v': 3, 'kind': 'lifecycle', 'name': 'ready'}),
+    );
   }
 
   @override
@@ -230,14 +342,13 @@ class FakePlatformWebViewController implements PlatformWebViewController {
     _throwMatchers.clear();
   }
 
-  /// Registers a success envelope outcome for a `flutterMonacoInvoke(...)`
-  /// call whose method name matches [methodMatch].
+  /// Registers a success response for a dispatched command whose dotted
+  /// method name contains [methodMatch].
   ///
   /// Use this when a test needs a specific return [value] (or
-  /// `isUndefined: true`) from a converted command method. By default the
-  /// fake auto-responds with a `null`/undefined success envelope to any
-  /// `flutterMonacoInvoke` script, so most tests only need explicit
-  /// injections for non-default values.
+  /// `isUndefined: true`) from a command. By default the fake auto-responds
+  /// with an undefined success envelope to any dispatch, so most tests only
+  /// need explicit injections for non-default values.
   ///
   /// Outcomes are consumed FIFO within a single test - the first matching
   /// injection is removed after it fires.
@@ -255,8 +366,8 @@ class FakePlatformWebViewController implements PlatformWebViewController {
     );
   }
 
-  /// Registers a failure envelope outcome for a `flutterMonacoInvoke(...)`
-  /// call whose method name matches [methodMatch].
+  /// Registers a failure response for a dispatched command whose dotted
+  /// method name contains [methodMatch].
   ///
   /// The Dart side decodes this as a `MonacoJavaScriptException` with the
   /// supplied [message], [name], and [stack] fields. Use this to assert
@@ -314,6 +425,10 @@ class FakePlatformWebViewController implements PlatformWebViewController {
     _commandInjections.clear();
     _channels.clear();
     resultResolver = null;
+    dispatchResolver = null;
+    autoRespond = true;
+    dispatched.clear();
+    _eventSeq = 0;
     initialized = false;
     jsEnabled = false;
     disposed = false;
@@ -349,40 +464,9 @@ class FakePlatformWebViewController implements PlatformWebViewController {
       return queued.removeFirst();
     }
 
-    // flutterMonacoInvoke dispatcher: match per-method injections, then
-    // fall back to a default success envelope so converted commands return
-    // a usable result without per-test setup.
-    if (_isInvokeScript(script)) {
-      for (var i = 0; i < _commandInjections.length; i++) {
-        final injection = _commandInjections[i];
-        if (script.contains('"${injection.methodMatch}"')) {
-          _commandInjections.removeAt(i);
-          return injection.toEnvelopeJson();
-        }
-      }
-
-      // Defer to resolver before applying the default. Tests that install a
-      // resolver for invoke scripts can still override the default.
-      final resolverResult = resultResolver?.call(script);
-      if (resolverResult != null) return resolverResult;
-
-      return _defaultInvokeSuccessEnvelope;
-    }
-
-    // Fall back to resolver for non-invoke scripts.
+    // Fall back to resolver for raw scripts.
     return resultResolver?.call(script);
   }
-
-  bool _isInvokeScript(String script) {
-    return script.contains('window.flutterMonacoInvoke(');
-  }
-
-  static final String _defaultInvokeSuccessEnvelope = jsonEncode({
-    '__flutterMonacoEval': true,
-    'ok': true,
-    'isUndefined': true,
-    'value': null,
-  });
 }
 
 class _CommandInjection {
@@ -432,17 +516,21 @@ class _CommandInjection {
   final String? errorMessage;
   final String? errorStack;
 
-  String toEnvelopeJson() {
+  String toResponseEnvelope(String id) {
     if (ok) {
       return jsonEncode({
-        '__flutterMonacoEval': true,
+        'v': 3,
+        'kind': 'response',
+        'id': id,
         'ok': true,
-        'isUndefined': isUndefined,
+        'undefined': isUndefined,
         'value': isUndefined ? null : value,
       });
     }
     return jsonEncode({
-      '__flutterMonacoEval': true,
+      'v': 3,
+      'kind': 'response',
+      'id': id,
       'ok': false,
       'error': {
         'name': errorName,

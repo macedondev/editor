@@ -188,33 +188,46 @@ class WebViewController implements PlatformWebViewController {
     }
 
     // Only log non-stats messages to reduce noise (stats fire on every keystroke/selection)
-    final isStatsMessage =
-        message.contains('"event":"stats"') ||
-        message.contains('"event": "stats"');
+    final isStatsMessage = json?['kind'] == 'event' && json?['name'] == 'stats';
     if (!isStatsMessage) {
       debugPrint('[WebViewController] Received iframe message: $message');
     }
 
-    // Check if this is the ready event
-    final eventName = json?['event'];
-    if (message == 'ready' || eventName == 'onEditorReady') {
+    // Lifecycle: the protocol v3 'ready' envelope marks the editor alive.
+    // The legacy {event: 'error'} shape still comes from the inline
+    // loader-failure handler in the HTML head (which runs before core.js).
+    final lifecycleName = (json != null && json['kind'] == 'lifecycle')
+        ? json['name']
+        : null;
+    if (message == 'ready' || lifecycleName == 'ready') {
       _isReady = true;
       if (!_readyCompleter.isCompleted) {
         _readyCompleter.complete();
       }
       debugPrint('[WebViewController] Monaco ready!');
-    } else if (eventName == 'error' && !_isReady) {
-      final errorMessage = json?['message'] ?? 'Unknown Monaco load error';
+    } else if (!_isReady &&
+        (lifecycleName == 'fatal' || json?['event'] == 'error')) {
+      final errorMessage =
+          ((json?['error'] as Map<String, dynamic>?)?['message'] ??
+                  json?['message'] ??
+                  'Unknown Monaco load error')
+              .toString();
       if (!_readyCompleter.isCompleted) {
-        _readyCompleter.completeError(StateError(errorMessage.toString()));
+        _readyCompleter.completeError(StateError(errorMessage));
       }
     }
 
     // When Monaco reports focus, unfocus Flutter widgets.
     // This is gated by _interactionEnabled to avoid focus stealing when interaction is disabled.
+    final focusData =
+        (json != null &&
+            json['kind'] == 'event' &&
+            json['name'] == 'focusChanged')
+        ? json['data']
+        : null;
     if (_interactionEnabled &&
-        (message.contains('"event":"focus"') ||
-            message.contains('"event": "focus"'))) {
+        focusData is Map &&
+        focusData['focused'] == true) {
       // Unfocus any Flutter widget
       FocusManager.instance.primaryFocus?.unfocus();
       if (!_isMobileInputPlatform()) {

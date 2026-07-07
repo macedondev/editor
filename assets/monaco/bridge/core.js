@@ -1,15 +1,175 @@
-// flutter_monaco bridge - extracted verbatim from the 2.3.0 generated page
-// (lib/src/core/monaco_assets.dart generateIndexHtml). Do not reformat the
-// ported bodies; see upcoming/v3.md Section 14 (verbatim-port inventory).
+// flutter_monaco bridge - protocol v3 envelope plus shared infrastructure.
+// Ported bodies (parent-binding lifecycle) come verbatim from the 2.3.0
+// generated page; see upcoming/v3.md Sections 6 and 14.
 /* eslint-disable */
 'use strict';
 window.__FMB = window.__FMB || {};
 
+// ---------------------------------------------------------------------------
+// FlutterMonaco: the single wire protocol between this page and Dart.
+//
+// Every JS -> Dart message is one JSON envelope:
+//   { v: 3, kind: 'lifecycle'|'response'|'event'|'request'|'log', ... }
+// Dart -> JS calls arrive exclusively as FlutterMonaco.dispatch({id, method,
+// params}) and FlutterMonaco.respond({id, ok, value|error}) scripts. Commands
+// are registered into a flat dotted-name registry; synchronous and async
+// (promise-returning) commands are indistinguishable to Dart because dispatch
+// funnels both through Promise.resolve and always posts exactly one response.
+// ---------------------------------------------------------------------------
+(function () {
+  var PROTOCOL_VERSION = 3;
+  var page = window.__FM_PAGE || {};
+  var eventSeq = 0;
+  var registry = Object.create(null);
+  var pendingRequests = Object.create(null);
+  var requestSeq = 0;
+
+  var postToFlutter = function (envelope) {
+    envelope.v = PROTOCOL_VERSION;
+    // Web token stamping: the host page ignores iframe messages without the
+    // token it minted for this editor instance (anti-spoofing, issue #10).
+    var token = page.token || window.flutterMonacoToken || '';
+    if (token) envelope._flutterToken = token;
+    var json;
+    try {
+      json = JSON.stringify(envelope);
+    } catch (e) {
+      json = JSON.stringify({
+        v: PROTOCOL_VERSION,
+        kind: 'log',
+        level: 'error',
+        message: 'Unserializable envelope for kind ' + envelope.kind + ': ' + e,
+      });
+    }
+    if (window.flutterChannel && window.flutterChannel.postMessage) {
+      window.flutterChannel.postMessage(json);
+    } else {
+      console.error('[Monaco] Flutter communication channel is not available.');
+    }
+  };
+
+  var errorPayload = function (e) {
+    return {
+      name: e && e.name ? String(e.name) : 'Error',
+      message: e && e.message ? String(e.message) : String(e),
+      stack: e && e.stack ? String(e.stack) : null,
+    };
+  };
+
+  window.FlutterMonaco = {
+    PROTOCOL_VERSION: PROTOCOL_VERSION,
+
+    /// Registers the implementation of a dotted command name.
+    register: function (name, fn) {
+      registry[name] = fn;
+    },
+
+    /// Dart -> JS command call. Always posts exactly one response for id.
+    dispatch: function (call) {
+      var id = call && call.id;
+      var method = call && call.method;
+      var params = (call && call.params) || {};
+      var result;
+      try {
+        var fn = registry[method];
+        if (typeof fn !== 'function') {
+          throw new Error('Unknown method: ' + method);
+        }
+        result = Promise.resolve(fn(params));
+      } catch (e) {
+        result = Promise.reject(e);
+      }
+      result.then(
+        function (value) {
+          postToFlutter({
+            kind: 'response',
+            id: id,
+            ok: true,
+            undefined: typeof value === 'undefined',
+            value: typeof value === 'undefined' ? null : value,
+          });
+        },
+        function (e) {
+          console.error('[FlutterMonaco] dispatch failed:', method, e);
+          postToFlutter({
+            kind: 'response',
+            id: id,
+            ok: false,
+            error: errorPayload(e),
+          });
+        }
+      );
+    },
+
+    /// JS -> Dart request (completion provider, custom action run). Returns
+    /// a promise that Dart settles via FlutterMonaco.respond.
+    request: function (name, data) {
+      var id = 'q' + (++requestSeq);
+      return new Promise(function (resolve, reject) {
+        pendingRequests[id] = { resolve: resolve, reject: reject };
+        postToFlutter({ kind: 'request', id: id, name: name, data: data || {} });
+      });
+    },
+
+    /// Dart's answer to a request. A late respond for a dead id is a no-op.
+    respond: function (payload) {
+      var pending = pendingRequests[payload && payload.id];
+      if (!pending) return;
+      delete pendingRequests[payload.id];
+      if (payload.ok) {
+        pending.resolve(payload.value);
+      } else {
+        pending.reject(new Error((payload.error && payload.error.message) || 'Request failed'));
+      }
+    },
+
+    /// Drops a pending request without settling Dart's view of it (used by
+    /// cancellation paths that already resolved locally).
+    dropRequest: function (id) {
+      delete pendingRequests[id];
+    },
+
+    /// Editor event. seq is monotonically increasing per page; Dart asserts
+    /// monotonicity in debug builds to catch dropped or reordered messages.
+    emit: function (name, data) {
+      postToFlutter({ kind: 'event', seq: ++eventSeq, name: name, data: data || {} });
+    },
+
+    log: function (level, message) {
+      postToFlutter({ kind: 'log', level: level, message: String(message) });
+    },
+
+    lifecycle: function (name, extra) {
+      var envelope = { kind: 'lifecycle', name: name };
+      if (extra) {
+        for (var key in extra) {
+          if (Object.prototype.hasOwnProperty.call(extra, key)) {
+            envelope[key] = extra[key];
+          }
+        }
+      }
+      postToFlutter(envelope);
+    },
+  };
+
+  // Evaluate an arbitrary expression in global scope (the Dart
+  // evaluateJavaScript escape hatch). Indirect eval keeps globals reachable.
+  window.FlutterMonaco.register('page.eval', function (params) {
+    return (0, eval)(params.expression);
+  });
+
+  // The page shell is alive: protocol available, inline config parsed. The
+  // editor itself reports readiness separately (lifecycle 'ready').
+  window.FlutterMonaco.lifecycle('pageReady', {
+    protocolVersion: PROTOCOL_VERSION,
+    monacoVersion: page.monacoVersion || null,
+    capabilities: ['lsp'],
+  });
+})();
+
 // Shared bridge infrastructure: editor accessor, mobile detection,
-// parent-binding lifecycle, event poster, and the flutterMonacoInvoke /
-// flutterMonacoInvokeAsync envelopes.
+// parent-binding lifecycle, and the event poster (post -> FlutterMonaco.emit).
 window.__FMB.core = function (ctx) {
-  const { postMessageToFlutter } = ctx;
                 const E = () => window.editor;
                 const isMobileInputPlatform = () => {
                   const ua = navigator.userAgent || '';
@@ -56,96 +216,31 @@ window.__FMB.core = function (ctx) {
                 };
                 window.addEventListener('pagehide', window.__flutterMonacoDetachParentBindings, { once: true });
                 const serialize = (obj) => JSON.stringify(obj);
+
+                // Legacy-shaped poster: ported modules call
+                // postMessageToFlutter({ event, ...payload }) / post(event,
+                // payload); both now ride the v3 event envelope so their
+                // bodies stay verbatim while the wire is uniform.
+                const postMessageToFlutter = (message) => {
+                  if (message && typeof message === 'object' &&
+                      typeof message.event === 'string') {
+                    const data = Object.assign({}, message);
+                    delete data.event;
+                    window.FlutterMonaco.emit(message.event, data);
+                    return;
+                  }
+                  window.FlutterMonaco.log(
+                    'info',
+                    typeof message === 'string' ? message : JSON.stringify(message));
+                };
                 // Events -> Flutter
                 const post = (event, payload) =>
                   postMessageToFlutter({ event, ...payload });
 
-                // Bridge dispatcher with a result envelope.
-                //
-                // Dart-side _invokeMonacoCommand calls this so that any
-                // JavaScript error inside a flutterMonaco helper is captured
-                // as a structured failure instead of crossing the WebView
-                // boundary as an uncaught exception.
-                //
-                // Success: { __flutterMonacoEval: true, ok: true, isUndefined, value }
-                // Failure: { __flutterMonacoEval: true, ok: false, error: { name, message, stack } }
-                window.flutterMonacoInvoke = (method, args) => {
-                  try {
-                    const api = window.flutterMonaco;
-                    const fn = api && api[method];
-                    if (typeof fn !== 'function') {
-                      throw new Error('Unknown flutterMonaco method: ' + method);
-                    }
-                    const value = fn.apply(api, Array.isArray(args) ? args : []);
-                    return {
-                      __flutterMonacoEval: true,
-                      ok: true,
-                      isUndefined: typeof value === 'undefined',
-                      value: typeof value === 'undefined' ? null : value,
-                    };
-                  } catch (e) {
-                    console.error('[flutterMonaco] invoke failed:', method, e);
-                    return {
-                      __flutterMonacoEval: true,
-                      ok: false,
-                      error: {
-                        name: e && e.name ? String(e.name) : 'Error',
-                        message: e && e.message ? String(e.message) : String(e),
-                        stack: e && e.stack ? String(e.stack) : null,
-                      },
-                    };
-                  }
-                };
-
-                // Async bridge dispatcher.
-                //
-                // flutterMonacoInvoke returns synchronously, which cannot
-                // represent promise-returning helpers (LSP connect must await
-                // the initialize handshake). This variant resolves the method
-                // (dotted paths reach sub-namespaces like 'lsp.connect'),
-                // awaits the result, and reports back over flutterChannel as
-                // an 'invokeResult' event that Dart correlates by requestId.
-                // This behaves identically on Android, iOS, macOS, Windows,
-                // and Web because no platform has to unwrap a JS Promise.
-                window.flutterMonacoInvokeAsync = (requestId, method, args) => {
-                  const respond = (payload) => {
-                    postMessageToFlutter(Object.assign(
-                      { event: 'invokeResult', requestId: requestId }, payload));
-                  };
-                  Promise.resolve()
-                    .then(() => {
-                      let parent = null;
-                      let target = window.flutterMonaco;
-                      for (const part of String(method).split('.')) {
-                        parent = target;
-                        target = target ? target[part] : undefined;
-                      }
-                      if (typeof target !== 'function') {
-                        throw new Error('Unknown flutterMonaco method: ' + method);
-                      }
-                      return target.apply(parent, Array.isArray(args) ? args : []);
-                    })
-                    .then((value) => respond({
-                      ok: true,
-                      isUndefined: typeof value === 'undefined',
-                      value: typeof value === 'undefined' ? null : value,
-                    }))
-                    .catch((e) => {
-                      console.error('[flutterMonaco] async invoke failed:', method, e);
-                      respond({
-                        ok: false,
-                        error: {
-                          name: e && e.name ? String(e.name) : 'Error',
-                          message: e && e.message ? String(e.message) : String(e),
-                          stack: e && e.stack ? String(e.stack) : null,
-                        },
-                      });
-                    });
-                  return true;
-                };
   ctx.E = E;
   ctx.isMobileInputPlatform = isMobileInputPlatform;
   ctx.bindParentListener = bindParentListener;
   ctx.serialize = serialize;
   ctx.post = post;
+  ctx.postMessageToFlutter = postMessageToFlutter;
 };

@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,19 +28,15 @@ void _emitHandoff(
   bool atTop = false,
   bool atBottom = true,
 }) {
-  webview.emitToChannel(
-    'flutterChannel',
-    jsonEncode({
-      'event': 'scrollHandoff',
-      'source': source,
-      'deltaX': 0,
-      'deltaY': deltaY,
-      'atTop': atTop,
-      'atBottom': atBottom,
-      'atLeft': true,
-      'atRight': true,
-    }),
-  );
+  webview.emitEvent('scrollHandoff', {
+    'source': source,
+    'deltaX': 0,
+    'deltaY': deltaY,
+    'atTop': atTop,
+    'atBottom': atBottom,
+    'atLeft': true,
+    'atRight': true,
+  });
 }
 
 /// Delivers pending broadcast-stream events, then runs the coalescing
@@ -154,7 +148,7 @@ void main() {
       await _settleHandoff(tester);
 
       expect(scrollController.offset, 0);
-      bundle.webview.assertNotExecuted('"setScrollHandoff"');
+      bundle.webview.assertNotExecuted('page.setScrollHandoff');
     });
 
     testWidgets('touch deltas are ignored unless mobileTouch is enabled', (
@@ -426,7 +420,7 @@ void main() {
       );
       await tester.pump();
 
-      var scripts = bundle.webview.scriptsContaining('"setScrollHandoff"');
+      var scripts = bundle.webview.scriptsContaining('page.setScrollHandoff');
       expect(scripts, hasLength(1));
       expect(scripts.single, contains('"wheel":true'));
       expect(scripts.single, contains('"touch":false'));
@@ -439,7 +433,7 @@ void main() {
       );
       await tester.pump();
 
-      scripts = bundle.webview.scriptsContaining('"setScrollHandoff"');
+      scripts = bundle.webview.scriptsContaining('page.setScrollHandoff');
       expect(scripts, hasLength(2));
       expect(scripts.last, contains('"wheel":false'));
 
@@ -464,7 +458,7 @@ void main() {
         ),
       );
       await tester.pump();
-      bundle.webview.assertNotExecuted('"setScrollHandoff"');
+      bundle.webview.assertNotExecuted('page.setScrollHandoff');
 
       await tester.pumpWidget(
         _editorInScrollView(
@@ -475,7 +469,7 @@ void main() {
       );
       await tester.pump();
 
-      final scripts = bundle.webview.scriptsContaining('"setScrollHandoff"');
+      final scripts = bundle.webview.scriptsContaining('page.setScrollHandoff');
       expect(scripts, hasLength(1));
       expect(scripts.single, contains('"wheel":true'));
 
@@ -501,14 +495,16 @@ void main() {
         );
         await tester.pump();
         expect(
-          bundle.webview.scriptsContaining('"setScrollHandoff"'),
+          bundle.webview.scriptsContaining('page.setScrollHandoff'),
           hasLength(1),
         );
 
         await tester.pumpWidget(const MaterialApp(home: SizedBox()));
         await tester.pump();
 
-        final scripts = bundle.webview.scriptsContaining('"setScrollHandoff"');
+        final scripts = bundle.webview.scriptsContaining(
+          'page.setScrollHandoff',
+        );
         expect(scripts, hasLength(2));
         expect(scripts.last, contains('"wheel":false'));
         expect(scripts.last, contains('"touch":false'));

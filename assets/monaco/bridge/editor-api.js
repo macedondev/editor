@@ -336,6 +336,97 @@ window.__FMB.editorApi = function (ctx) {
                   },
                   listModels: () => monaco.editor.getModels().map(m => m.uri.toString()),
                 };
+
+                // ---- protocol v3 command registry (upcoming/v3.md 6.3) ----
+                // Thin adapters over the ported helpers above: the wire
+                // speaks dotted methods with named params; the bodies stay
+                // the battle-tested 2.3.0 implementations.
+                {
+                  const FM = window.FlutterMonaco;
+                  const api = window.flutterMonaco;
+                  FM.register('focus.force', (p) =>
+                    api.forceFocus(p && p.replayInputFocus ? { replayInputFocus: true } : {}));
+                  FM.register('editor.layout', () => api.layout());
+                  FM.register('document.getText', () => api.getValue());
+                  FM.register('document.setText', (p) => api.setValue(p.text));
+                  FM.register('document.lineCount', () => api.getLineCount());
+                  FM.register('document.getLines', (p) => {
+                    const model = requireModel();
+                    const lineCount = model.getLineCount();
+                    const start = Math.min(Math.max(1, p.startLine), lineCount);
+                    const end = Math.min(Math.max(start, p.endLine), lineCount);
+                    const lines = [];
+                    for (let ln = start; ln <= end; ln++) lines.push(model.getLineContent(ln));
+                    return lines;
+                  });
+                  FM.register('document.setLanguage', (p) => api.setLanguage(p.language));
+                  FM.register('document.getLanguage', () => {
+                    const model = requireModel();
+                    return model.getLanguageId ? model.getLanguageId() : monaco.editor.getModelLanguage(model);
+                  });
+                  FM.register('document.applyEdits', (p) => api.applyEdits(p.edits));
+                  FM.register('document.findMatches', (p) =>
+                    api.findMatches(p.query, { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord }, p.limit));
+                  FM.register('document.replaceMatches', (p) =>
+                    api.replaceMatches(p.query, p.replacement, { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord }));
+                  FM.register('document.getWordAt', (p) =>
+                    api.getWordAtPosition(p.position.lineNumber, p.position.column));
+                  FM.register('document.isDirty', () => api.hasUnsavedChanges());
+                  FM.register('document.markSaved', () => api.markSaved());
+                  FM.register('document.setMarkers', (p) => api.setModelMarkers(p.owner, p.markers));
+                  FM.register('docs.open', (p) => api.createModel(p.text, p.language, p.uri));
+                  FM.register('docs.close', (p) => api.disposeModel(p.uri));
+                  FM.register('docs.list', () => api.listModels());
+                  FM.register('docs.activate', (p) => api.setModel(p.uri));
+                  FM.register('docs.activeUri', () => {
+                    const ed = E();
+                    const model = ed && ed.getModel ? ed.getModel() : null;
+                    return model && model.uri ? model.uri.toString() : null;
+                  });
+                  FM.register('editor.updateOptions', (p) => api.updateOptions(p.options));
+                  FM.register('editor.setTheme', (p) => api.setTheme(p.theme));
+                  FM.register('editor.getTheme', () => api.getTheme());
+                  FM.register('editor.defineTheme', (p) => api.defineTheme(p.id, p.data));
+                  FM.register('editor.getSelection', () => api.getSelection());
+                  FM.register('editor.setSelection', (p) => api.setSelection(p.range));
+                  FM.register('editor.getCursor', () => api.getCursorPosition());
+                  FM.register('editor.setCursor', (p) =>
+                    api.setCursorPosition(p.position.lineNumber, p.position.column));
+                  FM.register('editor.reveal', (p) => {
+                    const lineCount = requireModel().getLineCount();
+                    const clamp = (ln) => Math.min(Math.max(1, ln), lineCount);
+                    const range = {
+                      startLineNumber: clamp(p.range.startLineNumber),
+                      startColumn: p.range.startColumn,
+                      endLineNumber: clamp(p.range.endLineNumber),
+                      endColumn: p.range.endColumn,
+                    };
+                    return api.revealRange(range, !!p.center);
+                  });
+                  FM.register('editor.scrollToEdge', (p) => {
+                    const ed = E();
+                    if (!ed) return false;
+                    if (p.edge === 'top') {
+                      ed.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
+                      ed.setPosition({ lineNumber: 1, column: 1 });
+                      ed.revealLineInCenterIfOutsideViewport(1);
+                    } else {
+                      const model = ed.getModel();
+                      if (!model) return false;
+                      const lineCount = model.getLineCount();
+                      ed.revealLineInCenterIfOutsideViewport(lineCount);
+                      ed.setPosition({ lineNumber: lineCount, column: 1 });
+                    }
+                    return true;
+                  });
+                  FM.register('editor.executeAction', (p) => api.executeAction(p.actionId, p.args));
+                  FM.register('editor.captureViewState', () => api.saveViewState());
+                  FM.register('editor.restoreViewState', (p) => api.restoreViewState(p.state));
+                  FM.register('decorations.delta', (p) => api.deltaDecorations(p.previousIds, p.decorations));
+                  FM.register('json.configureDiagnostics', (p) => api.setJsonDiagnosticsOptions(p.options));
+                  FM.register('page.setBackground', (p) => api.setHostPageBackground(p.color));
+                }
+
   ctx.escapeRegExp = escapeRegExp;
   ctx.requireEditor = requireEditor;
   ctx.requireModel = requireModel;
@@ -483,4 +574,12 @@ window.__FMB.completions = function (ctx) {
                     }
                   };
                 })();
+
+                // ---- protocol v3 command registry ----
+                window.FlutterMonaco.register('completions.register', (p) =>
+                  window.flutterMonaco.registerCompletionSource(p));
+                window.FlutterMonaco.register('completions.unregister', (p) =>
+                  window.flutterMonaco.unregisterCompletionSource(p.id));
+                window.FlutterMonaco.register('completions.resolve', (p) =>
+                  window.flutterMonaco.complete(p.requestId, p.payload));
 };

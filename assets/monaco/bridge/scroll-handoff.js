@@ -264,4 +264,8 @@ window.__FMB.scrollHandoff = function (ctx) {
                     return true;
                   };
                 })();
+
+                // ---- protocol v3 command registry ----
+                window.FlutterMonaco.register('page.setScrollHandoff', (p) =>
+                  window.flutterMonaco.setScrollHandoff({ wheel: !!p.wheel, touch: !!p.touch }));
 };

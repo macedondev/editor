@@ -268,6 +268,7 @@ class MonacoAssets {
     return buildMonacoIndexHtml(
       vsPath: vsPath,
       bridgeBase: bridgeBasePath,
+      monacoVersion: monacoVersion,
       isWindows: isWindows,
       isIosOrMacOS: isIosOrMacOS,
       isWeb: isWeb,

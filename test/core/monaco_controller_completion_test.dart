@@ -14,24 +14,33 @@ Future<MonacoController> _createController(
   );
 }
 
-String _completionRequestJson({
+Map<String, Object?> _completionRequestData({
   required String providerId,
   String requestId = 'req-1',
   String language = 'dart',
   int line = 1,
   int column = 2,
 }) {
-  return '''
-  {
-    "event":"completionRequest",
-    "providerId":"$providerId",
-    "requestId":"$requestId",
-    "language":"$language",
-    "position":{"lineNumber":$line,"column":$column},
-    "defaultRange":{"startLineNumber":$line,"startColumn":1,"endLineNumber":$line,"endColumn":$column},
-    "lineText":"test line"
-  }
-  ''';
+  return {
+    'providerId': providerId,
+    'requestId': requestId,
+    'language': language,
+    'position': {'lineNumber': line, 'column': column},
+    'defaultRange': {
+      'startLineNumber': line,
+      'startColumn': 1,
+      'endLineNumber': line,
+      'endColumn': column,
+    },
+    'lineText': 'test line',
+  };
+}
+
+/// Raw dispatch scripts that answer a completion request. The Dart response
+/// rides the v3 wire as method `completions.resolve` with params
+/// `{requestId, payload}`.
+List<String> _resolveScripts(FakePlatformWebViewController webview) {
+  return webview.scriptsContaining('"method": "completions.resolve"');
 }
 
 void main() {
@@ -92,7 +101,7 @@ void main() {
     });
 
     group('JS bridge calls', () {
-      test('register calls registerCompletionSource with payload', () async {
+      test('register dispatches completions.register with payload', () async {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
@@ -103,17 +112,16 @@ void main() {
           provider: (_) async => const CompletionList(suggestions: []),
         );
 
-        final call = webview
-            .scriptsContaining('registerCompletionSource')
-            .first;
-        expect(call, contains('"myProvider"'));
-        expect(call, contains('"dart"'));
-        expect(call, contains('"typescript"'));
-        expect(call, contains('"."'));
-        expect(call, contains('"@"'));
+        final call = webview.dispatched.singleWhere(
+          (d) => d['method'] == 'completions.register',
+        );
+        final params = call['params']! as Map<String, Object?>;
+        expect(params['id'], 'myProvider');
+        expect(params['languages'], ['dart', 'typescript']);
+        expect(params['triggerCharacters'], ['.', '@']);
       });
 
-      test('unregister calls unregisterCompletionSource', () async {
+      test('unregister dispatches completions.unregister', () async {
         final webview = FakePlatformWebViewController();
         final controller = await _createController(webview);
 
@@ -125,11 +133,12 @@ void main() {
 
         await controller.unregisterCompletionSource(id);
 
-        webview.assertExecuted('unregisterCompletionSource');
-        expect(
-          webview.scriptsContaining('unregisterCompletionSource').first,
-          contains('"p1"'),
-        );
+        final calls = webview.dispatched
+            .where((d) => d['method'] == 'completions.unregister')
+            .toList();
+        expect(calls, hasLength(1));
+        final params = calls.single['params']! as Map<String, Object?>;
+        expect(params['id'], 'p1');
       });
     });
 
@@ -160,9 +169,9 @@ void main() {
           },
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
         await pumpEventQueue();
 
@@ -173,9 +182,7 @@ void main() {
         expect(request.position.line, 1);
         expect(request.position.column, 2);
 
-        final completeCall = webview
-            .scriptsContaining('flutterMonaco.complete')
-            .first;
+        final completeCall = _resolveScripts(webview).first;
         expect(completeCall, contains('"req-1"'));
         expect(completeCall, contains('"print"'));
         expect(completeCall, contains('"println"'));
@@ -197,19 +204,21 @@ void main() {
           },
         );
 
-        webview.emitToChannel('flutterChannel', '''
-          {
-            "event":"completionRequest",
-            "providerId":"p1",
-            "requestId":"req-2",
-            "language":"dart",
-            "position":{"lineNumber":5,"column":10},
-            "defaultRange":{"startLineNumber":5,"startColumn":1,"endLineNumber":5,"endColumn":10},
-            "lineText":"object.",
-            "triggerKind":2,
-            "triggerCharacter":"."
-          }
-          ''');
+        webview.emitEvent('completionRequest', {
+          'providerId': 'p1',
+          'requestId': 'req-2',
+          'language': 'dart',
+          'position': {'lineNumber': 5, 'column': 10},
+          'defaultRange': {
+            'startLineNumber': 5,
+            'startColumn': 1,
+            'endLineNumber': 5,
+            'endColumn': 10,
+          },
+          'lineText': 'object.',
+          'triggerKind': 2,
+          'triggerCharacter': '.',
+        });
         await pumpEventQueue();
 
         expect(receivedRequest, isNotNull);
@@ -231,15 +240,13 @@ void main() {
           ),
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'unknown'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'unknown'),
         );
         await pumpEventQueue();
 
-        final completeCall = webview
-            .scriptsContaining('flutterMonaco.complete')
-            .first;
+        final completeCall = _resolveScripts(webview).first;
         expect(completeCall, contains('"suggestions":[]'));
         expect(completeCall, isNot(contains('"should not appear"')));
       });
@@ -256,15 +263,13 @@ void main() {
           },
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
         await pumpEventQueue();
 
-        final completeCall = webview
-            .scriptsContaining('flutterMonaco.complete')
-            .first;
+        final completeCall = _resolveScripts(webview).first;
         expect(completeCall, contains('"suggestions":[]'));
       });
 
@@ -283,16 +288,16 @@ void main() {
           },
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
 
         // Wait for async completion
         await Future<void>.delayed(const Duration(milliseconds: 100));
         await pumpEventQueue();
 
-        webview.assertExecuted('flutterMonaco.complete');
+        webview.assertExecuted('"method": "completions.resolve"');
       });
     });
 
@@ -328,13 +333,13 @@ void main() {
           ),
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
         await pumpEventQueue();
 
-        final call = webview.scriptsContaining('flutterMonaco.complete').first;
+        final call = _resolveScripts(webview).first;
         expect(call, contains('"testItem"'));
         expect(call, contains('"testItem()"'));
         expect(call, contains('"Method"'));
@@ -363,13 +368,13 @@ void main() {
           provider: (_) async => CompletionList(suggestions: suggestions),
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
         await pumpEventQueue();
 
-        final call = webview.scriptsContaining('flutterMonaco.complete').first;
+        final call = _resolveScripts(webview).first;
         for (final kind in allKinds) {
           expect(call, contains('"${kind.jsonValue}"'));
         }
@@ -390,13 +395,13 @@ void main() {
           ],
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'static1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'static1'),
         );
         await pumpEventQueue();
 
-        final call = webview.scriptsContaining('flutterMonaco.complete').first;
+        final call = _resolveScripts(webview).first;
         expect(call, contains('"static1"'));
         expect(call, contains('"static2"'));
       });
@@ -412,13 +417,13 @@ void main() {
           isIncomplete: true,
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'static1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'static1'),
         );
         await pumpEventQueue();
 
-        final call = webview.scriptsContaining('flutterMonaco.complete').first;
+        final call = _resolveScripts(webview).first;
         expect(call, contains('"isIncomplete":true'));
       });
     });
@@ -451,16 +456,16 @@ void main() {
           },
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
         await pumpEventQueue();
         expect(calls, ['p1']);
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p2', requestId: 'req-2'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p2', requestId: 'req-2'),
         );
         await pumpEventQueue();
         expect(calls, ['p1', 'p2']);
@@ -480,18 +485,18 @@ void main() {
           },
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
         await pumpEventQueue();
         expect(callCount, 1);
 
         await controller.unregisterCompletionSource(id);
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1', requestId: 'req-2'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1', requestId: 'req-2'),
         );
         await pumpEventQueue();
         expect(callCount, 1); // Not incremented
@@ -517,24 +522,24 @@ void main() {
         );
 
         // Fire multiple requests quickly
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1', requestId: 'req-1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1', requestId: 'req-2'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1', requestId: 'req-2'),
         );
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1', requestId: 'req-3'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1', requestId: 'req-3'),
         );
 
         await Future<void>.delayed(const Duration(milliseconds: 50));
         await pumpEventQueue();
 
         expect(completedCount, 3);
-        expect(webview.executionCount('flutterMonaco.complete'), 3);
+        expect(_resolveScripts(webview), hasLength(3));
       });
 
       test('empty suggestions list handled', () async {
@@ -547,13 +552,13 @@ void main() {
           provider: (_) async => const CompletionList(suggestions: []),
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
         await pumpEventQueue();
 
-        final call = webview.scriptsContaining('flutterMonaco.complete').first;
+        final call = _resolveScripts(webview).first;
         expect(call, contains('"suggestions":[]'));
       });
 
@@ -569,13 +574,13 @@ void main() {
           ),
         );
 
-        webview.emitToChannel(
-          'flutterChannel',
-          _completionRequestJson(providerId: 'p1'),
+        webview.emitEvent(
+          'completionRequest',
+          _completionRequestData(providerId: 'p1'),
         );
         await pumpEventQueue();
 
-        final call = webview.scriptsContaining('flutterMonaco.complete').first;
+        final call = _resolveScripts(webview).first;
         expect(call, contains('"minimal"'));
         // Should not contain null fields
         expect(call, isNot(contains('null')));

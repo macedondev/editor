@@ -39,11 +39,33 @@ void main() {
       expect(lsp, contains('registerBenignRefreshHandlers'));
     });
 
-    test('installs the async invocation envelope', () {
+    test('installs the protocol v3 dispatcher', () {
       final core = bridgeSource('core.js');
 
-      expect(core, contains('window.flutterMonacoInvokeAsync'));
-      expect(core, contains("event: 'invokeResult'"));
+      expect(core, contains('window.FlutterMonaco'));
+      expect(core, contains('PROTOCOL_VERSION = 3'));
+      expect(core, contains('dispatch:'));
+      expect(core, contains("kind: 'response'"));
+    });
+
+    test('registers the lsp commands on the v3 wire', () {
+      final lsp = bridgeSource('lsp.js');
+
+      for (final method in [
+        'lsp.connect',
+        'lsp.disconnect',
+        'lsp.disconnectAll',
+        'lsp.deliverServerMessage',
+        'lsp.sendRequest',
+        'lsp.sendNotification',
+        'lsp.listConnections',
+      ]) {
+        expect(
+          lsp,
+          contains("FM.register('$method'"),
+          reason: 'missing v3 registration for $method',
+        );
+      }
     });
 
     test('prefers monaco.json with a legacy namespace fallback', () {

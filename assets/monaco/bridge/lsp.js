@@ -395,4 +395,17 @@ window.__FMB.lsp = function (ctx) {
                     },
                   };
                 })();
+
+                // ---- protocol v3 command registry ----
+                {
+                  const FM = window.FlutterMonaco;
+                  const lspApi = () => window.flutterMonaco.lsp;
+                  FM.register('lsp.connect', (p) => lspApi().connect(p.id, p.transport));
+                  FM.register('lsp.disconnect', (p) => lspApi().disconnect(p.id));
+                  FM.register('lsp.disconnectAll', () => lspApi().disconnectAll());
+                  FM.register('lsp.deliverServerMessage', (p) => lspApi().deliverServerMessage(p.id, p.message));
+                  FM.register('lsp.sendRequest', (p) => lspApi().sendRequest(p.id, p.method, p.params));
+                  FM.register('lsp.sendNotification', (p) => lspApi().sendNotification(p.id, p.method, p.params));
+                  FM.register('lsp.listConnections', () => lspApi().listConnections());
+                }
 };

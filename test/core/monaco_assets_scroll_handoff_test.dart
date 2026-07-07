@@ -13,7 +13,7 @@ void main() {
     test('defines the flutterMonaco.setScrollHandoff toggle exactly once', () {
       expect('setScrollHandoff'.allMatches(html).length, greaterThan(0));
       expect(
-        'window.flutterMonaco.setScrollHandoff'.allMatches(html).length,
+        'window.flutterMonaco.setScrollHandoff = '.allMatches(html).length,
         1,
       );
       // The module script is referenced on every platform variant.
@@ -73,6 +73,15 @@ void main() {
       expect(html, contains("post('scrollHandoff'"));
       expect(html, contains('atTop'));
       expect(html, contains('atBottom'));
+    });
+
+    test('registers the page.setScrollHandoff command on the v3 wire', () {
+      expect(
+        html,
+        contains("window.FlutterMonaco.register('page.setScrollHandoff'"),
+      );
+      // The adapter must delegate to the single toggle definition.
+      expect(html, contains('window.flutterMonaco.setScrollHandoff({'));
     });
 
     test('touch forwarding yields to text selection', () {

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_monaco/flutter_monaco.dart';
@@ -79,15 +78,12 @@ void main() {
       }
 
       final executedIds = <String>{};
-      // The envelope dispatcher invokes flutterMonaco.executeAction via
-      // window.flutterMonacoInvoke("executeAction", [<id>, <args>]).
-      final regex = RegExp(
-        r'flutterMonacoInvoke\("executeAction",\s*\[(".*?")',
-      );
-      for (final script in webview.executed) {
-        final match = regex.firstMatch(script);
-        if (match == null) continue;
-        executedIds.add(jsonDecode(match.group(1)!));
+      // Every command rides the v3 wire as FlutterMonaco.dispatch with
+      // method editor.executeAction and params {actionId, args}.
+      for (final call in webview.dispatched) {
+        if (call['method'] != 'editor.executeAction') continue;
+        final params = call['params']! as Map<String, Object?>;
+        executedIds.add(params['actionId']! as String);
       }
 
       for (final actionId in values) {

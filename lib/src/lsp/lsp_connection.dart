@@ -1,12 +1,12 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:convert_object/convert_object.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_monaco/src/core/monaco_bridge.dart';
 import 'package:flutter_monaco/src/core/monaco_js_error.dart';
 import 'package:flutter_monaco/src/lsp/lsp_transport.dart';
 import 'package:flutter_monaco/src/lsp/lsp_types.dart';
+import 'package:flutter_monaco/src/protocol/envelope.dart';
+import 'package:flutter_monaco/src/protocol/protocol.dart';
 
 /// A live connection between the Monaco editor and one language server.
 ///
@@ -137,35 +137,26 @@ class LanguageServerConnection {
 /// Internal coordinator for all language server connections of one
 /// `MonacoController`.
 ///
-/// Owns the Dart side of the LSP bridge protocol:
+/// Owns the Dart side of the LSP bridge protocol on top of `MonacoProtocol`:
 ///
-/// - `flutterMonacoInvokeAsync` request/response correlation (the
-///   `invokeResult` event), needed because LSP connect must await a JS
-///   promise, which `runJavaScriptReturningResult` cannot represent
-///   consistently across platforms.
+/// - `lsp.*` command dispatch (request correlation lives in the protocol
+///   layer, which generalized the mechanism this manager pioneered).
 /// - `lspStatus` events (open/closed transitions from the page).
 /// - `lspMessage` events (client-to-server messages of bridged transports).
 ///
 /// Not exported from the package; use `MonacoController.connectLanguageServer`.
 class MonacoLspManager {
-  /// Creates a manager wired to [bridge] events.
-  MonacoLspManager({
-    required this._bridge,
-    required this._runJavaScript,
-    required this._ensureReady,
-  }) {
-    _bridge.addRawListener(_onBridgeEvent);
+  /// Creates a manager wired to [protocol] events.
+  MonacoLspManager({required this._protocol}) {
+    _eventsSubscription = _protocol.events.listen(_onProtocolEvent);
   }
 
   static const Duration _disconnectTimeout = Duration(seconds: 5);
 
-  final MonacoBridge _bridge;
-  final Future<Object?> Function(String script) _runJavaScript;
-  final Future<void> Function() _ensureReady;
+  final MonacoProtocol _protocol;
+  StreamSubscription<ProtocolEvent>? _eventsSubscription;
 
   final Map<String, LanguageServerConnection> _connections = {};
-  final Map<String, _PendingInvoke> _pendingInvokes = {};
-  int _invokeSeq = 0;
   bool _disposed = false;
 
   /// Connections that have not permanently closed yet.
@@ -240,7 +231,6 @@ class MonacoLspManager {
       ),
     );
 
-    await _ensureReady();
     _throwIfGone(connection);
 
     // Issue the connect call first: the JS side registers the connection
@@ -248,10 +238,11 @@ class MonacoLspManager {
     // afterwards (the pump below) finds a live transport - including the
     // server's response to the `initialize` request that the handshake
     // itself depends on.
-    final resultFuture = await _issueInvoke('lsp.connect', [
-      connection.id,
-      connection.transport.toBridgePayload(),
-    ]);
+    final resultFuture = await _protocol.invokeIssued('lsp.connect', {
+      'id': connection.id,
+      'transport': connection.transport.toBridgePayload(),
+    }, timeout: null);
+    resultFuture.ignore();
 
     final transport = connection.transport;
     if (transport is LspBridgedTransport &&
@@ -263,7 +254,7 @@ class MonacoLspManager {
       await resultFuture.timeout(connection._initializationTimeout);
     } on TimeoutException {
       // Best-effort teardown of whatever the page managed to build.
-      unawaited(_invokeSafely('lsp.disconnect', [connection.id]));
+      unawaited(_invokeSafely('lsp.disconnect', {'id': connection.id}));
       throw TimeoutException(
         'Language server "${connection.id}" did not complete the LSP '
         'initialize handshake within '
@@ -316,11 +307,14 @@ class MonacoLspManager {
     connection._deliverChain = connection._deliverChain.then((_) async {
       if (_disposed || connection._finalized) return;
       try {
-        await _runJavaScript(
-          'window.flutterMonaco && window.flutterMonaco.lsp && '
-          'window.flutterMonaco.lsp.deliverServerMessage('
-          '${_jsJson(connection.id)}, ${_jsJson(message)});',
+        // Await issuance only (the outer future): message order on the page
+        // is script-issue order, and delivery does not need the response.
+        final delivered = await _protocol.invokeIssued(
+          'lsp.deliverServerMessage',
+          {'id': connection.id, 'message': message},
+          timeout: null,
         );
+        delivered.ignore();
       } catch (error) {
         debugPrint(
           '[MonacoLsp] Failed to deliver server message for '
@@ -336,7 +330,7 @@ class MonacoLspManager {
       return;
     }
     unawaited(() async {
-      await _invokeSafely('lsp.disconnect', [connection.id]);
+      await _invokeSafely('lsp.disconnect', {'id': connection.id});
       if (connection._finalized) return;
       _finalize(
         connection,
@@ -346,39 +340,15 @@ class MonacoLspManager {
     }());
   }
 
-  // ─── Bridge events (JS -> Dart) ───────────────────────────────────────────
+  // ─── Protocol events (JS -> Dart) ─────────────────────────────────────────
 
-  void _onBridgeEvent(Map<String, dynamic> json) {
+  void _onProtocolEvent(ProtocolEvent event) {
     if (_disposed) return;
-    switch (json['event']) {
-      case 'invokeResult':
-        _handleInvokeResult(json);
+    switch (event.name) {
       case 'lspStatus':
-        _handleLspStatus(json);
+        _handleLspStatus(Map<String, dynamic>.from(event.data));
       case 'lspMessage':
-        _handleLspMessage(json);
-    }
-  }
-
-  void _handleInvokeResult(Map<String, dynamic> json) {
-    final requestId = json['requestId']?.toString();
-    if (requestId == null) return;
-    final pending = _pendingInvokes.remove(requestId);
-    if (pending == null) return;
-    if (pending.completer.isCompleted) return;
-
-    if (json['ok'] == true) {
-      pending.completer.complete(
-        json['isUndefined'] == true ? null : json['value'],
-      );
-    } else {
-      final error = tryConvertToMap<String, dynamic>(json['error']);
-      pending.completer.completeError(
-        MonacoJavaScriptException.fromJson(
-          error ?? <String, dynamic>{'message': 'Unknown Monaco bridge error'},
-          operation: pending.method,
-        ),
-      );
+        _handleLspMessage(Map<String, dynamic>.from(event.data));
     }
   }
 
@@ -436,7 +406,7 @@ class MonacoLspManager {
       unawaited(() async {
         // Dispose the in-page client so its providers unregister; the
         // transport is already dead.
-        await _invokeSafely('lsp.disconnect', [connection.id]);
+        await _invokeSafely('lsp.disconnect', {'id': connection.id});
         if (connection._finalized) return;
         _finalize(connection, LspConnectionStatus.closed, error: error);
       }());
@@ -449,7 +419,7 @@ class MonacoLspManager {
     final attempt = connection._reconnectAttempt + 1;
     if (attempt > connection.reconnectPolicy.maxAttempts) {
       unawaited(() async {
-        await _invokeSafely('lsp.disconnect', [connection.id]);
+        await _invokeSafely('lsp.disconnect', {'id': connection.id});
         if (connection._finalized) return;
         _finalize(connection, LspConnectionStatus.failed, error: error);
       }());
@@ -467,7 +437,7 @@ class MonacoLspManager {
 
     unawaited(() async {
       // Tear down the dead in-page client first; reconnect reuses the id.
-      await _invokeSafely('lsp.disconnect', [connection.id]);
+      await _invokeSafely('lsp.disconnect', {'id': connection.id});
       if (_disposed || connection._finalized || connection._userDisconnected) {
         return;
       }
@@ -498,7 +468,7 @@ class MonacoLspManager {
     if (connection._finalized) return;
     connection._userDisconnected = true;
     connection._reconnectTimer?.cancel();
-    await _invokeSafely('lsp.disconnect', [connection.id]);
+    await _invokeSafely('lsp.disconnect', {'id': connection.id});
     if (connection._finalized) return;
     _finalize(connection, LspConnectionStatus.closed);
   }
@@ -552,10 +522,10 @@ class MonacoLspManager {
     try {
       unawaited(
         Future<Object?>.sync(
-          () => _runJavaScript(
-            'window.flutterMonaco && window.flutterMonaco.lsp && '
-            'window.flutterMonaco.lsp.disconnectAll && '
-            'window.flutterMonaco.lsp.disconnectAll();',
+          () => _protocol.invoke(
+            'lsp.disconnectAll',
+            {},
+            timeout: _disconnectTimeout,
           ),
         ).then((_) {}, onError: (_) {}),
       );
@@ -565,19 +535,8 @@ class MonacoLspManager {
       _finalize(connection, LspConnectionStatus.closed);
     }
     _connections.clear();
-
-    for (final pending in List.of(_pendingInvokes.values)) {
-      if (!pending.completer.isCompleted) {
-        pending.completer.completeError(
-          StateError(
-            'MonacoController was disposed before "${pending.method}" '
-            'completed.',
-          ),
-        );
-      }
-    }
-    _pendingInvokes.clear();
-    _bridge.removeRawListener(_onBridgeEvent);
+    _eventsSubscription?.cancel();
+    _eventsSubscription = null;
   }
 
   // ─── Power-user escape hatches ────────────────────────────────────────────
@@ -589,11 +548,11 @@ class MonacoLspManager {
     Duration timeout,
   ) async {
     _requireOpen(connection, 'sendRequest');
-    return _invokeAsync('lsp.sendRequest', [
-      connection.id,
-      method,
-      params,
-    ], timeout: timeout);
+    return _invokeAsync('lsp.sendRequest', {
+      'id': connection.id,
+      'method': method,
+      'params': params,
+    }, timeout: timeout);
   }
 
   Future<void> _sendNotification(
@@ -602,11 +561,11 @@ class MonacoLspManager {
     Object? params,
   ) async {
     _requireOpen(connection, 'sendNotification');
-    await _invokeAsync('lsp.sendNotification', [
-      connection.id,
-      method,
-      params,
-    ], timeout: const Duration(seconds: 10));
+    await _invokeAsync('lsp.sendNotification', {
+      'id': connection.id,
+      'method': method,
+      'params': params,
+    }, timeout: const Duration(seconds: 10));
   }
 
   void _requireOpen(LanguageServerConnection connection, String operation) {
@@ -620,45 +579,17 @@ class MonacoLspManager {
 
   // ─── Async invoke plumbing ────────────────────────────────────────────────
 
-  /// Registers a pending invoke and issues the script. Returns the future
-  /// that completes with the JS result. Split from [_invokeAsync] so callers
-  /// can act at the moment the script has been issued (ordering guarantees
-  /// for the bridged pump).
-  Future<Future<Object?>> _issueInvoke(
-    String method,
-    List<Object?> args,
-  ) async {
-    final requestId = 'lsp_${++_invokeSeq}';
-    final completer = Completer<Object?>();
-    // Guard against dispose-time completeError landing before the caller
-    // attaches its listener (the issuing runJavaScript is still in flight);
-    // without this the error surfaces as an unhandled async error.
-    completer.future.ignore();
-    _pendingInvokes[requestId] = _PendingInvoke(
-      method: method,
-      completer: completer,
-    );
-    final script =
-        'window.flutterMonacoInvokeAsync(${_jsJson(requestId)}, '
-        '${_jsJson(method)}, ${_jsJson(args)})';
-    try {
-      await _runJavaScript(script);
-    } catch (error) {
-      _pendingInvokes.remove(requestId);
-      rethrow;
-    }
-    return completer.future;
-  }
-
+  /// Dispatches an `lsp.*` command with the manager's timeout wording and
+  /// undefined-to-null mapping.
   Future<Object?> _invokeAsync(
     String method,
-    List<Object?> args, {
+    Map<String, Object?> params, {
     required Duration timeout,
   }) async {
-    await _ensureReady();
-    final future = await _issueInvoke(method, args);
+    final future = await _protocol.invokeIssued(method, params, timeout: null);
     try {
-      return await future.timeout(timeout);
+      final result = await future.timeout(timeout);
+      return identical(result, monacoJsUndefined) ? null : result;
     } on TimeoutException {
       throw TimeoutException(
         'Monaco bridge call "$method" timed out after '
@@ -668,29 +599,13 @@ class MonacoLspManager {
     }
   }
 
-  Future<void> _invokeSafely(String method, List<Object?> args) async {
+  Future<void> _invokeSafely(String method, Map<String, Object?> params) async {
     try {
-      await _invokeAsync(method, args, timeout: _disconnectTimeout);
+      await _invokeAsync(method, params, timeout: _disconnectTimeout);
     } catch (error) {
       // Best-effort: the WebView may already be gone or the page may not
       // know the connection anymore.
-      debugPrint('[MonacoLsp] $method(${args.firstOrNull}) failed: $error');
+      debugPrint('[MonacoLsp] $method(${params['id']}) failed: $error');
     }
   }
-
-  /// JSON-encodes [value] for direct embedding in a JavaScript source
-  /// string. U+2028/U+2029 are valid inside JSON strings but must be escaped
-  /// defensively for JS embedding (LSP messages carry arbitrary file text).
-  static String _jsJson(Object? value) {
-    return jsonEncode(
-      value,
-    ).replaceAll('\u2028', r'\u2028').replaceAll('\u2029', r'\u2029');
-  }
-}
-
-class _PendingInvoke {
-  _PendingInvoke({required this.method, required this.completer});
-
-  final String method;
-  final Completer<Object?> completer;
 }

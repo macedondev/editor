@@ -48,6 +48,8 @@ const List<String> monacoBridgeScripts = [
 /// an absolute `file://` directory URL on Windows, and a resolved asset URL
 /// on web.
 ///
+/// [monacoVersion] is stamped into `window.__FM_PAGE` for the protocol
+/// handshake.
 /// [vsPath] is the path to the Monaco `vs/` directory (platform-specific,
 /// same semantics as 2.3.0). [messageToken] is the web postMessage
 /// authentication token. [customCss] is injected into a `<style>` tag.
@@ -57,6 +59,7 @@ const List<String> monacoBridgeScripts = [
 String buildMonacoIndexHtml({
   required String vsPath,
   required String bridgeBase,
+  required String monacoVersion,
   bool isWindows = false,
   bool isIosOrMacOS = false,
   bool isWeb = false,
@@ -83,6 +86,7 @@ String buildMonacoIndexHtml({
   window.__FM_PAGE = {
     platform: ${jsonEncode(platform)},
     vsPath: ${jsonEncode(vsPath)},
+    monacoVersion: ${jsonEncode(monacoVersion)},
     token: ${messageToken == null ? 'null' : jsonEncode(messageToken)}
   };
 </script>

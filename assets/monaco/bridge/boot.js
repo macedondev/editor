@@ -1,6 +1,6 @@
-// flutter_monaco bridge - extracted verbatim from the 2.3.0 generated page
-// (lib/src/core/monaco_assets.dart generateIndexHtml). Do not reformat the
-// ported bodies; see upcoming/v3.md Section 14 (verbatim-port inventory).
+// flutter_monaco bridge - boot orchestration. The stats emitter and event
+// wiring are ported verbatim from the 2.3.0 generated page; lifecycle and
+// event posts ride the protocol v3 envelope (see core.js).
 /* eslint-disable */
 'use strict';
 window.__FMB = window.__FMB || {};
@@ -17,23 +17,14 @@ window.__FMB = window.__FMB || {};
           function () {
             console.log('[Monaco] SUCCESS: editor.main.js has loaded. Initializing editor...');
 
-            function postMessageToFlutter(message) {
-              if (window.flutterMonacoPostMessage) {
-                window.flutterMonacoPostMessage(message);
-                return;
-              }
-              if (typeof message !== 'string') {
-                message = JSON.stringify(message);
-              }
-              if (window.flutterChannel && window.flutterChannel.postMessage) {
-                window.flutterChannel.postMessage(message);
-              } else {
-                console.error('[Monaco] Flutter communication channel is not available.');
-              }
-            }
-
             monaco.editor.onDidCreateEditor(function (editor) {
               window.editor = editor;
+
+              var FMB = window.__FMB || {};
+              var ctx = {};
+              FMB.core(ctx);
+              FMB.focusHelpers(ctx);
+              const { E, post, postMessageToFlutter } = ctx;
 
               // Send live statistics updates
               const sendStats = () => {
@@ -56,12 +47,6 @@ window.__FMB = window.__FMB || {};
               editor.onDidChangeCursorSelection(sendStats);
               sendStats();
 
-              var FMB = window.__FMB || {};
-              var ctx = { postMessageToFlutter: postMessageToFlutter };
-              FMB.core(ctx);
-              FMB.focusHelpers(ctx);
-              const { E, post } = ctx;
-
                 E().onDidChangeModelContent(e => post('contentChanged', { isFlush: e.isFlush }));
                 E().onDidChangeCursorSelection(e => post('selectionChanged', {
                   selection: e.selection && {
@@ -71,8 +56,8 @@ window.__FMB = window.__FMB || {};
                     endColumn: e.selection.endColumn
                   }
                 }));
-                E().onDidFocusEditorWidget(() => post('focus', {}));
-                E().onDidBlurEditorWidget(() => post('blur', {}));
+                E().onDidFocusEditorWidget(() => post('focusChanged', { focused: true }));
+                E().onDidBlurEditorWidget(() => post('focusChanged', { focused: false }));
 
               FMB.editorApi(ctx);
               FMB.focusMobile(ctx);
@@ -81,7 +66,7 @@ window.__FMB = window.__FMB || {};
               FMB.scrollHandoff(ctx);
               FMB.lsp(ctx);
 
-              postMessageToFlutter({ event: 'onEditorReady' });
+              window.FlutterMonaco.lifecycle('ready');
               console.log('[Monaco] Editor is ready and the Flutter bridge is installed.');
             });
 
@@ -97,11 +82,28 @@ window.__FMB = window.__FMB || {};
           },
           function (error) {
             console.error('[Monaco] FATAL: require() failed to load editor.main.js. Error:', error);
-            if (window.flutterMonacoPostMessage) window.flutterMonacoPostMessage({ event: 'error', message: 'Failed to load editor.main: ' + error });
+            if (window.FlutterMonaco) {
+              window.FlutterMonaco.lifecycle('fatal', {
+                error: {
+                  name: 'RequireError',
+                  message: 'Failed to load editor.main: ' + error,
+                  stack: null,
+                },
+              });
+            }
           }
         );
       } catch (e) {
         console.error('[Monaco] FATAL: A critical error occurred trying to call require(). Error:', e);
+        if (window.FlutterMonaco) {
+          window.FlutterMonaco.lifecycle('fatal', {
+            error: {
+              name: 'RequireError',
+              message: 'require() call failed: ' + e,
+              stack: e && e.stack ? String(e.stack) : null,
+            },
+          });
+        }
       }
   }
 

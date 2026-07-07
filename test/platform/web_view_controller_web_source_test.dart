@@ -17,6 +17,10 @@ void main() {
     expect(focusBlockEnd, greaterThan(focusBlockStart));
 
     final focusBlock = source.substring(focusBlockStart, focusBlockEnd);
+    // Focus now rides the protocol v3 focusChanged event envelope.
+    expect(focusBlock, contains("json['kind'] == 'event'"));
+    expect(focusBlock, contains("json['name'] == 'focusChanged'"));
+    expect(focusBlock, contains("focusData['focused'] == true"));
     expect(
       focusBlock,
       contains('FocusManager.instance.primaryFocus?.unfocus();'),
@@ -48,7 +52,16 @@ void main() {
   test('web error messages fail the current load attempt', () {
     final source = webControllerSource();
 
-    expect(source, contains("eventName == 'error' && !_isReady"));
+    // Readiness rides the protocol v3 lifecycle envelope.
+    expect(source, contains("json['kind'] == 'lifecycle'"));
+    expect(source, contains("lifecycleName == 'ready'"));
+    // Failures before ready must fail the in-flight load attempt: lifecycle
+    // fatals, plus the legacy {event:'error'} shape still posted by the
+    // inline loader-failure handler in the HTML head (it runs before
+    // core.js exists).
+    expect(source, contains('!_isReady'));
+    expect(source, contains("lifecycleName == 'fatal'"));
+    expect(source, contains("json?['event'] == 'error'"));
     expect(source, contains('_readyCompleter.completeError'));
     expect(source, contains('Unknown Monaco load error'));
   });

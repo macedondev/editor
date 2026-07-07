@@ -1,14 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:convert_object/convert_object.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
-import 'package:flutter_monaco/src/core/monaco_bridge.dart';
 import 'package:flutter_monaco/src/lsp/lsp_connection.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
+import 'package:flutter_monaco/src/protocol/envelope.dart';
+import 'package:flutter_monaco/src/protocol/protocol.dart';
 
 /// A callback function that provides completion items for a given
 /// [CompletionRequest]. It should return a [Future] that resolves to a
@@ -40,28 +40,23 @@ enum MonacoFocusIntent {
 /// * Use [setValue] / [getValue] to manage content.
 /// * Listen to [onContentChanged] for real-time updates.
 class MonacoController {
-  MonacoController._(this._bridge, this._webViewController) {
+  MonacoController._(this._protocol, this._webViewController) {
     _wireEvents();
-    _lspManager = MonacoLspManager(
-      bridge: _bridge,
-      runJavaScript: _webViewController.runJavaScript,
-      ensureReady: _ensureReady,
-    );
+    _lspManager = MonacoLspManager(protocol: _protocol);
   }
 
-  static const String _jsEvalEnvelopeKey = '__flutterMonacoEval';
-  static const String _jsEvalValueKey = 'value';
-  static const String _jsEvalUndefinedKey = 'isUndefined';
-  static const String _jsEvalOkKey = 'ok';
-  static const String _jsEvalErrorKey = 'error';
-  static const _jsUndefined = _JavaScriptUndefinedValue();
-
-  final MonacoBridge _bridge;
+  final MonacoProtocol _protocol;
   final PlatformWebViewController _webViewController;
   final Completer<void> _onReady = Completer<void>();
   late final MonacoLspManager _lspManager;
   bool _disposed = false;
   bool _interactionEnabled = true;
+
+  /// Real-time statistics from the editor, updated on every cursor/content
+  /// change via the `stats` protocol event.
+  final ValueNotifier<LiveStats> _liveStats = ValueNotifier(
+    LiveStats.defaults(),
+  );
 
   // Event streams
   final _onContentChanged = StreamController<bool>.broadcast();
@@ -70,6 +65,7 @@ class MonacoController {
   final _onBlur = StreamController<void>.broadcast();
   final _onScrollHandoff =
       StreamController<MonacoScrollHandoffDetails>.broadcast();
+  StreamSubscription<ProtocolEvent>? _eventSubscription;
 
   // Decoration tracking
   List<String> _decorationIds = const [];
@@ -91,7 +87,7 @@ class MonacoController {
   bool get isInteractionEnabled => _interactionEnabled;
 
   /// Exposes real-time statistics (cursor position, selection, line count).
-  ValueNotifier<LiveStats> get liveStats => _bridge.liveStats;
+  ValueNotifier<LiveStats> get liveStats => _liveStats;
 
   /// Stream emitting `true` (flush) or `false` (partial) when content changes.
   Stream<bool> get onContentChanged => _onContentChanged.stream;
@@ -121,10 +117,10 @@ class MonacoController {
   ///
   /// This method spins up the WebView and loads the Monaco resources.
   ///
-  /// On native platforms it waits for the `onReady` signal from JavaScript
-  /// before returning. On web it returns as soon as the controller is created
-  /// and continues initialization in the background. Use [onReady] or
-  /// [isReady] to wait for readiness on web.
+  /// On native platforms it waits for the `ready` lifecycle signal from
+  /// JavaScript before returning. On web it returns as soon as the controller
+  /// is created and continues initialization in the background. Use [onReady]
+  /// or [isReady] to wait for readiness on web.
   ///
   /// Throws a [TimeoutException] if the editor does not become ready within [readyTimeout] (default 20s).
   ///
@@ -148,9 +144,7 @@ class MonacoController {
 
     // Create platform-specific WebView controller
     final webViewController = PlatformWebViewFactory.createController();
-
-    // Create and attach bridge
-    final bridge = MonacoBridge()..attachWebView(webViewController);
+    final protocol = MonacoProtocol(webView: webViewController);
     MonacoController? controller;
 
     try {
@@ -159,11 +153,11 @@ class MonacoController {
       await webViewController.enableJavaScript();
       await webViewController.addJavaScriptChannel(
         'flutterChannel',
-        bridge.handleJavaScriptMessage,
+        protocol.handleChannelMessage,
       );
 
       // Create controller first (before loading HTML) so widget can render.
-      controller = MonacoController._(bridge, webViewController);
+      controller = MonacoController._(protocol, webViewController);
 
       final readyFuture = (() async {
         try {
@@ -177,7 +171,7 @@ class MonacoController {
           );
 
           // Wait for editor ready signal with configurable timeout
-          await bridge.onReady.future.timeout(
+          await protocol.editorReady.timeout(
             readyTimeout ?? const Duration(seconds: 20),
             onTimeout: () => throw TimeoutException(
               'Monaco Editor did not report ready in ${readyTimeout?.inSeconds ?? 20} seconds.',
@@ -237,7 +231,7 @@ class MonacoController {
       if (controller != null) {
         controller.dispose();
       } else {
-        bridge.dispose();
+        protocol.dispose();
         webViewController.dispose();
       }
       rethrow;
@@ -245,29 +239,28 @@ class MonacoController {
   }
 
   /// Create a controller for tests without touching assets or platform views.
+  ///
+  /// When [markReady] is true, synthetic `pageReady` and `ready` lifecycle
+  /// envelopes are pushed through the real protocol decode path so the
+  /// controller behaves exactly as it does against a live page.
   @visibleForTesting
   static Future<MonacoController> createForTesting({
     required PlatformWebViewController webViewController,
-    MonacoBridge? bridge,
     bool markReady = true,
     String channelName = 'flutterChannel',
   }) async {
-    final wiredBridge = bridge ?? MonacoBridge();
-    wiredBridge.attachWebView(webViewController);
+    final protocol = MonacoProtocol(webView: webViewController);
 
     await webViewController.initialize();
     await webViewController.enableJavaScript();
     await webViewController.addJavaScriptChannel(
       channelName,
-      wiredBridge.handleJavaScriptMessage,
+      protocol.handleChannelMessage,
     );
 
-    final controller = MonacoController._(wiredBridge, webViewController);
-    if (markReady && !controller._onReady.isCompleted) {
-      controller._onReady.complete();
-    }
-    if (markReady && !wiredBridge.onReady.isCompleted) {
-      wiredBridge.onReady.complete();
+    final controller = MonacoController._(protocol, webViewController);
+    if (markReady) {
+      controller.completeReadyForTesting();
     }
     return controller;
   }
@@ -275,6 +268,23 @@ class MonacoController {
   /// Manually complete the ready signal for tests.
   @visibleForTesting
   void completeReadyForTesting() {
+    _protocol.handleChannelMessage(
+      jsonEncode({
+        'v': kMonacoProtocolVersion,
+        'kind': 'lifecycle',
+        'name': 'pageReady',
+        'protocolVersion': kMonacoProtocolVersion,
+        'monacoVersion': 'test',
+        'capabilities': ['lsp'],
+      }),
+    );
+    _protocol.handleChannelMessage(
+      jsonEncode({
+        'v': kMonacoProtocolVersion,
+        'kind': 'lifecycle',
+        'name': 'ready',
+      }),
+    );
     if (!_onReady.isCompleted) {
       _onReady.complete();
     }
@@ -288,6 +298,14 @@ class MonacoController {
     if (!_onReady.isCompleted) {
       await _onReady.future;
     }
+  }
+
+  /// Dispatches a protocol command after readiness; maps a JavaScript
+  /// `undefined` result to `null`.
+  Future<Object?> _invoke(String method, Map<String, Object?> params) async {
+    await _ensureReady();
+    final result = await _protocol.invoke(method, params);
+    return identical(result, monacoJsUndefined) ? null : result;
   }
 
   /// Switches the editor's syntax highlighting language.
@@ -305,7 +323,7 @@ class MonacoController {
         return; // A newer language was queued, skip this one
       }
     }
-    await _invokeMonacoCommand('setLanguage', [language.id]);
+    await _invoke('document.setLanguage', {'language': language.id});
   }
 
   /// Configures Monaco's built-in JSON diagnostics and schema validation.
@@ -317,9 +335,9 @@ class MonacoController {
   ///
   /// See [JsonDiagnosticsOptions] for available settings and defaults.
   Future<void> setJsonDiagnostics(JsonDiagnosticsOptions diagnostics) async {
-    await _invokeMonacoCommand('setJsonDiagnosticsOptions', [
-      diagnostics.toJson(),
-    ]);
+    await _invoke('json.configureDiagnostics', {
+      'options': diagnostics.toJson(),
+    });
   }
 
   /// Changes the editor's color theme.
@@ -343,7 +361,7 @@ class MonacoController {
         'themeId must be a non-empty string',
       );
     }
-    await _invokeMonacoCommand('setTheme', [themeId]);
+    await _invoke('editor.setTheme', {'theme': themeId});
   }
 
   /// Returns the Monaco theme id currently active in the editor.
@@ -355,7 +373,7 @@ class MonacoController {
   /// fallback-on-failure contract as [getValue] / [getLineCount].
   Future<String?> getThemeId() async {
     try {
-      final result = await _invokeMonacoCommand('getTheme', []);
+      final result = await _invoke('editor.getTheme', {});
       return result is String && result.isNotEmpty ? result : null;
     } catch (_) {
       return null;
@@ -389,7 +407,7 @@ class MonacoController {
         'theme id must be a non-empty string',
       );
     }
-    await _invokeMonacoCommand('defineTheme', [id, data]);
+    await _invoke('editor.defineTheme', {'id': id, 'data': data});
   }
 
   /// Sets the background color of the native WebView container.
@@ -412,7 +430,7 @@ class MonacoController {
   /// [MonacoThemeDefinition] with an `editor.background` color instead -
   /// this method does not affect Monaco's internal theme tokens.
   Future<void> setHostPageBackgroundColor(Color color) async {
-    await _invokeMonacoCommand('setHostPageBackground', [_cssRgba(color)]);
+    await _invoke('page.setBackground', {'color': _cssRgba(color)});
   }
 
   /// Converts a Flutter [Color] to a CSS `rgba(...)` string.
@@ -484,7 +502,9 @@ class MonacoController {
   ///
   /// Only the fields present in [options] will be updated; others remain unchanged.
   Future<void> updateOptions(EditorOptions options) async {
-    await _invokeMonacoCommand('updateOptions', [options.toMonacoOptions()]);
+    await _invoke('editor.updateOptions', {
+      'options': options.toMonacoOptions(),
+    });
   }
 
   /// Registers a dynamic completion provider for the given [languages].
@@ -532,16 +552,12 @@ class MonacoController {
   Future<void> _registerCompletionSourceInternal(
     _RegisteredCompletion entry,
   ) async {
-    final payload = jsonEncode({
-      'id': entry.id,
-      'languages': entry.languages,
-      'triggerCharacters': entry.triggerCharacters,
-    });
-
     try {
-      await _webViewController.runJavaScript(
-        'flutterMonaco.registerCompletionSource($payload)',
-      );
+      await _invoke('completions.register', {
+        'id': entry.id,
+        'languages': entry.languages,
+        'triggerCharacters': entry.triggerCharacters,
+      });
     } catch (e) {
       _completionSources.remove(entry.id);
       rethrow;
@@ -579,14 +595,12 @@ class MonacoController {
       // Not registered on JS side yet, just return
       return;
     }
-    await _webViewController.runJavaScript(
-      'flutterMonaco.unregisterCompletionSource(${jsonEncode(id)})',
-    );
+    await _invoke('completions.unregister', {'id': id});
   }
 
   /// Execute an editor action
   Future<void> executeAction(String actionId, [dynamic args]) async {
-    await _invokeMonacoCommand('executeAction', [actionId, args]);
+    await _invoke('editor.executeAction', {'actionId': actionId, 'args': args});
   }
 
   /// Whether a Flutter text input (TextField, CupertinoTextField,
@@ -653,10 +667,14 @@ class MonacoController {
     await Future<void>.delayed(Duration.zero);
   }
 
-  static String _forceFocusScript({bool replayInputFocus = false}) {
-    final replayArg = replayInputFocus ? '({ replayInputFocus: true })' : '()';
-    return 'window.flutterMonaco && window.flutterMonaco.forceFocus && '
-        'window.flutterMonaco.forceFocus$replayArg';
+  /// Dispatches the in-page focus helper; failures are swallowed exactly as
+  /// the 2.x raw-script path did (focus nudges are best-effort).
+  Future<void> _forceFocus({bool replayInputFocus = false}) async {
+    try {
+      await _protocol.invoke('focus.force', {
+        'replayInputFocus': replayInputFocus,
+      });
+    } catch (_) {}
   }
 
   /// Requests focus for the editor widget.
@@ -678,7 +696,7 @@ class MonacoController {
     // window's first responder. No-op elsewhere.
     await _webViewController.requestNativeFocus();
     // Use robust in-page helper (waits for visibility, layouts, focuses textarea)
-    await _webViewController.runJavaScript(_forceFocusScript());
+    await _forceFocus();
   }
 
   /// Attempts to focus the editor multiple times to handle race conditions during layout transitions.
@@ -738,11 +756,7 @@ class MonacoController {
             nativeFocus: nativeFocus,
           );
         }
-        try {
-          await _webViewController.runJavaScript(
-            _forceFocusScript(replayInputFocus: replayInputFocus),
-          );
-        } catch (_) {}
+        await _forceFocus(replayInputFocus: replayInputFocus);
         // Replay at most once per call: later attempts are settle-retries,
         // and repeating the blur/refocus cycle would multiply the caret
         // blink the replay already costs.
@@ -788,34 +802,17 @@ class MonacoController {
   ///
   /// Call this if the widget size changes but the editor does not update automatically.
   Future<void> layout() async {
-    await _ensureReady();
-    await _webViewController.runJavaScript(
-      'window.flutterMonaco && window.flutterMonaco.layout && window.flutterMonaco.layout()',
-    );
+    await _invoke('editor.layout', {});
   }
 
   /// Scrolls the editor to the very top (line 1, column 1).
   Future<void> scrollToTop() async {
-    await _ensureReady();
-    await _webViewController.runJavaScript('''
-      if (window.editor) {
-        window.editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
-        window.editor.setPosition({ lineNumber: 1, column: 1 });
-        window.editor.revealLineInCenterIfOutsideViewport(1);
-      }
-    ''');
+    await _invoke('editor.scrollToEdge', {'edge': 'top'});
   }
 
   /// Scrolls the editor to the last line.
   Future<void> scrollToBottom() async {
-    await _ensureReady();
-    await _webViewController.runJavaScript('''
-      if (window.editor && window.editor.getModel()) {
-        const lineCount = window.editor.getModel().getLineCount();
-        window.editor.revealLineInCenterIfOutsideViewport(lineCount);
-        window.editor.setPosition({ lineNumber: lineCount, column: 1 });
-      }
-    ''');
+    await _invoke('editor.scrollToEdge', {'edge': 'bottom'});
   }
 
   /// Enables or disables edge scroll handoff sources inside the editor page.
@@ -833,9 +830,7 @@ class MonacoController {
     bool wheel = false,
     bool touch = false,
   }) async {
-    await _invokeMonacoCommand('setScrollHandoff', [
-      {'wheel': wheel, 'touch': touch},
-    ]);
+    await _invoke('page.setScrollHandoff', {'wheel': wheel, 'touch': touch});
   }
 
   /// Format the document
@@ -885,51 +880,40 @@ class MonacoController {
 
   // --- EVENT HANDLING ---
 
-  /// Wire up event listeners with improved conversion
+  /// Wire up protocol event listeners.
   void _wireEvents() {
-    _bridge.addRawListener((Map<String, dynamic> json) {
-      // Use safer conversion methods with fallbacks
-      final event = json.tryGetString(
-        'event',
-        alternativeKeys: ['eventType', 'type'],
-        defaultValue: 'unknown',
-      );
-
-      switch (event) {
+    _eventSubscription = _protocol.events.listen((event) {
+      switch (event.name) {
+        case 'stats':
+          try {
+            _liveStats.value = LiveStats.fromJson(
+              Map<String, dynamic>.from(event.data),
+            );
+          } catch (e) {
+            debugPrint('[MonacoController] Failed to parse stats: $e');
+          }
         case 'contentChanged':
-          // Use tryGetBool with default value
-          _onContentChanged.add(
-            json.tryGetBool(
-                  'isFlush',
-                  alternativeKeys: ['flush', 'fullChange'],
-                  defaultValue: false,
-                ) ??
-                false,
-          );
-          break;
+          _onContentChanged.add(event.data['isFlush'] == true);
         case 'selectionChanged':
-          // Use factory constructor for cleaner conversion
-          final selectionMap = json.tryGetMap<String, dynamic>(
-            'selection',
-            alternativeKeys: ['sel', 'range'],
+          final selection = event.data['selection'];
+          _onSelectionChanged.add(
+            selection is Map
+                ? Range.fromJson(Map<String, dynamic>.from(selection))
+                : null,
           );
-          final selection = selectionMap != null
-              ? Range.fromJson(selectionMap)
-              : null;
-          _onSelectionChanged.add(selection);
-          break;
-        case 'focus':
-          _onFocus.add(null);
-          break;
-        case 'blur':
-          _onBlur.add(null);
-          break;
+        case 'focusChanged':
+          if (event.data['focused'] == true) {
+            _onFocus.add(null);
+          } else {
+            _onBlur.add(null);
+          }
         case 'scrollHandoff':
-          final details = MonacoScrollHandoffDetails.tryParse(json);
+          final details = MonacoScrollHandoffDetails.tryParse(
+            Map<String, dynamic>.from(event.data),
+          );
           if (details != null) {
             _onScrollHandoff.add(details);
           }
-          break;
         default:
           break;
       }
@@ -940,219 +924,41 @@ class MonacoController {
     if (_completionListenerWired) return;
     _completionListenerWired = true;
 
-    _bridge.addRawListener((Map<String, dynamic> json) {
-      if (json.tryGetString('event') != 'completionRequest') return;
-
-      unawaited(() async {
-        try {
-          await _ensureReady();
-          final request = CompletionRequest.fromJson(json);
-          final registered = _completionSources[request.providerId];
-          const emptySuggestions = {'suggestions': <Map<String, dynamic>>[]};
-
-          Future<void> respond(Map<String, dynamic> payload) {
-            return _webViewController.runJavaScript(
-              'flutterMonaco.complete(${jsonEncode(request.requestId)}, ${jsonEncode(payload)})',
-            );
-          }
-
-          if (registered == null) {
-            await respond(emptySuggestions);
-            return;
-          }
-
+    _protocol.events.where((event) => event.name == 'completionRequest').listen(
+      (event) {
+        unawaited(() async {
           try {
-            final result = await registered.provider(request);
-            await respond(result.toJson());
+            await _ensureReady();
+            final request = CompletionRequest.fromJson(
+              Map<String, dynamic>.from(event.data),
+            );
+            final registered = _completionSources[request.providerId];
+            const emptySuggestions = {'suggestions': <Map<String, dynamic>>[]};
+
+            Future<void> respond(Map<String, dynamic> payload) {
+              return _invoke('completions.resolve', {
+                'requestId': request.requestId,
+                'payload': payload,
+              });
+            }
+
+            if (registered == null) {
+              await respond(emptySuggestions);
+              return;
+            }
+
+            try {
+              final result = await registered.provider(request);
+              await respond(result.toJson());
+            } catch (e) {
+              debugPrint('[MonacoController] completion provider failed: $e');
+              await respond(emptySuggestions);
+            }
           } catch (e) {
-            debugPrint('[MonacoController] completion provider failed: $e');
-            await respond(emptySuggestions);
+            debugPrint('[MonacoController] completion respond failed: $e');
           }
-        } catch (e) {
-          debugPrint('[MonacoController] completion respond failed: $e');
-        }
-      }());
-    });
-  }
-
-  /// Helper method to safely execute JavaScript and convert the result
-  Future<T?> _executeJavaScript<T>(
-    String script, {
-    T? defaultValue,
-    bool jsonAware = true,
-  }) async {
-    try {
-      await _ensureReady();
-      final raw = await _webViewController.runJavaScriptReturningResult(script);
-
-      // Windows WebView2 might auto-decode JSON, handle both cases
-      // Only decode if jsonAware is true (for API calls that return JSON)
-      final result =
-          (jsonAware &&
-              raw is String &&
-              (raw.startsWith('{') || raw.startsWith('[')))
-          ? (raw.tryDecode() ?? raw)
-          : raw;
-
-      // Use tryToType for all type conversions
-      return tryConvertToType<T>(result) ?? defaultValue;
-    } catch (e) {
-      debugPrint('[MonacoController] JavaScript execution error: $e');
-      return defaultValue;
-    }
-  }
-
-  /// Helper to safely parse JSON results with enhanced conversion
-  Future<T?> _executeJavaScriptWithJson<T>(
-    String script, {
-    T? defaultValue,
-    T Function(Map<String, dynamic>)? parser,
-  }) async {
-    try {
-      await _ensureReady();
-      final raw = await _webViewController.runJavaScriptReturningResult(script);
-
-      // Handle Windows auto-decode: raw might already be a Map/List
-      final obj = raw is String ? (raw.tryDecode() ?? raw) : raw;
-
-      // Try to convert to Map
-      final json = tryConvertToMap<String, dynamic>(obj);
-      if (json == null || json.isEmpty) return defaultValue;
-
-      // Use parser if provided, otherwise try direct conversion
-      return parser?.call(json) ?? tryConvertToType<T>(json) ?? defaultValue;
-    } catch (e) {
-      debugPrint('[MonacoController] JSON parsing error: $e');
-      return defaultValue;
-    }
-  }
-
-  String _wrapJavaScriptEvaluationExpression(String expression) {
-    final envelopeKey = jsonEncode(_jsEvalEnvelopeKey);
-    final valueKey = jsonEncode(_jsEvalValueKey);
-    final undefinedKey = jsonEncode(_jsEvalUndefinedKey);
-
-    return '''
-      (function() {
-        const value = ($expression);
-
-        if (typeof value === 'undefined') {
-          return JSON.stringify({
-            $envelopeKey: true,
-            $undefinedKey: true,
-            $valueKey: null
-          });
-        }
-
-        return JSON.stringify({
-          $envelopeKey: true,
-          $undefinedKey: false,
-          $valueKey: value
-        });
-      })()
-    ''';
-  }
-
-  Object? _decodeJavaScriptEvaluationResult(Object? raw) {
-    Object? current = raw;
-
-    for (var i = 0; i < 3; i++) {
-      if (current is! String) break;
-
-      final trimmed = current.trim();
-      if (trimmed.isEmpty) return null;
-
-      try {
-        current = jsonDecode(trimmed);
-      } catch (_) {
-        break;
-      }
-    }
-
-    final envelope = tryConvertToMap<String, dynamic>(current);
-    if (envelope == null || envelope[_jsEvalEnvelopeKey] != true) {
-      return current;
-    }
-
-    if (envelope[_jsEvalUndefinedKey] == true) {
-      return _jsUndefined;
-    }
-
-    return envelope.containsKey(_jsEvalValueKey)
-        ? envelope[_jsEvalValueKey]
-        : null;
-  }
-
-  /// Decodes a raw `runJavaScriptReturningResult` payload into the
-  /// `flutterMonacoInvoke` envelope shape, applying the same triple-decode
-  /// loop the evaluation helper uses.
-  ///
-  /// Returns the parsed envelope map, or `null` if the payload could not be
-  /// resolved to one. Callers treat a missing envelope as a bridge failure.
-  Map<String, dynamic>? _decodeInvokeEnvelope(Object? raw) {
-    Object? current = raw;
-
-    for (var i = 0; i < 3; i++) {
-      if (current is! String) break;
-      final trimmed = current.trim();
-      if (trimmed.isEmpty) return null;
-      try {
-        current = jsonDecode(trimmed);
-      } catch (_) {
-        break;
-      }
-    }
-
-    final envelope = tryConvertToMap<String, dynamic>(current);
-    if (envelope == null || envelope[_jsEvalEnvelopeKey] != true) {
-      return null;
-    }
-    return envelope;
-  }
-
-  /// Invokes a typed Monaco bridge command and returns the helper's value.
-  ///
-  /// The JavaScript side dispatches the call through `window.flutterMonacoInvoke`
-  /// which wraps the helper in a try/catch and returns a result envelope.
-  /// Success envelopes (`ok: true`) yield the helper's value (or `null` when
-  /// the helper returned `undefined`). Failure envelopes (`ok: false`) raise
-  /// [MonacoJavaScriptException] tagged with [method] so callers can react to
-  /// or rethrow the failure.
-  ///
-  /// This is the canonical path for mutating commands. Read methods with
-  /// documented fallbacks should catch [MonacoJavaScriptException] at the
-  /// Dart layer and return their default value to preserve the public API
-  /// contract.
-  Future<Object?> _invokeMonacoCommand(
-    String method,
-    List<Object?> args,
-  ) async {
-    await _ensureReady();
-
-    final script =
-        'JSON.stringify(window.flutterMonacoInvoke(${jsonEncode(method)}, ${jsonEncode(args)}))';
-    final raw = await _webViewController.runJavaScriptReturningResult(script);
-    final envelope = _decodeInvokeEnvelope(raw);
-
-    if (envelope == null) {
-      throw MonacoJavaScriptException(
-        operation: method,
-        message: 'Invalid Monaco bridge envelope: $raw',
-        details: raw,
-      );
-    }
-
-    if (envelope[_jsEvalOkKey] == true) {
-      if (envelope[_jsEvalUndefinedKey] == true) return null;
-      return envelope.containsKey(_jsEvalValueKey)
-          ? envelope[_jsEvalValueKey]
-          : null;
-    }
-
-    final error = tryConvertToMap<String, dynamic>(envelope[_jsEvalErrorKey]);
-    throw MonacoJavaScriptException.fromJson(
-      error ?? <String, dynamic>{'message': 'Unknown Monaco bridge error'},
-      operation: method,
+        }());
+      },
     );
   }
 
@@ -1163,12 +969,12 @@ class MonacoController {
   /// Returns [defaultValue] if the operation fails or returns null.
   Future<String> getValue({String defaultValue = ''}) async {
     try {
-      final result = await _invokeMonacoCommand('getValue', []);
+      final result = await _invoke('document.getText', {'uri': null});
       return result is String ? result : defaultValue;
     } catch (_) {
       // Documented fallback contract: reads with defaultValue never propagate
-      // bridge errors. Use [evaluateJavaScript] or [_invokeMonacoCommand]
-      // directly if strict failure visibility is required.
+      // bridge errors. Use [evaluateJavaScript] or a typed command if strict
+      // failure visibility is required.
       return defaultValue;
     }
   }
@@ -1189,45 +995,38 @@ class MonacoController {
         return; // A newer value was queued, skip this one
       }
     }
-    await _invokeMonacoCommand('setValue', [value]);
+    await _invoke('document.setText', {'uri': null, 'text': value});
   }
 
   /// Retrieves the current primary selection range.
   ///
   /// Returns `null` if no selection exists or the editor is not ready.
   Future<Range?> getSelection() async {
-    return _executeJavaScriptWithJson<Range>(
-      'JSON.stringify(flutterMonaco.getSelection())',
-      parser: Range.fromJson,
-    );
+    try {
+      final result = await _invoke('editor.getSelection', {});
+      return result is Map
+          ? Range.fromJson(Map<String, dynamic>.from(result))
+          : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Selects the specified [range] in the editor.
   Future<void> setSelection(Range range) async {
-    await _invokeMonacoCommand('setSelection', [range.toJson()]);
+    await _invoke('editor.setSelection', {'range': range.toJson()});
   }
 
   // --- NAVIGATION ---
 
   /// Reveal a line in the editor with validation
   Future<void> revealLine(int line, {bool center = false}) async {
-    await _ensureReady();
-    // Validate line number
-    final lineCount = await getLineCount();
-    if (lineCount < 1) return;
-    final int validLine = line.clamp(1, lineCount);
-
-    await _webViewController.runJavaScript(
-      'flutterMonaco.revealLine($validLine, $center)',
-    );
+    await revealRange(Range.lines(line, line), center: center);
   }
 
   /// Reveal a range in the editor
   Future<void> revealRange(Range range, {bool center = false}) async {
-    await _ensureReady();
-    await _webViewController.runJavaScript(
-      'flutterMonaco.revealRange(${jsonEncode(range.toJson())}, $center)',
-    );
+    await _invoke('editor.reveal', {'range': range.toJson(), 'center': center});
   }
 
   /// Reveal multiple lines in the editor
@@ -1251,7 +1050,7 @@ class MonacoController {
   /// Get the total line count with enhanced conversion
   Future<int> getLineCount({int defaultValue = 0}) async {
     try {
-      final result = await _invokeMonacoCommand('getLineCount', []);
+      final result = await _invoke('document.lineCount', {'uri': null});
       if (result is int) return result;
       if (result is num) return result.toInt();
       return defaultValue;
@@ -1262,13 +1061,20 @@ class MonacoController {
 
   /// Get the content of a specific line with validation
   Future<String> getLineContent(int line, {String defaultValue = ''}) async {
-    // Validate line number
+    // Validate line number (JS clamps, so an out-of-range request would
+    // otherwise return the nearest line instead of the documented default).
     final lineCount = await getLineCount();
     if (line < 1 || line > lineCount) return defaultValue;
 
     try {
-      final result = await _invokeMonacoCommand('getLineContent', [line]);
-      return result is String ? result : defaultValue;
+      final result = await _invoke('document.getLines', {
+        'uri': null,
+        'startLine': line,
+        'endLine': line,
+      });
+      return result is List && result.isNotEmpty
+          ? (result.first?.toString() ?? defaultValue)
+          : defaultValue;
     } catch (_) {
       return defaultValue;
     }
@@ -1289,8 +1095,16 @@ class MonacoController {
         continue;
       }
       try {
-        final result = await _invokeMonacoCommand('getLineContent', [line]);
-        results.add(result is String ? result : lineDefaultValue);
+        final result = await _invoke('document.getLines', {
+          'uri': null,
+          'startLine': line,
+          'endLine': line,
+        });
+        results.add(
+          result is List && result.isNotEmpty
+              ? (result.first?.toString() ?? lineDefaultValue)
+              : lineDefaultValue,
+        );
       } catch (_) {
         results.add(lineDefaultValue);
       }
@@ -1305,9 +1119,10 @@ class MonacoController {
   /// This is the most efficient way to make multiple changes at once.
   Future<void> applyEdits(List<EditOperation> edits) async {
     if (edits.isEmpty) return;
-    await _invokeMonacoCommand('applyEdits', [
-      edits.map((e) => e.toJson()).toList(),
-    ]);
+    await _invoke('document.applyEdits', {
+      'uri': null,
+      'edits': edits.map((e) => e.toJson()).toList(),
+    });
   }
 
   /// Inserts [text] at the specified [position].
@@ -1343,13 +1158,13 @@ class MonacoController {
   Future<List<String>> setDecorations(
     List<DecorationOptions> decorations,
   ) async {
-    final raw = await _invokeMonacoCommand('deltaDecorations', [
-      _decorationIds,
-      decorations.map((d) => d.toJson()).toList(),
-    ]);
+    final raw = await _invoke('decorations.delta', {
+      'previousIds': _decorationIds,
+      'decorations': decorations.map((d) => d.toJson()).toList(),
+    });
     if (raw is! List) {
       throw MonacoJavaScriptException(
-        operation: 'deltaDecorations',
+        operation: 'decorations.delta',
         message: 'Expected deltaDecorations to return a list of IDs.',
         details: raw,
       );
@@ -1413,10 +1228,11 @@ class MonacoController {
     List<MarkerData> markers, {
     String owner = 'flutter',
   }) async {
-    await _invokeMonacoCommand('setModelMarkers', [
-      owner,
-      markers.map((m) => m.toJson()).toList(),
-    ]);
+    await _invoke('document.setMarkers', {
+      'uri': null,
+      'owner': owner,
+      'markers': markers.map((m) => m.toJson()).toList(),
+    });
   }
 
   /// Convenience method to set error markers.
@@ -1457,19 +1273,23 @@ class MonacoController {
     FindOptions options = const FindOptions(),
     int limit = 1000,
   }) async {
-    // Don't use JSON.stringify - return array directly
-    final matches = await _executeJavaScript<List<dynamic>>(
-      'flutterMonaco.findMatches(${jsonEncode(query)}, ${jsonEncode(options.toJson())}, $limit)',
-      defaultValue: const [],
-    );
-
-    if (matches == null || matches.isEmpty) return [];
-
-    return matches
-        .map((match) => tryConvertToMap<String, dynamic>(match))
-        .where((map) => map != null)
-        .map((map) => FindMatch.fromJson(map!))
-        .toList();
+    try {
+      final matches = await _invoke('document.findMatches', {
+        'uri': null,
+        'query': query,
+        'isRegex': options.isRegex,
+        'matchCase': options.matchCase,
+        'wholeWord': options.wholeWord,
+        'limit': limit,
+      });
+      if (matches is! List || matches.isEmpty) return [];
+      return matches
+          .whereType<Map>()
+          .map((match) => FindMatch.fromJson(Map<String, dynamic>.from(match)))
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   /// Replace all matches in the document
@@ -1479,31 +1299,39 @@ class MonacoController {
     FindOptions options = const FindOptions(),
     int defaultCount = 0,
   }) async {
-    return await _executeJavaScript<int>(
-          'flutterMonaco.replaceMatches(${jsonEncode(query)}, ${jsonEncode(replacement)}, ${jsonEncode(options.toJson())})',
-          defaultValue: defaultCount,
-        ) ??
-        defaultCount;
+    try {
+      final result = await _invoke('document.replaceMatches', {
+        'uri': null,
+        'query': query,
+        'replacement': replacement,
+        'isRegex': options.isRegex,
+        'matchCase': options.matchCase,
+        'wholeWord': options.wholeWord,
+      });
+      if (result is int) return result;
+      if (result is num) return result.toInt();
+      return defaultCount;
+    } catch (_) {
+      return defaultCount;
+    }
   }
 
   // --- VIEW STATE ---
 
   /// Save the current view state with enhanced conversion
   Future<Map<String, dynamic>> saveViewState() async {
-    final result = await _executeJavaScriptWithJson<Map<String, dynamic>>(
-      'JSON.stringify(flutterMonaco.saveViewState())',
-    );
-    return result ?? {};
+    try {
+      final result = await _invoke('editor.captureViewState', {});
+      return result is Map ? Map<String, dynamic>.from(result) : {};
+    } catch (_) {
+      return {};
+    }
   }
 
   /// Restore a previously saved view state
   Future<void> restoreViewState(Map<String, dynamic> state) async {
     if (state.isEmpty) return;
-    await _ensureReady();
-
-    await _webViewController.runJavaScript(
-      'flutterMonaco.restoreViewState(${jsonEncode(state)})',
-    );
+    await _invoke('editor.restoreViewState', {'state': state});
   }
 
   // --- MULTI-MODEL ---
@@ -1515,99 +1343,85 @@ class MonacoController {
     Uri? uri,
     Uri? defaultUri,
   }) async {
-    final script =
-        '''
-      flutterMonaco.createModel(
-        ${jsonEncode(value)}, 
-        ${jsonEncode(language)}, 
-        ${uri != null ? jsonEncode(uri.toString()) : 'null'}
-      )
-    ''';
+    final result = await _invoke('docs.open', {
+      'text': value,
+      'language': language,
+      'uri': uri?.toString(),
+    });
 
-    final result = await _executeJavaScript<String>(script);
-
-    // Enhanced URI conversion with fallback
-    final createdUri = result != null ? tryConvertToUri(result) : null;
+    final createdUri = result is String ? Uri.tryParse(result) : null;
     if (createdUri != null) {
       return createdUri;
     }
     if (defaultUri != null) {
       return defaultUri;
     }
-    throw StateError('flutterMonaco.createModel returned invalid uri: $result');
+    throw StateError('docs.open returned invalid uri: $result');
   }
 
   /// Set the active model
   Future<void> setModel(Uri uri) async {
-    await _ensureReady();
-    await _webViewController.runJavaScript(
-      'flutterMonaco.setModel(${jsonEncode(uri.toString())})',
-    );
+    await _invoke('docs.activate', {'uri': uri.toString()});
   }
 
   /// Dispose a model
   Future<void> disposeModel(Uri uri) async {
-    await _ensureReady();
-    await _webViewController.runJavaScript(
-      'flutterMonaco.disposeModel(${jsonEncode(uri.toString())})',
-    );
+    await _invoke('docs.close', {'uri': uri.toString()});
   }
 
   /// List all models with enhanced conversion
   Future<List<Uri>> listModels() async {
-    // Don't use JSON.stringify - return array directly
-    final list = await _executeJavaScript<List<dynamic>>(
-      'flutterMonaco.listModels()',
-      defaultValue: const [],
-    );
-
-    if (list == null || list.isEmpty) return [];
-
-    // Convert each item to URI and filter out nulls
-    return list
-        .map(tryConvertToUri)
-        .where((uri) => uri != null)
-        .cast<Uri>()
-        .toList();
+    try {
+      final list = await _invoke('docs.list', {});
+      if (list is! List || list.isEmpty) return [];
+      return list
+          .map((e) => Uri.tryParse(e.toString()))
+          .whereType<Uri>()
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   // --- ADDITIONAL HELPER METHODS ---
 
-  /// Get editor statistics from bridge's live stream
+  /// Get editor statistics from the live stats stream
   LiveStats getStatistics() {
-    // Use the bridge's liveStats which is already updated via events
-    return _bridge.liveStats.value;
+    return _liveStats.value;
   }
 
   /// Check if the editor has unsaved changes
   Future<bool> hasUnsavedChanges() async {
-    return await _executeJavaScript<bool>(
-          'flutterMonaco.hasUnsavedChanges()',
-          defaultValue: false,
-        ) ??
-        false;
+    try {
+      final result = await _invoke('document.isDirty', {'uri': null});
+      return result == true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Mark the current content as saved (baseline for dirty tracking)
   Future<void> markSaved() async {
-    await _ensureReady();
-    await _webViewController.runJavaScript('flutterMonaco.markSaved()');
+    await _invoke('document.markSaved', {'uri': null});
   }
 
   /// Get cursor position with enhanced conversion
   Future<Position?> getCursorPosition() async {
-    return _executeJavaScriptWithJson<Position>(
-      'JSON.stringify(flutterMonaco.getCursorPosition())',
-      parser: Position.fromJson,
-    );
+    try {
+      final result = await _invoke('editor.getCursor', {});
+      return result is Map
+          ? Position.fromJson(Map<String, dynamic>.from(result))
+          : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Set cursor position
   Future<void> setCursorPosition(Position position) async {
-    await _invokeMonacoCommand('setCursorPosition', [
-      position.line,
-      position.column,
-    ]);
+    await _invoke('editor.setCursor', {
+      'position': {'lineNumber': position.line, 'column': position.column},
+    });
   }
 
   /// Set cursor position from zero-based coordinates
@@ -1618,10 +1432,15 @@ class MonacoController {
 
   /// Get word at position
   Future<String?> getWordAtPosition(Position position) async {
-    return _executeJavaScript<String>(
-      'flutterMonaco.getWordAtPosition(${position.line}, ${position.column})',
-      jsonAware: false, // Don't decode - this is plain text content
-    );
+    try {
+      final result = await _invoke('document.getWordAt', {
+        'uri': null,
+        'position': {'lineNumber': position.line, 'column': position.column},
+      });
+      return result is String ? result : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   // --- BATCH OPERATIONS ---
@@ -1718,7 +1537,8 @@ class MonacoController {
     required LspTransport transport,
     LspReconnectPolicy reconnectPolicy = const LspReconnectPolicy.none(),
     Duration initializationTimeout = const Duration(seconds: 30),
-  }) {
+  }) async {
+    await _ensureReady();
     return _lspManager.connect(
       id: id,
       transport: transport,
@@ -1793,7 +1613,7 @@ class MonacoController {
   /// This is the recommended way to read values from the editor's JavaScript
   /// context. It normalizes platform differences so numeric, boolean, string,
   /// list, map, and null values behave consistently across supported
-  /// platforms.
+  /// platforms (the expression rides the `page.eval` protocol command).
   ///
   /// [expression] must be a JavaScript expression. For multi-statement logic,
   /// pass an IIFE expression:
@@ -1831,16 +1651,18 @@ class MonacoController {
   /// ```
   Future<T?> evaluateJavaScript<T>(String expression, {T? defaultValue}) async {
     await _ensureReady();
-
-    final wrapped = _wrapJavaScriptEvaluationExpression(expression);
-    final raw = await _webViewController.runJavaScriptReturningResult(wrapped);
-    final decoded = _decodeJavaScriptEvaluationResult(raw);
-
-    if (decoded == _jsUndefined || decoded == null) {
+    final result = await _protocol.invoke('page.eval', {
+      'expression': expression,
+    });
+    if (identical(result, monacoJsUndefined) || result == null) {
       return defaultValue;
     }
-
-    return tryConvertToType<T>(decoded) ?? defaultValue;
+    if (result is T) return result as T;
+    // Number normalization: platforms and JSON round-trips blur int/double.
+    if (T == int && result is num) return result.toInt() as T;
+    if (T == double && result is num) return result.toDouble() as T;
+    if (T == String) return result.toString() as T;
+    return defaultValue;
   }
 
   /// Executes JavaScript and returns the platform-native result.
@@ -1875,12 +1697,14 @@ class MonacoController {
     // bridged-transport onClose callbacks (e.g. killing server processes)
     // and finalizes connection state streams.
     _lspManager.dispose();
+    _eventSubscription?.cancel();
     _onContentChanged.close();
     _onSelectionChanged.close();
     _onFocus.close();
     _onBlur.close();
     _onScrollHandoff.close();
-    _bridge.dispose();
+    _liveStats.dispose();
+    _protocol.dispose();
     _webViewController.dispose();
   }
 }
@@ -1897,8 +1721,4 @@ class _RegisteredCompletion {
   final List<String> languages;
   final List<String> triggerCharacters;
   final CompletionProvider provider;
-}
-
-class _JavaScriptUndefinedValue {
-  const _JavaScriptUndefinedValue();
 }

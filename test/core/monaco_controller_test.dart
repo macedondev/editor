@@ -1,40 +1,39 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
-import 'package:flutter_monaco/src/core/monaco_bridge.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../fakes/fake_platform_webview_controller.dart';
 
 class _TestBundle {
-  _TestBundle(this.controller, this.webview, this.bridge);
+  _TestBundle(this.controller, this.webview);
 
   final MonacoController controller;
   final FakePlatformWebViewController webview;
-  final MonacoBridge bridge;
 }
 
 Future<_TestBundle> _createBundle({bool ready = true}) async {
   final webview = FakePlatformWebViewController();
-  final bridge = MonacoBridge();
   final controller = await MonacoController.createForTesting(
     webViewController: webview,
-    bridge: bridge,
     markReady: ready,
   );
-  return _TestBundle(controller, webview, bridge);
+  return _TestBundle(controller, webview);
 }
 
-String _evaluationEnvelope({Object? value, bool isUndefined = false}) {
-  return jsonEncode({
-    '__flutterMonacoEval': true,
-    'isUndefined': isUndefined,
-    'value': value,
-  });
+/// All dispatched protocol calls whose dotted method equals [method].
+List<Map<String, Object?>> _dispatchesOf(
+  FakePlatformWebViewController webview,
+  String method,
+) {
+  return webview.dispatched.where((d) => d['method'] == method).toList();
+}
+
+/// The params map of a parsed dispatch call.
+Map<String, Object?> _paramsOf(Map<String, Object?> call) {
+  return (call['params']! as Map).cast<String, Object?>();
 }
 
 void main() {
@@ -92,21 +91,17 @@ void main() {
 
       test('execute helpers wait for ready on JS results', () async {
         final bundle = await _createBundle(ready: false);
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('findMatches')) {
-            return const <Map<String, dynamic>>[];
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess(
+          'document.findMatches',
+          value: <Map<String, dynamic>>[],
+        );
         final future = bundle.controller.findMatches('x');
         expect(bundle.webview.executed, isEmpty);
         bundle.controller.completeReadyForTesting();
         await future;
         expect(
-          bundle.webview.executed.any(
-            (script) => script.contains('findMatches'),
-          ),
-          true,
+          _dispatchesOf(bundle.webview, 'document.findMatches'),
+          isNotEmpty,
         );
       });
 
@@ -125,7 +120,7 @@ void main() {
         final joined = bundle.webview.executed.join('\n');
         expect(joined.contains('setTheme'), true);
         expect(joined.contains('setLanguage'), true);
-        expect(joined.contains('forceFocus'), true);
+        expect(joined.contains('focus.force'), true);
       });
 
       test(
@@ -164,7 +159,11 @@ void main() {
             () => bundle.controller.executeAction('whatever'),
             throwsA(
               isA<MonacoJavaScriptException>()
-                  .having((e) => e.operation, 'operation', 'executeAction')
+                  .having(
+                    (e) => e.operation,
+                    'operation',
+                    'editor.executeAction',
+                  )
                   .having((e) => e.message, 'message', 'broken action'),
             ),
           );
@@ -185,7 +184,7 @@ void main() {
         await bundle.controller.defineTheme(theme);
 
         final invocation = bundle.webview
-            .scriptsContaining('"defineTheme"')
+            .scriptsContaining('editor.defineTheme')
             .single;
         expect(invocation, contains('"app-dark"'));
         expect(invocation, contains('"vs-dark"'));
@@ -203,7 +202,7 @@ void main() {
         });
 
         final invocation = bundle.webview
-            .scriptsContaining('"defineTheme"')
+            .scriptsContaining('editor.defineTheme')
             .single;
         expect(invocation, contains('"raw-id"'));
         expect(invocation, contains('"editor.background"'));
@@ -228,14 +227,17 @@ void main() {
 
       test('getThemeId returns value from bridge', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getTheme', value: 'company-dark');
+        bundle.webview.injectCommandSuccess(
+          'editor.getTheme',
+          value: 'company-dark',
+        );
         expect(await bundle.controller.getThemeId(), 'company-dark');
       });
 
       test('getThemeId returns null when bridge call fails', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandFailure(
-          'getTheme',
+          'editor.getTheme',
           message: 'monaco.editor.getTheme is not a function',
         );
         expect(await bundle.controller.getThemeId(), isNull);
@@ -245,7 +247,7 @@ void main() {
         'getThemeId returns null when bridge reports empty string',
         () async {
           final bundle = await _createBundle();
-          bundle.webview.injectCommandSuccess('getTheme', value: '');
+          bundle.webview.injectCommandSuccess('editor.getTheme', value: '');
           expect(await bundle.controller.getThemeId(), isNull);
         },
       );
@@ -378,10 +380,9 @@ void main() {
         bundle.controller.completeReadyForTesting();
         await Future.wait([first, second]);
 
-        final invocations = bundle.webview.scriptsContaining('"setValue"');
+        final invocations = _dispatchesOf(bundle.webview, 'document.setText');
         expect(invocations.length, 1);
-        expect(invocations.first, contains('["B"]'));
-        expect(invocations.first, isNot(contains('["A"]')));
+        expect(_paramsOf(invocations.single)['text'], 'B');
       });
 
       test('queued setLanguage overwrites older value', () async {
@@ -391,32 +392,42 @@ void main() {
         bundle.controller.completeReadyForTesting();
         await Future.wait([first, second]);
 
-        final invocations = bundle.webview.scriptsContaining('"setLanguage"');
+        final invocations = _dispatchesOf(
+          bundle.webview,
+          'document.setLanguage',
+        );
         expect(invocations.length, 1);
-        expect(invocations.first, contains('"python"'));
-        expect(invocations.first, isNot(contains('"dart"')));
+        expect(_paramsOf(invocations.single)['language'], 'python');
       });
 
       test('setValue after ready executes immediately', () async {
         final bundle = await _createBundle();
         await bundle.controller.setValue('immediate');
-        final joined = bundle.webview.executed.join('\n');
-        expect(joined, contains('"setValue"'));
-        expect(joined, contains('"immediate"'));
+        final invocation = _dispatchesOf(
+          bundle.webview,
+          'document.setText',
+        ).single;
+        expect(_paramsOf(invocation)['text'], 'immediate');
       });
     });
 
     group('getValue', () {
       test('does not JSON-decode content', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getValue', value: '{"a":1}');
+        bundle.webview.injectCommandSuccess(
+          'document.getText',
+          value: '{"a":1}',
+        );
         final value = await bundle.controller.getValue();
         expect(value, '{"a":1}');
       });
 
       test('returns defaultValue on error', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandFailure('getValue', message: 'boom');
+        bundle.webview.injectCommandFailure(
+          'document.getText',
+          message: 'boom',
+        );
         final value = await bundle.controller.getValue(
           defaultValue: 'fallback',
         );
@@ -425,7 +436,7 @@ void main() {
 
       test('handles null result', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getValue', value: null);
+        bundle.webview.injectCommandSuccess('document.getText', value: null);
         final value = await bundle.controller.getValue(defaultValue: 'default');
         expect(value, 'default');
       });
@@ -433,18 +444,23 @@ void main() {
       test('handles unicode content', () async {
         final bundle = await _createBundle();
         const unicode = 'مرحبا 👋🏽 é 🇪🇬';
-        bundle.webview.injectCommandSuccess('getValue', value: unicode);
+        bundle.webview.injectCommandSuccess('document.getText', value: unicode);
         final value = await bundle.controller.getValue();
         expect(value, unicode);
       });
     });
 
     group('selection operations', () {
-      test('getSelection parses JSON', () async {
+      test('getSelection parses the response map', () async {
         final bundle = await _createBundle();
-        bundle.webview.enqueueResult(
-          'JSON.stringify(flutterMonaco.getSelection())',
-          '{"startLineNumber":1,"startColumn":2,"endLineNumber":3,"endColumn":4}',
+        bundle.webview.injectCommandSuccess(
+          'editor.getSelection',
+          value: {
+            'startLineNumber': 1,
+            'startColumn': 2,
+            'endLineNumber': 3,
+            'endColumn': 4,
+          },
         );
         final selection = await bundle.controller.getSelection();
         expect(selection, isNotNull);
@@ -477,35 +493,27 @@ void main() {
     });
 
     group('navigation', () {
-      test('revealLine clamps to valid range', () async {
-        final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getLineCount', value: 10);
-        await bundle.controller.revealLine(0);
-        bundle.webview.injectCommandSuccess('getLineCount', value: 10);
-        await bundle.controller.revealLine(999);
+      test(
+        'revealLine dispatches a line range (clamping is JS-side)',
+        () async {
+          final bundle = await _createBundle();
+          await bundle.controller.revealLine(5);
 
-        final joined = bundle.webview.executed.join('\n');
-        expect(joined, contains('flutterMonaco.revealLine(1, false)'));
-        expect(joined, contains('flutterMonaco.revealLine(10, false)'));
-      });
-
-      test('revealLine is a no-op when lineCount is zero', () async {
-        final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getLineCount', value: 0);
-        await bundle.controller.revealLine(1);
-
-        final joined = bundle.webview.executed.join('\n');
-        expect(joined.contains('flutterMonaco.revealLine('), false);
-      });
+          final call = _dispatchesOf(bundle.webview, 'editor.reveal').single;
+          final params = _paramsOf(call);
+          expect(params['center'], false);
+          final range = (params['range']! as Map).cast<String, Object?>();
+          expect(range['startLineNumber'], 5);
+          expect(range['endLineNumber'], 5);
+        },
+      );
 
       test('revealLine with center option', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getLineCount', value: 10);
         await bundle.controller.revealLine(5, center: true);
-        expect(
-          bundle.webview.executed.join('\n'),
-          contains('flutterMonaco.revealLine(5, true)'),
-        );
+
+        final call = _dispatchesOf(bundle.webview, 'editor.reveal').single;
+        expect(_paramsOf(call)['center'], true);
       });
 
       test('revealRange generates correct payload', () async {
@@ -517,22 +525,39 @@ void main() {
           endColumn: 10,
         );
         await bundle.controller.revealRange(range, center: true);
-        final joined = bundle.webview.executed.join('\n');
-        expect(joined, contains('revealRange'));
-        expect(joined, contains('true')); // center param
+
+        final call = _dispatchesOf(bundle.webview, 'editor.reveal').single;
+        final params = _paramsOf(call);
+        expect(params['center'], true);
+        final sent = (params['range']! as Map).cast<String, Object?>();
+        expect(sent['startLineNumber'], 1);
+        expect(sent['endLineNumber'], 5);
+        expect(sent['endColumn'], 10);
       });
 
-      test('revealLines creates range and calls revealRange', () async {
+      test('revealLines creates range and dispatches editor.reveal', () async {
         final bundle = await _createBundle();
         await bundle.controller.revealLines(2, 5);
-        expect(bundle.webview.executed.join('\n'), contains('revealRange'));
+
+        final call = _dispatchesOf(bundle.webview, 'editor.reveal').single;
+        final range = (_paramsOf(call)['range']! as Map)
+            .cast<String, Object?>();
+        expect(range['startLineNumber'], 2);
+        expect(range['endLineNumber'], 5);
       });
 
       test('revealPosition creates collapsed range', () async {
         final bundle = await _createBundle();
         const pos = Position(line: 3, column: 7);
         await bundle.controller.revealPosition(pos);
-        expect(bundle.webview.executed.join('\n'), contains('revealRange'));
+
+        final call = _dispatchesOf(bundle.webview, 'editor.reveal').single;
+        final range = (_paramsOf(call)['range']! as Map)
+            .cast<String, Object?>();
+        expect(range['startLineNumber'], 3);
+        expect(range['startColumn'], 7);
+        expect(range['endLineNumber'], 3);
+        expect(range['endColumn'], 7);
       });
     });
 
@@ -550,35 +575,35 @@ void main() {
     group('line operations', () {
       test('getLineCount returns valid count', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getLineCount', value: 42);
+        bundle.webview.injectCommandSuccess('document.lineCount', value: 42);
         final count = await bundle.controller.getLineCount();
         expect(count, 42);
       });
 
       test('getLineCount returns default on error', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandFailure('getLineCount', message: 'boom');
+        bundle.webview.injectCommandFailure(
+          'document.lineCount',
+          message: 'boom',
+        );
         final count = await bundle.controller.getLineCount(defaultValue: 0);
         expect(count, 0);
       });
 
       test('getLineContent validates bounds - below', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getLineCount', value: 3);
+        bundle.webview.injectCommandSuccess('document.lineCount', value: 3);
         final value = await bundle.controller.getLineContent(
           0,
           defaultValue: 'x',
         );
         expect(value, 'x');
-        expect(
-          bundle.webview.executed.any((s) => s.contains('"getLineContent"')),
-          false,
-        );
+        expect(_dispatchesOf(bundle.webview, 'document.getLines'), isEmpty);
       });
 
       test('getLineContent validates bounds - above', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getLineCount', value: 3);
+        bundle.webview.injectCommandSuccess('document.lineCount', value: 3);
         final value = await bundle.controller.getLineContent(
           10,
           defaultValue: 'y',
@@ -588,18 +613,21 @@ void main() {
 
       test('getLineContent returns content for valid line', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getLineCount', value: 5);
-        bundle.webview.injectCommandSuccess('getLineContent', value: 'line 3');
+        bundle.webview.injectCommandSuccess('document.lineCount', value: 5);
+        bundle.webview.injectCommandSuccess(
+          'document.getLines',
+          value: ['line 3'],
+        );
         final value = await bundle.controller.getLineContent(3);
         expect(value, 'line 3');
       });
 
       test('getLinesContent returns values per line', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('getLineCount', value: 3);
-        bundle.webview.injectCommandSuccess('getLineContent', value: 'a');
-        bundle.webview.injectCommandSuccess('getLineContent', value: 'b');
-        bundle.webview.injectCommandSuccess('getLineContent', value: 'c');
+        bundle.webview.injectCommandSuccess('document.lineCount', value: 3);
+        bundle.webview.injectCommandSuccess('document.getLines', value: ['a']);
+        bundle.webview.injectCommandSuccess('document.getLines', value: ['b']);
+        bundle.webview.injectCommandSuccess('document.getLines', value: ['c']);
 
         final lines = await bundle.controller.getLinesContent([1, 2, 3]);
         expect(lines, ['a', 'b', 'c']);
@@ -686,10 +714,10 @@ void main() {
       test('setDecorations tracks ids across calls', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandSuccess(
-          'deltaDecorations',
+          'decorations.delta',
           value: ['a', 'b'],
         );
-        bundle.webview.injectCommandSuccess('deltaDecorations', value: ['c']);
+        bundle.webview.injectCommandSuccess('decorations.delta', value: ['c']);
 
         final first = await bundle.controller.setDecorations([
           DecorationOptions.inlineClass(
@@ -713,12 +741,12 @@ void main() {
 
       test('setDecorations throws on malformed bridge result', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('deltaDecorations', value: ['a']);
+        bundle.webview.injectCommandSuccess('decorations.delta', value: ['a']);
         bundle.webview.injectCommandSuccess(
-          'deltaDecorations',
+          'decorations.delta',
           value: 'not-a-list',
         );
-        bundle.webview.injectCommandSuccess('deltaDecorations', value: ['b']);
+        bundle.webview.injectCommandSuccess('decorations.delta', value: ['b']);
 
         final first = await bundle.controller.setDecorations([
           DecorationOptions.inlineClass(
@@ -739,7 +767,7 @@ void main() {
             isA<MonacoJavaScriptException>().having(
               (e) => e.operation,
               'operation',
-              'deltaDecorations',
+              'decorations.delta',
             ),
           ),
         );
@@ -750,7 +778,7 @@ void main() {
 
       test('addInlineDecorations creates correct options', () async {
         final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('deltaDecorations', value: ['d1']);
+        bundle.webview.injectCommandSuccess('decorations.delta', value: ['d1']);
 
         final ids = await bundle.controller.addInlineDecorations(
           [const Range(startLine: 1, startColumn: 1, endLine: 1, endColumn: 5)],
@@ -764,7 +792,7 @@ void main() {
       test('addLineDecorations creates whole line decorations', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandSuccess(
-          'deltaDecorations',
+          'decorations.delta',
           value: ['l1', 'l2'],
         );
 
@@ -779,14 +807,14 @@ void main() {
       test('clearDecorations passes empty array', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandSuccess(
-          'deltaDecorations',
+          'decorations.delta',
           value: <String>[],
         );
 
         await bundle.controller.clearDecorations();
         expect(
           bundle.webview.executed.join('\n'),
-          contains('"deltaDecorations"'),
+          contains('decorations.delta'),
         );
       });
     });
@@ -807,7 +835,7 @@ void main() {
         ], owner: 'flutter-errors');
 
         final joined = bundle.webview.executed.join('\n');
-        expect(joined, contains('setModelMarkers'));
+        expect(joined, contains('document.setMarkers'));
         expect(joined, contains('flutter-errors'));
         expect(joined, contains('"severity":8')); // Error severity
       });
@@ -861,9 +889,9 @@ void main() {
     group('find and replace', () {
       test('findMatches returns FindMatch list', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (!script.contains('findMatches')) return null;
-          return [
+        bundle.webview.injectCommandSuccess(
+          'document.findMatches',
+          value: [
             {
               'match': 'abc',
               'range': {
@@ -882,8 +910,8 @@ void main() {
                 'endColumn': 8,
               },
             },
-          ];
-        };
+          ],
+        );
 
         final matches = await bundle.controller.findMatches('abc');
         expect(matches.length, 2);
@@ -894,7 +922,10 @@ void main() {
 
       test('findMatches with options', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (_) => <Map<String, dynamic>>[];
+        bundle.webview.injectCommandSuccess(
+          'document.findMatches',
+          value: <Map<String, dynamic>>[],
+        );
 
         await bundle.controller.findMatches(
           'test',
@@ -902,11 +933,15 @@ void main() {
           limit: 50,
         );
 
-        final joined = bundle.webview.executed.join('\n');
-        expect(joined, contains('findMatches'));
-        expect(joined, contains('"matchCase":true'));
-        expect(joined, contains('"wholeWord":true'));
-        expect(joined, contains('50'));
+        final call = _dispatchesOf(
+          bundle.webview,
+          'document.findMatches',
+        ).single;
+        final params = _paramsOf(call);
+        expect(params['query'], 'test');
+        expect(params['matchCase'], true);
+        expect(params['wholeWord'], true);
+        expect(params['limit'], 50);
       });
 
       test('findMatches returns empty list on error', () async {
@@ -918,14 +953,10 @@ void main() {
 
       test('replaceMatches returns count', () async {
         final bundle = await _createBundle();
-        bundle.webview.enqueueResult(
-          'flutterMonaco.replaceMatches("old", "new", {})',
-          5,
+        bundle.webview.injectCommandSuccess(
+          'document.replaceMatches',
+          value: 5,
         );
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('replaceMatches')) return 5;
-          return null;
-        };
 
         final count = await bundle.controller.replaceMatches('old', 'new');
         expect(count, 5);
@@ -946,9 +977,14 @@ void main() {
     group('view state', () {
       test('saveViewState returns state map', () async {
         final bundle = await _createBundle();
-        bundle.webview.enqueueResult(
-          'JSON.stringify(flutterMonaco.saveViewState())',
-          '{"cursorState":[{"inSelectionMode":false}],"scrollTop":100}',
+        bundle.webview.injectCommandSuccess(
+          'editor.captureViewState',
+          value: {
+            'cursorState': [
+              {'inSelectionMode': false},
+            ],
+            'scrollTop': 100,
+          },
         );
 
         final state = await bundle.controller.saveViewState();
@@ -958,7 +994,7 @@ void main() {
 
       test('saveViewState returns empty map on error', () async {
         final bundle = await _createBundle();
-        bundle.webview.throwOn((s) => s.contains('saveViewState'));
+        bundle.webview.throwOn((s) => s.contains('captureViewState'));
         final state = await bundle.controller.saveViewState();
         expect(state, isEmpty);
       });
@@ -983,18 +1019,18 @@ void main() {
     group('multi-model', () {
       test('createModel returns URI', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('createModel')) return 'file:///model1';
-          return null;
-        };
+        bundle.webview.injectCommandSuccess(
+          'docs.open',
+          value: 'file:///model1',
+        );
 
         final uri = await bundle.controller.createModel('content');
         expect(uri.toString(), 'file:///model1');
       });
 
-      test('createModel uses defaultUri on null result', () async {
+      test('createModel uses defaultUri on undefined result', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (_) => null;
+        // Default auto-response is an undefined-success envelope.
 
         final fallback = Uri.parse('file:///fallback');
         final uri = await bundle.controller.createModel(
@@ -1007,23 +1043,23 @@ void main() {
       test('setModel calls JS with URI', () async {
         final bundle = await _createBundle();
         await bundle.controller.setModel(Uri.parse('file:///test'));
-        expect(bundle.webview.executed.join('\n'), contains('setModel'));
+        final call = _dispatchesOf(bundle.webview, 'docs.activate').single;
+        expect(_paramsOf(call)['uri'], 'file:///test');
       });
 
       test('disposeModel calls JS with URI', () async {
         final bundle = await _createBundle();
         await bundle.controller.disposeModel(Uri.parse('file:///test'));
-        expect(bundle.webview.executed.join('\n'), contains('disposeModel'));
+        final call = _dispatchesOf(bundle.webview, 'docs.close').single;
+        expect(_paramsOf(call)['uri'], 'file:///test');
       });
 
       test('listModels returns URI list', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('listModels')) {
-            return ['file:///m1', 'file:///m2', 'invalid'];
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess(
+          'docs.list',
+          value: ['file:///m1', 'file:///m2', 'invalid'],
+        );
 
         final list = await bundle.controller.listModels();
         expect(list.length, 3);
@@ -1034,7 +1070,7 @@ void main() {
     group('dirty tracking and cursor', () {
       test('hasUnsavedChanges returns boolean', () async {
         final bundle = await _createBundle();
-        bundle.webview.enqueueResult('flutterMonaco.hasUnsavedChanges()', true);
+        bundle.webview.injectCommandSuccess('document.isDirty', value: true);
         final dirty = await bundle.controller.hasUnsavedChanges();
         expect(dirty, true);
       });
@@ -1045,11 +1081,11 @@ void main() {
         expect(bundle.webview.executed.join('\n'), contains('markSaved'));
       });
 
-      test('getCursorPosition parses JSON', () async {
+      test('getCursorPosition parses the response map', () async {
         final bundle = await _createBundle();
-        bundle.webview.enqueueResult(
-          'JSON.stringify(flutterMonaco.getCursorPosition())',
-          '{"lineNumber":5,"column":10}',
+        bundle.webview.injectCommandSuccess(
+          'editor.getCursor',
+          value: {'lineNumber': 5, 'column': 10},
         );
 
         final pos = await bundle.controller.getCursorPosition();
@@ -1063,26 +1099,28 @@ void main() {
         await bundle.controller.setCursorPosition(
           const Position(line: 3, column: 7),
         );
-        final invocation = bundle.webview
-            .scriptsContaining('"setCursorPosition"')
-            .single;
-        expect(invocation, contains('[3,7]'));
+        final call = _dispatchesOf(bundle.webview, 'editor.setCursor').single;
+        final position = (_paramsOf(call)['position']! as Map)
+            .cast<String, Object?>();
+        expect(position['lineNumber'], 3);
+        expect(position['column'], 7);
       });
 
       test('setCursorPositionZeroBased converts to 1-based', () async {
         final bundle = await _createBundle();
         await bundle.controller.setCursorPositionZeroBased(0, 0);
-        final invocation = bundle.webview
-            .scriptsContaining('"setCursorPosition"')
-            .single;
-        expect(invocation, contains('[1,1]'));
+        final call = _dispatchesOf(bundle.webview, 'editor.setCursor').single;
+        final position = (_paramsOf(call)['position']! as Map)
+            .cast<String, Object?>();
+        expect(position['lineNumber'], 1);
+        expect(position['column'], 1);
       });
 
       test('getWordAtPosition returns word', () async {
         final bundle = await _createBundle();
-        bundle.webview.enqueueResult(
-          'flutterMonaco.getWordAtPosition(1, 1)',
-          'hello',
+        bundle.webview.injectCommandSuccess(
+          'document.getWordAt',
+          value: 'hello',
         );
         final word = await bundle.controller.getWordAtPosition(
           const Position(line: 1, column: 1),
@@ -1141,10 +1179,10 @@ void main() {
     });
 
     group('focus and scroll', () {
-      test('focus calls forceFocus', () async {
+      test('focus dispatches focus.force', () async {
         final bundle = await _createBundle();
         await bundle.controller.focus();
-        expect(bundle.webview.executed.join('\n'), contains('forceFocus'));
+        expect(bundle.webview.executed.join('\n'), contains('focus.force'));
       });
 
       test('ensureEditorFocus retries multiple times on desktop', () async {
@@ -1155,10 +1193,7 @@ void main() {
             attempts: 3,
             interval: Duration.zero,
           );
-          final count = bundle.webview.executed
-              .where((s) => s.contains('forceFocus'))
-              .length;
-          expect(count, 3);
+          expect(_dispatchesOf(bundle.webview, 'focus.force').length, 3);
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -1177,10 +1212,9 @@ void main() {
             interval: Duration.zero,
             intent: MonacoFocusIntent.user,
           );
-          expect(
-            bundle.webview.executed.join('\n'),
-            contains('forceFocus({ replayInputFocus: true })'),
-          );
+          final calls = _dispatchesOf(bundle.webview, 'focus.force');
+          expect(calls, hasLength(1));
+          expect(_paramsOf(calls.single)['replayInputFocus'], true);
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -1202,12 +1236,14 @@ void main() {
                 interval: Duration.zero,
                 intent: MonacoFocusIntent.user,
               );
-              final joined = bundle.webview.executed.join('\n');
-              expect(joined, contains('REQUEST_NATIVE_FOCUS'));
-              expect(joined, contains('forceFocus()'));
+              expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
+              final calls = _dispatchesOf(bundle.webview, 'focus.force');
+              expect(calls, isNotEmpty);
               // First responder is real, so the caret-blinking blur/refocus
               // replay must not run for either handoff outcome.
-              expect(joined, isNot(contains('replayInputFocus')));
+              for (final call in calls) {
+                expect(_paramsOf(call)['replayInputFocus'], false);
+              }
             }
           } finally {
             debugDefaultTargetPlatformOverride = null;
@@ -1227,15 +1263,12 @@ void main() {
               interval: Duration.zero,
               intent: MonacoFocusIntent.user,
             );
-            final replays = bundle.webview.executed
-                .where((s) => s.contains('replayInputFocus'))
+            final calls = _dispatchesOf(bundle.webview, 'focus.force');
+            final replays = calls
+                .where((c) => _paramsOf(c)['replayInputFocus'] == true)
                 .length;
-            final plainFocuses = bundle.webview.executed
-                .where(
-                  (s) =>
-                      s.contains('forceFocus()') &&
-                      !s.contains('replayInputFocus'),
-                )
+            final plainFocuses = calls
+                .where((c) => _paramsOf(c)['replayInputFocus'] == false)
                 .length;
             // One recovery replay, then idempotent settle retries: repeating
             // the blur/refocus cycle would multiply the caret blink.
@@ -1270,9 +1303,11 @@ void main() {
             attempts: 1,
             interval: Duration.zero,
           );
-          final joined = bundle.webview.executed.join('\n');
-          expect(joined, contains('forceFocus()'));
-          expect(joined, isNot(contains('replayInputFocus')));
+          final calls = _dispatchesOf(bundle.webview, 'focus.force');
+          expect(calls, isNotEmpty);
+          for (final call in calls) {
+            expect(_paramsOf(call)['replayInputFocus'], false);
+          }
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -1286,10 +1321,7 @@ void main() {
             attempts: 3,
             interval: Duration.zero,
           );
-          final count = bundle.webview.executed
-              .where((s) => s.contains('forceFocus'))
-              .length;
-          expect(count, 1);
+          expect(_dispatchesOf(bundle.webview, 'focus.force').length, 1);
         } finally {
           debugDefaultTargetPlatformOverride = null;
         }
@@ -1339,7 +1371,7 @@ void main() {
             ),
           );
           expect(
-            bundle.webview.executed.where((s) => s.contains('forceFocus')),
+            bundle.webview.executed.where((s) => s.contains('focus.force')),
             isEmpty,
           );
           expect(
@@ -1356,7 +1388,7 @@ void main() {
           await tester.pump();
           await tester.runAsync(() => bundle.controller.focus());
           expect(bundle.webview.executed, contains('REQUEST_NATIVE_FOCUS'));
-          expect(bundle.webview.executed.join('\n'), contains('forceFocus'));
+          expect(bundle.webview.executed.join('\n'), contains('focus.force'));
         },
       );
 
@@ -1419,12 +1451,12 @@ void main() {
             final calls = bundle.webview.executed;
             expect(calls, contains('TEXT_INPUT:TextInput.hide'));
             expect(calls, contains('REQUEST_NATIVE_FOCUS'));
-            expect(calls.join('\n'), contains('forceFocus'));
+            expect(calls.join('\n'), contains('focus.force'));
 
             final textInputIndex = calls.indexOf('TEXT_INPUT:TextInput.hide');
             final nativeFocusIndex = calls.indexOf('REQUEST_NATIVE_FOCUS');
             final forceFocusIndex = calls.indexWhere(
-              (call) => call.contains('forceFocus'),
+              (call) => call.contains('focus.force'),
             );
             expect(textInputIndex, isNonNegative);
             expect(nativeFocusIndex, isNonNegative);
@@ -1443,21 +1475,24 @@ void main() {
         expect(bundle.webview.executed.join('\n'), contains('layout'));
       });
 
-      test('scrollToTop sets scroll position', () async {
+      test('scrollToTop scrolls to the top edge', () async {
         final bundle = await _createBundle();
         await bundle.controller.scrollToTop();
-        final joined = bundle.webview.executed.join('\n');
-        expect(joined, contains('setScrollPosition'));
-        expect(joined, contains('scrollTop: 0'));
+        final call = _dispatchesOf(
+          bundle.webview,
+          'editor.scrollToEdge',
+        ).single;
+        expect(_paramsOf(call)['edge'], 'top');
       });
 
-      test('scrollToBottom reveals last line', () async {
+      test('scrollToBottom scrolls to the bottom edge', () async {
         final bundle = await _createBundle();
         await bundle.controller.scrollToBottom();
-        expect(
-          bundle.webview.executed.join('\n'),
-          contains('revealLineInCenterIfOutsideViewport'),
-        );
+        final call = _dispatchesOf(
+          bundle.webview,
+          'editor.scrollToEdge',
+        ).single;
+        expect(_paramsOf(call)['edge'], 'bottom');
       });
     });
 
@@ -1483,21 +1518,26 @@ void main() {
       test('getEditorState aggregates state', () async {
         final bundle = await _createBundle();
 
-        // Set up responses for the new envelope-based reads.
-        bundle.webview.injectCommandSuccess('getValue', value: 'content');
-        bundle.webview.injectCommandSuccess('getLineCount', value: 5);
-        bundle.webview.enqueueResult(
-          'JSON.stringify(flutterMonaco.getSelection())',
-          '{"startLineNumber":1,"startColumn":1,"endLineNumber":1,"endColumn":5}',
+        // Set up responses for the protocol-envelope reads.
+        bundle.webview.injectCommandSuccess(
+          'document.getText',
+          value: 'content',
         );
-        bundle.webview.enqueueResult(
-          'JSON.stringify(flutterMonaco.getCursorPosition())',
-          '{"lineNumber":1,"column":3}',
+        bundle.webview.injectCommandSuccess('document.lineCount', value: 5);
+        bundle.webview.injectCommandSuccess(
+          'editor.getSelection',
+          value: {
+            'startLineNumber': 1,
+            'startColumn': 1,
+            'endLineNumber': 1,
+            'endColumn': 5,
+          },
         );
-        bundle.webview.enqueueResult(
-          'flutterMonaco.hasUnsavedChanges()',
-          false,
+        bundle.webview.injectCommandSuccess(
+          'editor.getCursor',
+          value: {'lineNumber': 1, 'column': 3},
         );
+        bundle.webview.injectCommandSuccess('document.isDirty', value: false);
 
         final state = await bundle.controller.getEditorState();
 
@@ -1515,14 +1555,8 @@ void main() {
         final events = <bool>[];
         final sub = bundle.controller.onContentChanged.listen(events.add);
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":true}',
-        );
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"contentChanged","isFlush":false}',
-        );
+        bundle.webview.emitEvent('contentChanged', {'isFlush': true});
+        bundle.webview.emitEvent('contentChanged', {'isFlush': false});
 
         await pumpEventQueue();
         expect(events, [true, false]);
@@ -1534,10 +1568,14 @@ void main() {
         final events = <Range?>[];
         final sub = bundle.controller.onSelectionChanged.listen(events.add);
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"selectionChanged","selection":{"startLineNumber":1,"startColumn":1,"endLineNumber":2,"endColumn":3}}',
-        );
+        bundle.webview.emitEvent('selectionChanged', {
+          'selection': {
+            'startLineNumber': 1,
+            'startColumn': 1,
+            'endLineNumber': 2,
+            'endColumn': 3,
+          },
+        });
 
         await pumpEventQueue();
         expect(events.length, 1);
@@ -1545,7 +1583,7 @@ void main() {
         await sub.cancel();
       });
 
-      test('onFocus/onBlur deliver events', () async {
+      test('onFocus/onBlur deliver focusChanged events', () async {
         final bundle = await _createBundle();
         var focusCount = 0;
         var blurCount = 0;
@@ -1554,8 +1592,8 @@ void main() {
           bundle.controller.onBlur.listen((_) => blurCount++),
         ];
 
-        bundle.webview.emitToChannel('flutterChannel', '{"event":"focus"}');
-        bundle.webview.emitToChannel('flutterChannel', '{"event":"blur"}');
+        bundle.webview.emitEvent('focusChanged', {'focused': true});
+        bundle.webview.emitEvent('focusChanged', {'focused': false});
 
         await pumpEventQueue();
         expect(focusCount, 1);
@@ -1571,10 +1609,7 @@ void main() {
       test('returns current liveStats value', () async {
         final bundle = await _createBundle();
 
-        bundle.webview.emitToChannel(
-          'flutterChannel',
-          '{"event":"stats","lineCount":10,"charCount":50}',
-        );
+        bundle.webview.emitEvent('stats', {'lineCount': 10, 'charCount': 50});
         await pumpEventQueue();
 
         final stats = bundle.controller.getStatistics();
@@ -1592,7 +1627,7 @@ void main() {
         expect(bundle.webview.executed, isEmpty);
         bundle.controller.completeReadyForTesting();
         await future;
-        expect(bundle.webview.hasExecuted('setJsonDiagnosticsOptions'), true);
+        expect(bundle.webview.hasExecuted('json.configureDiagnostics'), true);
       });
 
       test('generates correct JS payload', () async {
@@ -1613,7 +1648,7 @@ void main() {
         );
 
         final joined = bundle.webview.executed.join('\n');
-        expect(joined, contains('setJsonDiagnosticsOptions'));
+        expect(joined, contains('json.configureDiagnostics'));
         expect(joined, contains('"validate":true'));
         expect(joined, contains('"allowComments":true'));
         expect(joined, contains('"schemaValidation":"error"'));
@@ -1625,7 +1660,7 @@ void main() {
       test('propagates JavaScript errors', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandFailure(
-          'setJsonDiagnosticsOptions',
+          'json.configureDiagnostics',
           message: 'json diagnostics failed',
         );
 
@@ -1638,7 +1673,7 @@ void main() {
                 .having(
                   (e) => e.operation,
                   'operation',
-                  'setJsonDiagnosticsOptions',
+                  'json.configureDiagnostics',
                 )
                 .having((e) => e.message, 'message', 'json diagnostics failed'),
           ),
@@ -1680,50 +1715,24 @@ void main() {
     });
 
     group('evaluateJavaScript', () {
-      test('wraps expression in the evaluation envelope', () async {
+      test('sends the expression through page.eval', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(value: 42);
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval', value: 42);
 
         await bundle.controller.evaluateJavaScript<int>(
           'monaco.editor.getEditors().length',
         );
 
-        final executed = bundle.webview.executed.last;
-        expect(executed, contains('__flutterMonacoEval'));
-        expect(executed, contains('JSON.stringify'));
-        expect(executed, contains('monaco.editor.getEditors().length'));
+        final call = _dispatchesOf(bundle.webview, 'page.eval').single;
+        expect(
+          _paramsOf(call)['expression'],
+          'monaco.editor.getEditors().length',
+        );
       });
 
       test('normalizes numeric result to int', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(value: 42);
-          }
-          return null;
-        };
-
-        final result = await bundle.controller.evaluateJavaScript<int>(
-          'myQuery()',
-        );
-
-        expect(result, 42);
-        expect(result, isA<int>());
-      });
-
-      test('normalizes double-encoded numeric result to int', () async {
-        final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return jsonEncode(_evaluationEnvelope(value: 42));
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval', value: 42);
 
         final result = await bundle.controller.evaluateJavaScript<int>(
           'myQuery()',
@@ -1735,12 +1744,7 @@ void main() {
 
       test('normalizes boolean result to bool', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(value: true);
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval', value: true);
 
         final result = await bundle.controller.evaluateJavaScript<bool>(
           'someFlag',
@@ -1752,12 +1756,7 @@ void main() {
 
       test('preserves string result', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(value: 'hello');
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval', value: 'hello');
 
         final result = await bundle.controller.evaluateJavaScript<String>(
           '"hello"',
@@ -1770,12 +1769,7 @@ void main() {
         'preserves numeric-looking string result when T is String',
         () async {
           final bundle = await _createBundle();
-          bundle.webview.resultResolver = (script) {
-            if (script.contains('__flutterMonacoEval')) {
-              return _evaluationEnvelope(value: '42');
-            }
-            return null;
-          };
+          bundle.webview.injectCommandSuccess('page.eval', value: '42');
 
           final result = await bundle.controller.evaluateJavaScript<String>(
             '"42"',
@@ -1788,12 +1782,7 @@ void main() {
 
       test('returns maps', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(value: {'count': 2});
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval', value: {'count': 2});
 
         final result = await bundle.controller
             .evaluateJavaScript<Map<String, dynamic>>('({ count: 2 })');
@@ -1803,12 +1792,7 @@ void main() {
 
       test('returns lists', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(value: [1, 2, 3]);
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval', value: [1, 2, 3]);
 
         final result = await bundle.controller
             .evaluateJavaScript<List<dynamic>>('[1, 2, 3]');
@@ -1818,12 +1802,7 @@ void main() {
 
       test('returns defaultValue when JavaScript returns null', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope();
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval');
 
         final result = await bundle.controller.evaluateJavaScript<int>(
           'missingThing',
@@ -1835,12 +1814,7 @@ void main() {
 
       test('returns defaultValue when JavaScript returns undefined', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(isUndefined: true);
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval', isUndefined: true);
 
         final result = await bundle.controller.evaluateJavaScript<int>(
           'missingThing',
@@ -1852,12 +1826,7 @@ void main() {
 
       test('returns defaultValue when value cannot convert to T', () async {
         final bundle = await _createBundle();
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(value: {'count': 2});
-          }
-          return null;
-        };
+        bundle.webview.injectCommandSuccess('page.eval', value: {'count': 2});
 
         final result = await bundle.controller.evaluateJavaScript<int>(
           '({ count: 2 })',
@@ -1869,27 +1838,28 @@ void main() {
 
       test('waits for ready before executing', () async {
         final bundle = await _createBundle(ready: false);
+        bundle.webview.injectCommandSuccess('page.eval', value: 7);
         final future = bundle.controller.evaluateJavaScript<int>('myQuery()');
         expect(bundle.webview.executed, isEmpty);
-        bundle.webview.resultResolver = (script) {
-          if (script.contains('__flutterMonacoEval')) {
-            return _evaluationEnvelope(value: 7);
-          }
-          return null;
-        };
         bundle.controller.completeReadyForTesting();
         final result = await future;
         expect(result, 7);
         expect(bundle.webview.executed.any((s) => s.contains('myQuery')), true);
       });
 
-      test('propagates platform exceptions', () async {
+      test('propagates dispatch failures', () async {
         final bundle = await _createBundle();
         bundle.webview.throwOnContains('badExpression');
 
         await expectLater(
           bundle.controller.evaluateJavaScript<int>('badExpression()'),
-          throwsStateError,
+          throwsA(
+            isA<MonacoJavaScriptException>().having(
+              (e) => e.operation,
+              'operation',
+              'page.eval',
+            ),
+          ),
         );
       });
     });
