@@ -87,6 +87,7 @@ class MonacoEditor extends StatefulWidget {
     this.allowedConnectSources = const [],
     this.readyTimeout = const Duration(seconds: 20),
     this.onReady,
+    this.onError,
     this.onContentChanged,
     this.onRawContentChanged,
     this.fullTextOnFlushOnly = false,
@@ -164,6 +165,16 @@ class MonacoEditor extends StatefulWidget {
   ///
   /// Provides the [MonacoController] for interaction.
   final ValueChanged<MonacoController>? onReady;
+
+  /// Callback invoked when a background editor operation fails.
+  ///
+  /// The widget performs bridge work outside any caller's await chain
+  /// (pulling text for [onContentChanged], re-applying [options], syncing
+  /// scroll handoff). Failures in that work land here. When `null`, they
+  /// are reported to [FlutterError.reportError] instead of being silently
+  /// swallowed. Boot failures render [errorBuilder] and are also routed
+  /// through this callback.
+  final void Function(Object error, StackTrace stackTrace)? onError;
 
   /// Callback invoked when the text content changes.
   ///
@@ -473,6 +484,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
       }
     } catch (e, st) {
       if (!_isBootstrapCurrent(bootstrapToken)) return;
+      widget.onError?.call(e, st);
       _teardown(disposeOldController: _ownsController);
       setState(() {
         _connectionState = _ConnectionState.error;
@@ -526,9 +538,27 @@ class _MonacoEditorState extends State<MonacoEditor> {
 
   void _ignoreAsync(Future<void> future) {
     unawaited(
-      future.catchError((e, st) {
-        debugPrint('[MonacoEditor] Async update error: $e');
+      future.catchError((Object e, StackTrace st) {
+        _reportAsyncError(e, st);
       }),
+    );
+  }
+
+  /// Routes a background failure to [MonacoEditor.onError], falling back to
+  /// [FlutterError.reportError] so nothing disappears silently.
+  void _reportAsyncError(Object error, StackTrace stackTrace) {
+    final handler = widget.onError;
+    if (handler != null) {
+      handler(error, stackTrace);
+      return;
+    }
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'flutter_monaco',
+        context: ErrorDescription('while running a MonacoEditor update'),
+      ),
     );
   }
 

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_monaco/src/core/monaco_js_error.dart';
+import 'package:flutter_monaco/src/common/exceptions.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/protocol/envelope.dart';
 
@@ -71,10 +71,10 @@ class MonacoProtocol {
   /// value.
   ///
   /// A JavaScript `undefined` result resolves to [monacoJsUndefined]. Fails
-  /// with [MonacoJavaScriptException] when the page reports an error, a
-  /// [TimeoutException] when no response arrives within [timeout] (pass
+  /// with [MonacoJavaScriptError] when the page reports an error, a
+  /// [MonacoTimeoutError] when no response arrives within [timeout] (pass
   /// `null` to wait indefinitely and manage deadlines at the call site),
-  /// and a [StateError] after [dispose].
+  /// and a [MonacoDisposedError] after [dispose].
   Future<Object?> invoke(
     String method,
     Map<String, Object?> params, {
@@ -97,7 +97,10 @@ class MonacoProtocol {
     Duration? timeout = const Duration(seconds: 30),
   }) async {
     if (_disposed) {
-      throw StateError('MonacoProtocol has been disposed (invoke $method).');
+      throw MonacoDisposedError(
+        message: 'MonacoProtocol has been disposed.',
+        operation: method,
+      );
     }
 
     final id = 'r${++_invokeSeq}';
@@ -116,9 +119,12 @@ class MonacoProtocol {
             timeout,
             onTimeout: () {
               _pending.remove(id);
-              throw TimeoutException(
-                'Monaco command "$method" received no response in '
-                '${timeout.inSeconds}s.',
+              throw MonacoTimeoutError(
+                message:
+                    'Monaco command "$method" received no response in '
+                    '${timeout.inSeconds}s.',
+                timeout: timeout,
+                operation: method,
               );
             },
           );
@@ -133,7 +139,7 @@ class MonacoProtocol {
       await _webView.runJavaScript(script);
     } catch (e) {
       _pending.remove(id);
-      final error = MonacoJavaScriptException(
+      final error = MonacoJavaScriptError(
         operation: method,
         message: 'Failed to issue dispatch: $e',
         details: e,
@@ -201,7 +207,7 @@ class MonacoProtocol {
       case 'pageReady':
         final handshake = MonacoHandshake.fromEnvelope(json);
         if (handshake.protocolVersion != kMonacoProtocolVersion) {
-          final error = MonacoJavaScriptException(
+          final error = MonacoProtocolError(
             operation: 'handshake',
             message:
                 'Protocol version skew: page speaks '
@@ -219,7 +225,7 @@ class MonacoProtocol {
         if (!_editorReady.isCompleted) _editorReady.complete();
       case 'fatal':
         final errorJson = json['error'];
-        final error = MonacoJavaScriptException.fromJson(
+        final error = MonacoJavaScriptError.fromJson(
           errorJson is Map<String, dynamic>
               ? errorJson
               : <String, dynamic>{'message': 'Fatal Monaco boot failure'},
@@ -244,7 +250,7 @@ class MonacoProtocol {
       );
     } else {
       pending.completer.completeError(
-        MonacoJavaScriptException.fromJson(
+        MonacoJavaScriptError.fromJson(
           envelope.error?.cast<String, dynamic>() ??
               <String, dynamic>{'message': 'Unknown Monaco bridge error'},
           operation: pending.method,
@@ -277,8 +283,9 @@ class MonacoProtocol {
     for (final pending in List.of(_pending.values)) {
       if (!pending.completer.isCompleted) {
         pending.completer.completeError(
-          StateError(
-            'MonacoProtocol disposed while "${pending.method}" was pending.',
+          MonacoDisposedError(
+            message: 'MonacoProtocol disposed while the command was pending.',
+            operation: pending.method,
           ),
         );
       }
@@ -287,12 +294,16 @@ class MonacoProtocol {
 
     if (!_pageReady.isCompleted) {
       _pageReady.completeError(
-        StateError('MonacoProtocol disposed before the page became ready.'),
+        const MonacoDisposedError(
+          message: 'MonacoProtocol disposed before the page became ready.',
+        ),
       );
     }
     if (!_editorReady.isCompleted) {
       _editorReady.completeError(
-        StateError('MonacoProtocol disposed before the editor became ready.'),
+        const MonacoDisposedError(
+          message: 'MonacoProtocol disposed before the editor became ready.',
+        ),
       );
     }
     _events.close();

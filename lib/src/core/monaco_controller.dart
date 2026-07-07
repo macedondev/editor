@@ -149,7 +149,8 @@ class MonacoController {
   /// * [page]: Page-level settings (custom CSS, CSP opt-ins). See
   ///   [MonacoPageConfig]; changing these requires a new controller.
   /// * [readyTimeout]: Upper bound for the whole boot (asset extraction
-  ///   excluded); on expiry [whenReady] completes with a [TimeoutException].
+  ///   excluded); on expiry [whenReady] completes with a
+  ///   [MonacoTimeoutError].
   static Future<MonacoController> create({
     EditorOptions? options,
     String? initialText,
@@ -232,9 +233,12 @@ class MonacoController {
           await _protocol.editorReady;
         }().timeout(
           readyTimeout,
-          onTimeout: () => throw TimeoutException(
-            'Monaco Editor did not report ready in '
-            '${readyTimeout.inSeconds} seconds.',
+          onTimeout: () => throw MonacoTimeoutError(
+            message:
+                'Monaco Editor did not report ready in '
+                '${readyTimeout.inSeconds} seconds.',
+            timeout: readyTimeout,
+            operation: 'boot',
           ),
         );
 
@@ -371,16 +375,11 @@ class MonacoController {
   ///
   /// Reads the live value from Monaco's runtime rather than caching what
   /// Dart most recently sent. Returns `null` when Monaco can't report a
-  /// theme (e.g. on engine versions that don't expose `editor.getTheme()`)
-  /// or when the bridge call fails - this method follows the same
-  /// fallback-on-failure contract as [getValue] / [getLineCount].
+  /// theme (e.g. on engine versions that don't expose `editor.getTheme()`).
+  /// Bridge failures throw a [MonacoException].
   Future<String?> getThemeId() async {
-    try {
-      final result = await _invoke('editor.getTheme', {});
-      return result is String && result.isNotEmpty ? result : null;
-    } catch (_) {
-      return null;
-    }
+    final result = await _invoke('editor.getTheme', {});
+    return result is String && result.isNotEmpty ? result : null;
   }
 
   /// Registers or replaces a custom Monaco theme.
@@ -956,17 +955,15 @@ class MonacoController {
 
   /// Retrieves the current text content of the editor.
   ///
-  /// Returns [defaultValue] if the operation fails or returns null.
-  Future<String> getValue({String defaultValue = ''}) async {
-    try {
-      final result = await _invoke('document.getText', {'uri': null});
-      return result is String ? result : defaultValue;
-    } catch (_) {
-      // Documented fallback contract: reads with defaultValue never propagate
-      // bridge errors. Use [evaluateJavaScript] or a typed command if strict
-      // failure visibility is required.
-      return defaultValue;
-    }
+  /// Throws a [MonacoException] on failure; the result is never silently
+  /// defaulted.
+  Future<String> getValue() async {
+    final result = await _invoke('document.getText', {'uri': null});
+    if (result is String) return result;
+    throw MonacoProtocolError(
+      operation: 'document.getText',
+      message: 'Expected a string document text, got ${result.runtimeType}.',
+    );
   }
 
   /// Replaces the entire content of the editor.
@@ -981,16 +978,13 @@ class MonacoController {
 
   /// Retrieves the current primary selection range.
   ///
-  /// Returns `null` if no selection exists or the editor is not ready.
+  /// Returns `null` when the editor reports no selection. Bridge failures
+  /// throw a [MonacoException].
   Future<Range?> getSelection() async {
-    try {
-      final result = await _invoke('editor.getSelection', {});
-      return result is Map
-          ? Range.fromJson(Map<String, dynamic>.from(result))
-          : null;
-    } catch (_) {
-      return null;
-    }
+    final result = await _invoke('editor.getSelection', {});
+    return result is Map
+        ? Range.fromJson(Map<String, dynamic>.from(result))
+        : null;
   }
 
   /// Selects the specified [range] in the editor.
@@ -1028,66 +1022,71 @@ class MonacoController {
 
   // --- LINE OPERATIONS ---
 
-  /// Get the total line count with enhanced conversion
-  Future<int> getLineCount({int defaultValue = 0}) async {
-    try {
-      final result = await _invoke('document.lineCount', {'uri': null});
-      if (result is int) return result;
-      if (result is num) return result.toInt();
-      return defaultValue;
-    } catch (_) {
-      return defaultValue;
-    }
+  /// Returns the total number of lines in the document.
+  ///
+  /// Throws a [MonacoException] on failure.
+  Future<int> getLineCount() async {
+    final result = await _invoke('document.lineCount', {'uri': null});
+    if (result is int) return result;
+    if (result is num) return result.toInt();
+    throw MonacoProtocolError(
+      operation: 'document.lineCount',
+      message: 'Expected a numeric line count, got ${result.runtimeType}.',
+    );
   }
 
-  /// Get the content of a specific line with validation
-  Future<String> getLineContent(int line, {String defaultValue = ''}) async {
-    // Validate line number (JS clamps, so an out-of-range request would
-    // otherwise return the nearest line instead of the documented default).
+  /// Returns the content of the given [line] (1-based).
+  ///
+  /// Throws a [RangeError] when [line] is outside `1..lineCount` (JS clamps,
+  /// so an out-of-range request would otherwise silently return the nearest
+  /// line) and a [MonacoException] on bridge failure.
+  Future<String> getLineContent(int line) async {
     final lineCount = await getLineCount();
-    if (line < 1 || line > lineCount) return defaultValue;
-
-    try {
-      final result = await _invoke('document.getLines', {
-        'uri': null,
-        'startLine': line,
-        'endLine': line,
-      });
-      return result is List && result.isNotEmpty
-          ? (result.first?.toString() ?? defaultValue)
-          : defaultValue;
-    } catch (_) {
-      return defaultValue;
+    if (line < 1 || line > lineCount) {
+      throw RangeError.range(line, 1, lineCount, 'line');
     }
+
+    final result = await _invoke('document.getLines', {
+      'uri': null,
+      'startLine': line,
+      'endLine': line,
+    });
+    if (result is List && result.isNotEmpty) {
+      return result.first?.toString() ?? '';
+    }
+    throw MonacoProtocolError(
+      operation: 'document.getLines',
+      message: 'Expected a non-empty list of lines for line $line.',
+    );
   }
 
-  /// Get multiple lines content at once
-  Future<List<String>> getLinesContent(
-    List<int> lines, {
-    String lineDefaultValue = '',
-  }) async {
+  /// Returns the content of multiple [lines] (1-based) in input order.
+  ///
+  /// Throws a [RangeError] when any requested line is outside
+  /// `1..lineCount` and a [MonacoException] on bridge failure.
+  Future<List<String>> getLinesContent(List<int> lines) async {
     final results = <String>[];
     if (lines.isEmpty) return results;
 
     final lineCount = await getLineCount();
     for (final line in lines) {
       if (line < 1 || line > lineCount) {
-        results.add(lineDefaultValue);
-        continue;
+        throw RangeError.range(line, 1, lineCount, 'lines');
       }
-      try {
-        final result = await _invoke('document.getLines', {
-          'uri': null,
-          'startLine': line,
-          'endLine': line,
-        });
-        results.add(
-          result is List && result.isNotEmpty
-              ? (result.first?.toString() ?? lineDefaultValue)
-              : lineDefaultValue,
+    }
+    for (final line in lines) {
+      final result = await _invoke('document.getLines', {
+        'uri': null,
+        'startLine': line,
+        'endLine': line,
+      });
+      if (result is List && result.isNotEmpty) {
+        results.add(result.first?.toString() ?? '');
+      } else {
+        throw MonacoProtocolError(
+          operation: 'document.getLines',
+          message: 'Expected a non-empty list of lines for line $line.',
         );
-      } catch (_) {
-        results.add(lineDefaultValue);
       }
     }
     return results;
@@ -1144,10 +1143,9 @@ class MonacoController {
       'decorations': decorations.map((d) => d.toJson()).toList(),
     });
     if (raw is! List) {
-      throw MonacoJavaScriptException(
+      throw const MonacoProtocolError(
         operation: 'decorations.delta',
         message: 'Expected deltaDecorations to return a list of IDs.',
-        details: raw,
       );
     }
 
@@ -1254,59 +1252,60 @@ class MonacoController {
     FindOptions options = const FindOptions(),
     int limit = 1000,
   }) async {
-    try {
-      final matches = await _invoke('document.findMatches', {
-        'uri': null,
-        'query': query,
-        'isRegex': options.isRegex,
-        'matchCase': options.matchCase,
-        'wholeWord': options.wholeWord,
-        'limit': limit,
-      });
-      if (matches is! List || matches.isEmpty) return [];
-      return matches
-          .whereType<Map>()
-          .map((match) => FindMatch.fromJson(Map<String, dynamic>.from(match)))
-          .toList();
-    } catch (_) {
-      return [];
+    final matches = await _invoke('document.findMatches', {
+      'uri': null,
+      'query': query,
+      'isRegex': options.isRegex,
+      'matchCase': options.matchCase,
+      'wholeWord': options.wholeWord,
+      'limit': limit,
+    });
+    if (matches is! List) {
+      throw MonacoProtocolError(
+        operation: 'document.findMatches',
+        message: 'Expected a list of matches, got ${matches.runtimeType}.',
+      );
     }
+    return matches
+        .whereType<Map>()
+        .map((match) => FindMatch.fromJson(Map<String, dynamic>.from(match)))
+        .toList();
   }
 
-  /// Replace all matches in the document
+  /// Replaces all matches in the document and returns the replacement count.
+  ///
+  /// Throws a [MonacoException] on failure.
   Future<int> replaceMatches(
     String query,
     String replacement, {
     FindOptions options = const FindOptions(),
-    int defaultCount = 0,
   }) async {
-    try {
-      final result = await _invoke('document.replaceMatches', {
-        'uri': null,
-        'query': query,
-        'replacement': replacement,
-        'isRegex': options.isRegex,
-        'matchCase': options.matchCase,
-        'wholeWord': options.wholeWord,
-      });
-      if (result is int) return result;
-      if (result is num) return result.toInt();
-      return defaultCount;
-    } catch (_) {
-      return defaultCount;
-    }
+    final result = await _invoke('document.replaceMatches', {
+      'uri': null,
+      'query': query,
+      'replacement': replacement,
+      'isRegex': options.isRegex,
+      'matchCase': options.matchCase,
+      'wholeWord': options.wholeWord,
+    });
+    if (result is int) return result;
+    if (result is num) return result.toInt();
+    throw MonacoProtocolError(
+      operation: 'document.replaceMatches',
+      message:
+          'Expected a numeric replacement count, got ${result.runtimeType}.',
+    );
   }
 
   // --- VIEW STATE ---
 
-  /// Save the current view state with enhanced conversion
-  Future<Map<String, dynamic>> saveViewState() async {
-    try {
-      final result = await _invoke('editor.captureViewState', {});
-      return result is Map ? Map<String, dynamic>.from(result) : {};
-    } catch (_) {
-      return {};
-    }
+  /// Captures the current view state (cursor, scroll, folding).
+  ///
+  /// Returns `null` when the editor has no state to capture (no model).
+  /// Throws a [MonacoException] on failure.
+  Future<Map<String, dynamic>?> saveViewState() async {
+    final result = await _invoke('editor.captureViewState', {});
+    return result is Map ? Map<String, dynamic>.from(result) : null;
   }
 
   /// Restore a previously saved view state
@@ -1317,12 +1316,13 @@ class MonacoController {
 
   // --- MULTI-MODEL ---
 
-  /// Create a new model with enhanced URI handling
+  /// Creates a new model and returns its URI.
+  ///
+  /// Throws a [MonacoException] on failure.
   Future<Uri> createModel(
     String value, {
     String language = 'plaintext',
     Uri? uri,
-    Uri? defaultUri,
   }) async {
     final result = await _invoke('docs.open', {
       'text': value,
@@ -1334,10 +1334,10 @@ class MonacoController {
     if (createdUri != null) {
       return createdUri;
     }
-    if (defaultUri != null) {
-      return defaultUri;
-    }
-    throw StateError('docs.open returned invalid uri: $result');
+    throw MonacoProtocolError(
+      operation: 'docs.open',
+      message: 'Expected a model URI string, got: $result',
+    );
   }
 
   /// Set the active model
@@ -1350,18 +1350,21 @@ class MonacoController {
     await _invoke('docs.close', {'uri': uri.toString()});
   }
 
-  /// List all models with enhanced conversion
+  /// Lists the URIs of every open model.
+  ///
+  /// Throws a [MonacoException] on failure.
   Future<List<Uri>> listModels() async {
-    try {
-      final list = await _invoke('docs.list', {});
-      if (list is! List || list.isEmpty) return [];
-      return list
-          .map((e) => Uri.tryParse(e.toString()))
-          .whereType<Uri>()
-          .toList();
-    } catch (_) {
-      return [];
+    final list = await _invoke('docs.list', {});
+    if (list is! List) {
+      throw MonacoProtocolError(
+        operation: 'docs.list',
+        message: 'Expected a list of model URIs, got ${list.runtimeType}.',
+      );
     }
+    return list
+        .map((e) => Uri.tryParse(e.toString()))
+        .whereType<Uri>()
+        .toList();
   }
 
   // --- ADDITIONAL HELPER METHODS ---
@@ -1371,14 +1374,12 @@ class MonacoController {
     return _liveStats.value;
   }
 
-  /// Check if the editor has unsaved changes
+  /// Whether the document changed since the last [markSaved].
+  ///
+  /// Throws a [MonacoException] on failure.
   Future<bool> hasUnsavedChanges() async {
-    try {
-      final result = await _invoke('document.isDirty', {'uri': null});
-      return result == true;
-    } catch (_) {
-      return false;
-    }
+    final result = await _invoke('document.isDirty', {'uri': null});
+    return result == true;
   }
 
   /// Mark the current content as saved (baseline for dirty tracking)
@@ -1386,16 +1387,15 @@ class MonacoController {
     await _invoke('document.markSaved', {'uri': null});
   }
 
-  /// Get cursor position with enhanced conversion
+  /// Returns the current cursor position.
+  ///
+  /// Returns `null` when the editor reports no cursor. Throws a
+  /// [MonacoException] on bridge failure.
   Future<Position?> getCursorPosition() async {
-    try {
-      final result = await _invoke('editor.getCursor', {});
-      return result is Map
-          ? Position.fromJson(Map<String, dynamic>.from(result))
-          : null;
-    } catch (_) {
-      return null;
-    }
+    final result = await _invoke('editor.getCursor', {});
+    return result is Map
+        ? Position.fromJson(Map<String, dynamic>.from(result))
+        : null;
   }
 
   /// Set cursor position
@@ -1411,17 +1411,15 @@ class MonacoController {
     await setCursorPosition(position);
   }
 
-  /// Get word at position
+  /// Returns the word at [position], or `null` when there is none.
+  ///
+  /// Throws a [MonacoException] on bridge failure.
   Future<String?> getWordAtPosition(Position position) async {
-    try {
-      final result = await _invoke('document.getWordAt', {
-        'uri': null,
-        'position': {'lineNumber': position.line, 'column': position.column},
-      });
-      return result is String ? result : null;
-    } catch (_) {
-      return null;
-    }
+    final result = await _invoke('document.getWordAt', {
+      'uri': null,
+      'position': {'lineNumber': position.line, 'column': position.column},
+    });
+    return result is String ? result : null;
   }
 
   // --- BATCH OPERATIONS ---
@@ -1605,11 +1603,9 @@ class MonacoController {
   /// );
   /// ```
   ///
-  /// Returns [defaultValue] when the expression returns `undefined`, when the
-  /// decoded value is `null`, or when the value cannot be converted to [T].
-  ///
-  /// JavaScript execution errors are allowed to propagate. This keeps raw
-  /// JavaScript integrations easier to debug.
+  /// Returns `null` when the expression returns `undefined` or `null`.
+  /// Throws a [MonacoProtocolError] when the value cannot be converted to
+  /// [T]; JavaScript execution errors propagate as [MonacoJavaScriptError].
   ///
   /// ## Security
   ///
@@ -1630,20 +1626,25 @@ class MonacoController {
   ///   'monaco.editor.getEditors().length',
   /// );
   /// ```
-  Future<T?> evaluateJavaScript<T>(String expression, {T? defaultValue}) async {
+  Future<T?> evaluateJavaScript<T>(String expression) async {
     await _ensureReady();
     final result = await _protocol.invoke('page.eval', {
       'expression': expression,
     });
     if (identical(result, monacoJsUndefined) || result == null) {
-      return defaultValue;
+      return null;
     }
     if (result is T) return result as T;
     // Number normalization: platforms and JSON round-trips blur int/double.
     if (T == int && result is num) return result.toInt() as T;
     if (T == double && result is num) return result.toDouble() as T;
     if (T == String) return result.toString() as T;
-    return defaultValue;
+    throw MonacoProtocolError(
+      operation: 'page.eval',
+      message:
+          'Expression result of type ${result.runtimeType} cannot be '
+          'converted to $T.',
+    );
   }
 
   /// Executes JavaScript and returns the platform-native result.

@@ -65,7 +65,13 @@ export 'src/core/monaco_controller.dart'
     show MonacoController, MonacoFocusIntent;
 export 'src/core/monaco_page_config.dart'
     show MonacoCapabilities, MonacoPageConfig;
-export 'src/core/monaco_js_error.dart' show MonacoJavaScriptException;
+export 'src/common/exceptions.dart'
+    show
+        MonacoDisposedError,
+        MonacoException,
+        MonacoJavaScriptError,
+        MonacoProtocolError,
+        MonacoTimeoutError;
 
 // LSP exports
 export 'src/lsp/lsp_connection.dart' show LanguageServerConnection;

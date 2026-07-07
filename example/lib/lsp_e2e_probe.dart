@@ -102,7 +102,6 @@ class _ProbeAppState extends State<ProbeApp> {
       for (var i = 0; i < 90; i++) {
         final count = await controller.evaluateJavaScript<int>(
           "monaco.editor.getModelMarkers({ owner: 'lsp' }).length",
-          defaultValue: 0,
         );
         if ((count ?? 0) > 0) {
           final messages = await controller.evaluateJavaScript<String>(
@@ -120,7 +119,6 @@ class _ProbeAppState extends State<ProbeApp> {
           _log('post-disconnect state = ${connection.state.status}');
           final cleared = await controller.evaluateJavaScript<int>(
             "monaco.editor.getModelMarkers({ owner: 'lsp' }).length",
-            defaultValue: -1,
           );
           _log('markers after disconnect = $cleared');
           return _finish(

@@ -402,7 +402,7 @@ class FakePlatformWebViewController implements PlatformWebViewController {
   /// Registers a failure response for a dispatched command whose dotted
   /// method name contains [methodMatch].
   ///
-  /// The Dart side decodes this as a `MonacoJavaScriptException` with the
+  /// The Dart side decodes this as a `MonacoJavaScriptError` with the
   /// supplied [message], [name], and [stack] fields. Use this to assert
   /// failure propagation from the JS bridge into Dart command methods.
   void injectCommandFailure(

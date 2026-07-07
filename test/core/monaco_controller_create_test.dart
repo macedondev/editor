@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
@@ -138,7 +137,7 @@ void main() {
         );
         await expectLater(
           controller.whenReady,
-          throwsA(isA<TimeoutException>()),
+          throwsA(isA<MonacoTimeoutError>()),
         );
         expect(controller.isReady, false);
 

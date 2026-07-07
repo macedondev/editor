@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:convert_object/convert_object.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_monaco/src/core/monaco_js_error.dart';
+import 'package:flutter_monaco/src/common/exceptions.dart';
 import 'package:flutter_monaco/src/lsp/lsp_transport.dart';
 import 'package:flutter_monaco/src/lsp/lsp_types.dart';
 import 'package:flutter_monaco/src/protocol/envelope.dart';
@@ -104,7 +104,7 @@ class LanguageServerConnection {
   /// LSP traffic is fully handled by Monaco - do not replicate it here.
   ///
   /// This escape hatch relies on Monaco-internal plumbing (verified against
-  /// Monaco 0.55.1) and may throw a descriptive [MonacoJavaScriptException]
+  /// Monaco 0.55.1) and may throw a descriptive [MonacoJavaScriptError]
   /// on future Monaco upgrades. Throws [StateError] when the connection is
   /// not open.
   Future<Object?> sendRequest(
@@ -367,7 +367,7 @@ class MonacoLspManager {
         final errorInfo = tryConvertToMap<String, dynamic>(json['error']);
         final error = errorInfo == null
             ? null
-            : MonacoJavaScriptException.fromJson(
+            : MonacoJavaScriptError.fromJson(
                 errorInfo,
                 operation: 'lsp:${connection.id}',
               );

@@ -146,29 +146,22 @@ void main() {
         },
       );
 
-      test(
-        'command failure envelope throws MonacoJavaScriptException',
-        () async {
-          final bundle = await _createBundle();
-          bundle.webview.injectCommandFailure(
-            'executeAction',
-            message: 'broken action',
-          );
+      test('command failure envelope throws MonacoJavaScriptError', () async {
+        final bundle = await _createBundle();
+        bundle.webview.injectCommandFailure(
+          'executeAction',
+          message: 'broken action',
+        );
 
-          await expectLater(
-            () => bundle.controller.executeAction('whatever'),
-            throwsA(
-              isA<MonacoJavaScriptException>()
-                  .having(
-                    (e) => e.operation,
-                    'operation',
-                    'editor.executeAction',
-                  )
-                  .having((e) => e.message, 'message', 'broken action'),
-            ),
-          );
-        },
-      );
+        await expectLater(
+          () => bundle.controller.executeAction('whatever'),
+          throwsA(
+            isA<MonacoJavaScriptError>()
+                .having((e) => e.operation, 'operation', 'editor.executeAction')
+                .having((e) => e.message, 'message', 'broken action'),
+          ),
+        );
+      });
     });
 
     group('theme registration', () {
@@ -234,13 +227,16 @@ void main() {
         expect(await bundle.controller.getThemeId(), 'company-dark');
       });
 
-      test('getThemeId returns null when bridge call fails', () async {
+      test('getThemeId rethrows bridge errors', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandFailure(
           'editor.getTheme',
           message: 'monaco.editor.getTheme is not a function',
         );
-        expect(await bundle.controller.getThemeId(), isNull);
+        await expectLater(
+          bundle.controller.getThemeId(),
+          throwsA(isA<MonacoJavaScriptError>()),
+        );
       });
 
       test(
@@ -429,23 +425,31 @@ void main() {
         expect(value, '{"a":1}');
       });
 
-      test('returns defaultValue on error', () async {
+      test('throws MonacoJavaScriptError on bridge error', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandFailure(
           'document.getText',
           message: 'boom',
         );
-        final value = await bundle.controller.getValue(
-          defaultValue: 'fallback',
+        await expectLater(
+          bundle.controller.getValue(),
+          throwsA(
+            isA<MonacoJavaScriptError>().having(
+              (e) => e.message,
+              'message',
+              'boom',
+            ),
+          ),
         );
-        expect(value, 'fallback');
       });
 
-      test('handles null result', () async {
+      test('throws MonacoProtocolError on a non-string result', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandSuccess('document.getText', value: null);
-        final value = await bundle.controller.getValue(defaultValue: 'default');
-        expect(value, 'default');
+        await expectLater(
+          bundle.controller.getValue(),
+          throwsA(isA<MonacoProtocolError>()),
+        );
       });
 
       test('handles unicode content', () async {
@@ -477,11 +481,13 @@ void main() {
         expect(selection.endColumn, 4);
       });
 
-      test('getSelection returns null on error', () async {
+      test('getSelection rethrows bridge errors', () async {
         final bundle = await _createBundle();
         bundle.webview.throwOn((s) => s.contains('getSelection'));
-        final selection = await bundle.controller.getSelection();
-        expect(selection, isNull);
+        await expectLater(
+          bundle.controller.getSelection(),
+          throwsA(isA<MonacoJavaScriptError>()),
+        );
       });
 
       test('setSelection generates correct payload', () async {
@@ -587,35 +593,35 @@ void main() {
         expect(count, 42);
       });
 
-      test('getLineCount returns default on error', () async {
+      test('getLineCount rethrows bridge errors', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandFailure(
           'document.lineCount',
           message: 'boom',
         );
-        final count = await bundle.controller.getLineCount(defaultValue: 0);
-        expect(count, 0);
+        await expectLater(
+          bundle.controller.getLineCount(),
+          throwsA(isA<MonacoJavaScriptError>()),
+        );
       });
 
       test('getLineContent validates bounds - below', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandSuccess('document.lineCount', value: 3);
-        final value = await bundle.controller.getLineContent(
-          0,
-          defaultValue: 'x',
+        await expectLater(
+          bundle.controller.getLineContent(0),
+          throwsRangeError,
         );
-        expect(value, 'x');
         expect(_dispatchesOf(bundle.webview, 'document.getLines'), isEmpty);
       });
 
       test('getLineContent validates bounds - above', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandSuccess('document.lineCount', value: 3);
-        final value = await bundle.controller.getLineContent(
-          10,
-          defaultValue: 'y',
+        await expectLater(
+          bundle.controller.getLineContent(10),
+          throwsRangeError,
         );
-        expect(value, 'y');
       });
 
       test('getLineContent returns content for valid line', () async {
@@ -771,7 +777,7 @@ void main() {
         await expectLater(
           () => bundle.controller.setDecorations(const []),
           throwsA(
-            isA<MonacoJavaScriptException>().having(
+            isA<MonacoProtocolError>().having(
               (e) => e.operation,
               'operation',
               'decorations.delta',
@@ -951,11 +957,13 @@ void main() {
         expect(params['limit'], 50);
       });
 
-      test('findMatches returns empty list on error', () async {
+      test('findMatches rethrows bridge errors', () async {
         final bundle = await _createBundle();
         bundle.webview.throwOn((s) => s.contains('findMatches'));
-        final matches = await bundle.controller.findMatches('test');
-        expect(matches, isEmpty);
+        await expectLater(
+          bundle.controller.findMatches('test'),
+          throwsA(isA<MonacoJavaScriptError>()),
+        );
       });
 
       test('replaceMatches returns count', () async {
@@ -969,15 +977,13 @@ void main() {
         expect(count, 5);
       });
 
-      test('replaceMatches returns default on error', () async {
+      test('replaceMatches rethrows bridge errors', () async {
         final bundle = await _createBundle();
         bundle.webview.throwOn((s) => s.contains('replaceMatches'));
-        final count = await bundle.controller.replaceMatches(
-          'a',
-          'b',
-          defaultCount: 0,
+        await expectLater(
+          bundle.controller.replaceMatches('a', 'b'),
+          throwsA(isA<MonacoJavaScriptError>()),
         );
-        expect(count, 0);
       });
     });
 
@@ -995,15 +1001,27 @@ void main() {
         );
 
         final state = await bundle.controller.saveViewState();
-        expect(state.isNotEmpty, true);
-        expect(state['scrollTop'], 100);
+        expect(state, isNotNull);
+        expect(state!['scrollTop'], 100);
       });
 
-      test('saveViewState returns empty map on error', () async {
+      test('saveViewState returns null when there is no state', () async {
+        final bundle = await _createBundle();
+        bundle.webview.injectCommandSuccess(
+          'editor.captureViewState',
+          value: null,
+        );
+        final state = await bundle.controller.saveViewState();
+        expect(state, isNull);
+      });
+
+      test('saveViewState rethrows bridge errors', () async {
         final bundle = await _createBundle();
         bundle.webview.throwOn((s) => s.contains('captureViewState'));
-        final state = await bundle.controller.saveViewState();
-        expect(state, isEmpty);
+        await expectLater(
+          bundle.controller.saveViewState(),
+          throwsA(isA<MonacoJavaScriptError>()),
+        );
       });
 
       test('restoreViewState skips empty state', () async {
@@ -1035,17 +1053,18 @@ void main() {
         expect(uri.toString(), 'file:///model1');
       });
 
-      test('createModel uses defaultUri on undefined result', () async {
-        final bundle = await _createBundle();
-        // Default auto-response is an undefined-success envelope.
+      test(
+        'createModel throws MonacoProtocolError on undefined result',
+        () async {
+          final bundle = await _createBundle();
+          // Default auto-response is an undefined-success envelope.
 
-        final fallback = Uri.parse('file:///fallback');
-        final uri = await bundle.controller.createModel(
-          'content',
-          defaultUri: fallback,
-        );
-        expect(uri, fallback);
-      });
+          await expectLater(
+            bundle.controller.createModel('content'),
+            throwsA(isA<MonacoProtocolError>()),
+          );
+        },
+      );
 
       test('setModel calls JS with URI', () async {
         final bundle = await _createBundle();
@@ -1676,7 +1695,7 @@ void main() {
             const JsonDiagnosticsOptions(validate: true),
           ),
           throwsA(
-            isA<MonacoJavaScriptException>()
+            isA<MonacoJavaScriptError>()
                 .having(
                   (e) => e.operation,
                   'operation',
@@ -1807,41 +1826,40 @@ void main() {
         expect(result, [1, 2, 3]);
       });
 
-      test('returns defaultValue when JavaScript returns null', () async {
+      test('returns null when JavaScript returns null', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandSuccess('page.eval');
 
         final result = await bundle.controller.evaluateJavaScript<int>(
           'missingThing',
-          defaultValue: -1,
         );
 
-        expect(result, -1);
+        expect(result, isNull);
       });
 
-      test('returns defaultValue when JavaScript returns undefined', () async {
+      test('returns null when JavaScript returns undefined', () async {
         final bundle = await _createBundle();
         bundle.webview.injectCommandSuccess('page.eval', isUndefined: true);
 
         final result = await bundle.controller.evaluateJavaScript<int>(
           'missingThing',
-          defaultValue: -1,
         );
 
-        expect(result, -1);
+        expect(result, isNull);
       });
 
-      test('returns defaultValue when value cannot convert to T', () async {
-        final bundle = await _createBundle();
-        bundle.webview.injectCommandSuccess('page.eval', value: {'count': 2});
+      test(
+        'throws MonacoProtocolError when value cannot convert to T',
+        () async {
+          final bundle = await _createBundle();
+          bundle.webview.injectCommandSuccess('page.eval', value: {'count': 2});
 
-        final result = await bundle.controller.evaluateJavaScript<int>(
-          '({ count: 2 })',
-          defaultValue: -1,
-        );
-
-        expect(result, -1);
-      });
+          await expectLater(
+            bundle.controller.evaluateJavaScript<int>('({ count: 2 })'),
+            throwsA(isA<MonacoProtocolError>()),
+          );
+        },
+      );
 
       test('waits for ready before executing', () async {
         final bundle = await _createBundle(ready: false);
@@ -1861,7 +1879,7 @@ void main() {
         await expectLater(
           bundle.controller.evaluateJavaScript<int>('badExpression()'),
           throwsA(
-            isA<MonacoJavaScriptException>().having(
+            isA<MonacoJavaScriptError>().having(
               (e) => e.operation,
               'operation',
               'page.eval',

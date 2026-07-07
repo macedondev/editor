@@ -207,7 +207,7 @@ void main() {
       await expectLater(
         connectFuture,
         throwsA(
-          isA<MonacoJavaScriptException>().having(
+          isA<MonacoJavaScriptError>().having(
             (e) => e.message,
             'message',
             contains('handshake refused'),
@@ -425,7 +425,7 @@ void main() {
 
       expect(connection.state.status, LspConnectionStatus.closed);
       expect(
-        (connection.state.error as MonacoJavaScriptException?)?.message,
+        (connection.state.error as MonacoJavaScriptError?)?.message,
         contains('socket dropped'),
       );
     });

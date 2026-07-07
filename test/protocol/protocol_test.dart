@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
 
-import 'package:flutter_monaco/src/core/monaco_js_error.dart';
+import 'package:flutter_monaco/src/common/exceptions.dart';
 import 'package:flutter_monaco/src/protocol/envelope.dart';
 import 'package:flutter_monaco/src/protocol/protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -122,7 +122,7 @@ void main() {
       expect(identical(result, monacoJsUndefined), true);
     });
 
-    test('invoke throws MonacoJavaScriptException on error response', () async {
+    test('invoke throws MonacoJavaScriptError on error response', () async {
       webview.injectCommandFailure(
         'editor.setTheme',
         name: 'TypeError',
@@ -131,7 +131,7 @@ void main() {
       await expectLater(
         protocol.invoke('editor.setTheme', {'theme': 'nope'}),
         throwsA(
-          isA<MonacoJavaScriptException>()
+          isA<MonacoJavaScriptError>()
               .having((e) => e.operation, 'operation', 'editor.setTheme')
               .having((e) => e.message, 'message', 'no such theme')
               .having((e) => e.name, 'name', 'TypeError'),
@@ -139,7 +139,7 @@ void main() {
       );
     });
 
-    test('invoke times out when no response arrives', () async {
+    test('invoke times out with MonacoTimeoutError', () async {
       final silent = FakePlatformWebViewController()..autoRespond = false;
       final silentProtocol = MonacoProtocol(webView: silent);
       await expectLater(
@@ -148,7 +148,17 @@ void main() {
           {},
           timeout: const Duration(milliseconds: 50),
         ),
-        throwsA(isA<TimeoutException>()),
+        throwsA(
+          isA<MonacoTimeoutError>()
+              .having((e) => e.operation, 'operation', 'document.getText')
+              .having(
+                (e) => e.timeout,
+                'timeout',
+                const Duration(milliseconds: 50),
+              )
+              // Also catchable as the dart:async TimeoutException.
+              .having((e) => e, 'self', isA<TimeoutException>()),
+        ),
       );
       silentProtocol.dispose();
     });
@@ -222,10 +232,7 @@ void main() {
           'protocolVersion': 2,
         }),
       );
-      await expectLater(
-        skewed.pageReady,
-        throwsA(isA<MonacoJavaScriptException>()),
-      );
+      await expectLater(skewed.pageReady, throwsA(isA<MonacoProtocolError>()));
       skewed.dispose();
     });
 
@@ -241,7 +248,7 @@ void main() {
       await expectLater(
         protocol.editorReady,
         throwsA(
-          isA<MonacoJavaScriptException>().having(
+          isA<MonacoJavaScriptError>().having(
             (e) => e.message,
             'message',
             'no editor.main',
@@ -262,12 +269,15 @@ void main() {
       expect(events[1].name, 'focusChanged');
     });
 
-    test('dispose fails pending invokes with StateError', () async {
+    test('dispose fails pending invokes with MonacoDisposedError', () async {
       final silent = FakePlatformWebViewController();
       final silentProtocol = MonacoProtocol(webView: silent);
       silent.autoRespond = false;
       final future = silentProtocol.invoke('document.getText', {});
-      final expectation = expectLater(future, throwsA(isA<StateError>()));
+      final expectation = expectLater(
+        future,
+        throwsA(isA<MonacoDisposedError>()),
+      );
       silentProtocol.dispose();
       await expectation;
     });
@@ -283,18 +293,18 @@ void main() {
           return null;
         });
         async.flushMicrotasks();
-        expect(caught, isA<MonacoJavaScriptException>());
+        expect(caught, isA<MonacoJavaScriptError>());
         // No stray timeout timer may remain armed.
         expect(async.pendingTimers, isEmpty);
         brokenProtocol.dispose();
       });
     });
 
-    test('invoke after dispose throws StateError', () async {
+    test('invoke after dispose throws MonacoDisposedError', () async {
       protocol.dispose();
       expect(
         () => protocol.invoke('document.getText', {}),
-        throwsA(isA<StateError>()),
+        throwsA(isA<MonacoDisposedError>()),
       );
     });
 
