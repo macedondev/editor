@@ -3,6 +3,52 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-07-07
+
+A ground-up rebuild of the package's spine - one wire protocol, a document/editor split, sparse options, typed errors and events - while keeping the battle-tested platform engineering (LSP, focus recovery, mobile web survival kit, scroll handoff, web overlay stack) intact. The README's "Migrating from 2.x to 3.0" section carries the complete symbol-level migration table; the highlights are below.
+
+### Breaking
+- **Content and model operations moved to `controller.document`** (a `MonacoDocument` handle): `setValue`/`getValue` become `document.setText()`/`getText()`, `getLineCount`/`getLineContent`/`getLinesContent` become `lineCount()`/`lineAt()`/`getLines(start, end)` (one bridge call for the whole range), `insertText` becomes `insert`, `hasUnsavedChanges()` becomes `isDirty()`, and `setLanguage`/`applyEdits`/`deleteRange`/`replaceRange`/`findMatches`/`replaceMatches`/`markSaved` move over with the same names. Markers are owner-scoped on the document: `setMarkers(markers, owner:)`/`clearMarkers(owner:)`.
+- **Multi-model API replaced by documents**: `createModel`/`setModel`/`disposeModel`/`listModels` become `openDocument({text, language, uri})`/`activateDocument(doc)`/`doc.close()`/`listDocuments()`, with `documentByUri(uri)` for lookups.
+- **`MonacoController.create` returns immediately on every platform** (it used to block until ready on native); await `controller.whenReady` (renamed from the `onReady` future). The signature is now `create({options, initialText, page, readyTimeout})`: `customCss`/`allowCdnFonts`/`allowedConnectSources` moved into `MonacoPageConfig` passed as `page:`. Likewise on the widget: `MonacoEditor.initialValue` is now `initialText` and the three loose page parameters are `page: MonacoPageConfig(...)`.
+- **`MonacoTheme` and `MonacoLanguage` are extension types over `String`** (were enums): `MonacoTheme.vsDark`/`MonacoLanguage.dart` are unchanged textually, `.values` becomes `.builtIn`, `fromId(s)` becomes `MonacoTheme(s)`/`MonacoLanguage(s)`, and custom ids are first-class. `EditorOptions.themeId`/`effectiveThemeId`, `setThemeById`, and `defineThemeFromJson` are deleted: a custom theme is just `MonacoTheme('app-dark')`. `MonacoThemeDefinition.base` is the new `MonacoBaseTheme` enum.
+- **`MonacoAction` constants are typed `MonacoAction` values** (were `String`s) and `executeAction` takes `MonacoAction` with named `args`; wrap raw command ids with `MonacoAction(id)`.
+- **`EditorOptions` is sparse**: every field is nullable, and `updateOptions(EditorOptions(fontSize: 16))` changes only the font size instead of resetting ~40 options to package defaults. `padding` is `MonacoPadding`, `minimap` is `MonacoMinimapOptions`, `wordWrap`/`lineNumbers` are enums, and structured `scrollbar`/`guides`/`stickyScroll` sub-options plus an `extra` map cover the rest of Monaco's option surface.
+- **Errors are typed and loud**: `MonacoJavaScriptException` is now `MonacoJavaScriptError` under a sealed `MonacoException` hierarchy, every read/write throws on bridge failure, and the `defaultValue` fallback parameters on reads are gone (an app can no longer mistake "bridge died" for "empty document").
+- **Completions return registrations**: `registerCompletionSource`/`unregisterCompletionSource` become `registerCompletions(...)`/`registerStaticCompletions(...)`, both returning a `MonacoCompletionRegistration` with `dispose()`; `languages` takes `List<MonacoLanguage>`.
+- **Decorations are handle-based**: `setDecorations`/`addInlineDecorations`/`addLineDecorations`/`clearDecorations` become `createDecorationSet()` with `set`/`clear`/`dispose` per set.
+- **Events are typed**: `onContentChanged` is `Stream<MonacoContentChanged>` (was `Stream<bool>`; `isFlush` is a field), `onFocus`/`onBlur` merge into `onFocusChanged: Stream<bool>`, and `liveStats`/`getStatistics()` become `stats: ValueListenable<MonacoLiveStats>` with plain typed fields (the label records and the `line*1000+column` cursor encoding are gone).
+- **Focus API consolidated**: `focus()`/`ensureEditorFocus({attempts, interval, intent})` become `requestFocus({intent})` with the retry loop internalized; `releaseNativeInputFocus()` is renamed `releaseNativeFocus()`.
+- **View state is opaque and typed**: `saveViewState(): Map`/`restoreViewState(Map)` become `captureViewState(): MonacoViewState`/`restoreViewState(MonacoViewState)`; persist via `toJson()`.
+- **`MonacoAssets` slimmed**: `assetInfo()` returns a typed `MonacoAssetDiagnostics`; `indexHtmlPath`/`assetBaseDir` are internal (use `assetInfo().path`).
+- Behavioral changes: reads throw typed exceptions instead of returning defaults; commands issued before ready run FIFO after ready (preserving the old queue's last-write-wins outcome for consecutive `setText` calls); `updateOptions` is sparse; the markdown/vs-dark boot flash is gone (the first painted frame uses the requested options); unknown JS events surface as `MonacoUnknownEvent` instead of a debug print; `EditorOptions.fromJson` parses only the 3.0 `toJson` shape (apps that persisted hand-built 2.x option JSON re-serialize once with 3.0 `toJson`).
+
+### Added
+- **Wire protocol v3.** Every command, event, and callback rides a single versioned, request-correlated JSON envelope channel that behaves identically on Android, iOS, macOS, Windows, and Web - no per-platform result decoding anywhere. A two-phase boot (page handshake, then one boot command carrying options/text/language/theme) means the editor is born configured, and `controller.capabilities` exposes the handshake (`protocolVersion`, `monacoVersion`, `lsp`, `diff`).
+- **Dart-defined custom editor actions.** `controller.addAction(MonacoActionDescriptor(...), run)` registers an action with typed keybindings (`MonacoKeybinding`/`MonacoKey`, e.g. Cmd/Ctrl+S save hooks), command-palette presence, and optional context-menu placement; the returned `MonacoActionRegistration.dispose()` removes it. The example app's main demo now ships a Cmd/Ctrl+S save hook.
+- **Diff editor.** `MonacoDiffEditor` widget and headless `MonacoDiffController` (`setTexts`, `getModifiedText`, `getLineChangeCount`, `updateOptions`, `updateDiffOptions`, `setTheme`, `revealNextChange`/`revealPreviousChange`), configured via `MonacoDiffOptions` (side-by-side or inline, original editability, whitespace handling, `extra` passthrough). New demo: `example/lib/diff_example.dart`.
+- **Multi-document editing.** `openDocument` returns URI-pinned `MonacoDocument` handles that can edit their model even while another document is visible; documents keep independent undo stacks and dirty state, and content-change events carry the document URI. The multi-editor example is now a tabbed single-editor, multi-document demo.
+- **`MonacoDecorationSet`**: multiple independent decoration owners (e.g. search highlights + lint underlines) that no longer clobber each other.
+- **Sealed `MonacoEvent` union** on `controller.events` with typed convenience streams; `MonacoContentChanged` carries structured change ranges (`changes`, capped at 64 KB with `truncated: true` beyond) enabling diff-based sync without full-text pulls; unknown event names surface as `MonacoUnknownEvent`.
+- **Sealed `MonacoException` hierarchy**: `MonacoJavaScriptError`, `MonacoProtocolError`, `MonacoTimeoutError` (implements `TimeoutException`, so existing `on TimeoutException` catches keep working), and `MonacoDisposedError`, each carrying the failing operation name.
+- **`MonacoPageConfig`**: groups `customCss`, `allowCdnFonts`, and `allowedConnectSources` for `create` and both widgets.
+- **`MonacoDefaults`** (the curated `editorOptions` base the widget merges under user options, plus default theme/language) and **`MonacoFontStacks`** (the former `MonacoFont` stacks as `String` constants).
+- **`MonacoAssetDiagnostics`**: typed asset cache info (`exists`, `path`, `monacoVersion`, `fileCount`, `totalSizeBytes`/`totalSizeMB`, `generatedHtmlCount`).
+- **Brightness-following default theme**: a null `EditorOptions.theme` resolves from the ambient Flutter brightness (dark gets `vs-dark`, light gets `vs`) and re-resolves when the platform switches modes; an explicit theme always wins.
+- **Open extension types with dot shorthand**: custom themes (`MonacoTheme('app-dark')`), contributed languages (`MonacoLanguage('mylang')`), and arbitrary command ids (`MonacoAction('my.command')`) are first-class, and Dart 3.10+ shorthands work at call sites (`executeAction(.formatDocument)`, `setTheme(.vsDark)`).
+- **`MonacoEditor.onError`**: async command failures the widget itself triggers now surface through this callback (default: `FlutterError.reportError`) instead of being silently debug-printed. `MonacoDiffEditor` has the same hook.
+
+### Changed
+- `getEditorState()` now completes in one bridge round trip (was five sequential calls) and finally populates `theme` (was always `null`).
+- The LSP subsystem rides protocol v3 internally; its public API is unchanged from 2.3.0 and is pinned by a golden surface test. `LanguageServerConnection`, transports, `LspServerProcess`, and reconnect policies all work exactly as before.
+- The bridge JavaScript ships as real asset files (`assets/monaco/bridge/*.js`) instead of a Dart string literal, and the generated HTML is rewritten on every load - a package upgrade can never serve a stale bridge, and the manual cache-bust constant is gone.
+
+### Removed
+- The 15 controller convenience action methods (`format`, `find`, `replace`, `toggleWordWrap`, `selectAll`, `undo`, `redo`, `cut`, `copy`, `paste`, `foldAll`, `unfoldAll`, `toggleLineComment`, `indentLines`, `outdentLines`); use `executeAction` with the matching `MonacoAction` constant (`.formatDocument`, `.commentLine`, `.startFindReplaceAction`, ...).
+- The marker conveniences `setErrorMarkers`/`setWarningMarkers`/`clearAllMarkers`; build `MarkerData.error(...)`/`MarkerData.warning(...)` lists and clear owners explicitly.
+- `MonacoConstants` (see `MonacoDefaults`) and the `MonacoFont` enum (see `MonacoFontStacks`).
+- `MonacoAssets.htmlGenerationVersion` and public `generateIndexHtml`: HTML generation is internal and regenerated automatically on every load, so no cache-bust bookkeeping remains.
+
 ## [2.3.0] - 2026-07-06
 
 ### Added

@@ -20,8 +20,8 @@ MonacoEditor(
 const String _controllerSnippet = '''
 MonacoEditor(
   onReady: (controller) async {
-    await controller.setValue('void main() {}');
-    final code = await controller.getValue();
+    await controller.document.setText('void main() {}');
+    final code = await controller.document.getText();
   },
 )''';
 
