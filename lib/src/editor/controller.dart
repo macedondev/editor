@@ -294,7 +294,7 @@ class MonacoController {
         'name': 'pageReady',
         'protocolVersion': kMonacoProtocolVersion,
         'monacoVersion': 'test',
-        'capabilities': ['lsp'],
+        'capabilities': ['lsp', 'diff'],
       }),
     );
     _protocol.handleChannelMessage(

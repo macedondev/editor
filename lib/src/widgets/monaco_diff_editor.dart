@@ -109,6 +109,13 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
   MonacoTheme? _appliedResolvedTheme;
   bool _bootstrappedOnce = false;
 
+  /// The texts/language last pushed to (or booted into) the controller, so
+  /// prop changes that land during the connecting window are re-applied at
+  /// ready instead of being dropped. Null = never pushed by this widget.
+  String? _appliedOriginal;
+  String? _appliedModified;
+  MonacoLanguage? _appliedLanguage;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -153,13 +160,7 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
     if (widget.original != oldWidget.original ||
         widget.modified != oldWidget.modified ||
         widget.language != oldWidget.language) {
-      _ignoreAsync(
-        _controller!.setTexts(
-          original: widget.original,
-          modified: widget.modified,
-          language: widget.language,
-        ),
-      );
+      _syncTexts();
     }
 
     if (widget.options != oldWidget.options) {
@@ -190,6 +191,13 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
   bool _isBootstrapCurrent(int token) => token == _bootstrapSeq && mounted;
 
   Future<void> _bootstrap() async {
+    // A retry after a failed owned boot must not orphan the previous
+    // controller (its platform WebView and protocol, with the in-flight
+    // page.boot, would leak once per retry).
+    if (_controller != null) {
+      _teardown(disposeOldController: _ownsController);
+    }
+
     final bootstrapToken = ++_bootstrapSeq;
     setState(() {
       _connectionState = _DiffConnectionState.connecting;
@@ -204,18 +212,26 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
           widget.controller == null && widget.controllerFactory == null;
       final bootTheme = _resolveTheme();
       _appliedResolvedTheme = bootTheme;
+      final bootOriginal = widget.original;
+      final bootModified = widget.modified;
+      final bootLanguage = widget.language;
       final controller =
           widget.controller ??
           await (widget.controllerFactory?.call() ??
               MonacoDiffController.create(
                 options: widget.options.copyWith(theme: bootTheme),
                 diff: widget.diffOptions,
-                original: widget.original,
-                modified: widget.modified,
-                language: widget.language,
+                original: bootOriginal,
+                modified: bootModified,
+                language: bootLanguage,
                 page: widget.page,
                 readyTimeout: widget.readyTimeout,
               ));
+      if (usedInternalCreate) {
+        _appliedOriginal = bootOriginal;
+        _appliedModified = bootModified;
+        _appliedLanguage = bootLanguage;
+      }
 
       if (!_isBootstrapCurrent(bootstrapToken)) {
         if (ownsController) {
@@ -249,6 +265,9 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
             modified: widget.modified,
             language: widget.language,
           );
+          _appliedOriginal = widget.original;
+          _appliedModified = widget.modified;
+          _appliedLanguage = widget.language;
         }
         if (!_isBootstrapCurrent(bootstrapToken)) {
           return;
@@ -256,6 +275,9 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
       }
 
       setState(() => _connectionState = _DiffConnectionState.ready);
+      // Content props may have changed while the boot was in flight;
+      // re-apply the delta now that didUpdateWidget can no longer see it.
+      _syncTexts();
       widget.onReady?.call(_controller!);
     } catch (e, st) {
       if (!_isBootstrapCurrent(bootstrapToken)) return;
@@ -269,6 +291,34 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
         _stack = st;
       });
     }
+  }
+
+  /// Pushes the widget's texts/language when they differ from what was
+  /// last applied. Never pushes the widget's empty defaults over an
+  /// external controller's booted content (applied == null and both sides
+  /// empty means this widget never carried content).
+  void _syncTexts() {
+    if (_controller == null) return;
+    if (_appliedOriginal == widget.original &&
+        _appliedModified == widget.modified &&
+        _appliedLanguage == widget.language) {
+      return;
+    }
+    if (_appliedOriginal == null &&
+        widget.original.isEmpty &&
+        widget.modified.isEmpty) {
+      return;
+    }
+    _appliedOriginal = widget.original;
+    _appliedModified = widget.modified;
+    _appliedLanguage = widget.language;
+    _ignoreAsync(
+      _controller!.setTexts(
+        original: widget.original,
+        modified: widget.modified,
+        language: widget.language,
+      ),
+    );
   }
 
   void _ignoreAsync(Future<void> future) {
@@ -301,6 +351,9 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
     }
     _controller = null;
     _appliedResolvedTheme = null;
+    _appliedOriginal = null;
+    _appliedModified = null;
+    _appliedLanguage = null;
   }
 
   @override

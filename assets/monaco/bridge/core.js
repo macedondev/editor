@@ -34,12 +34,30 @@ window.__FMB = window.__FMB || {};
     try {
       json = JSON.stringify(envelope);
     } catch (e) {
-      json = JSON.stringify({
-        v: PROTOCOL_VERSION,
-        kind: 'log',
-        level: 'error',
-        message: 'Unserializable envelope for kind ' + envelope.kind + ': ' + e,
-      });
+      // An unserializable RESPONSE must still settle the pending Dart
+      // invoke (otherwise it dies as a 30s timeout); anything else degrades
+      // to an error log. Both fallbacks carry the web token or the host
+      // page would drop them.
+      var fallback = (envelope.kind === 'response' && envelope.id)
+        ? {
+            v: PROTOCOL_VERSION,
+            kind: 'response',
+            id: envelope.id,
+            ok: false,
+            error: {
+              name: 'SerializationError',
+              message: 'Unserializable command result: ' + e,
+              stack: null,
+            },
+          }
+        : {
+            v: PROTOCOL_VERSION,
+            kind: 'log',
+            level: 'error',
+            message: 'Unserializable envelope for kind ' + envelope.kind + ': ' + e,
+          };
+      if (token) fallback._flutterToken = token;
+      json = JSON.stringify(fallback);
     }
     if (window.flutterChannel && window.flutterChannel.postMessage) {
       window.flutterChannel.postMessage(json);
@@ -171,7 +189,7 @@ window.__FMB = window.__FMB || {};
     window.FlutterMonaco.lifecycle('pageReady', {
       protocolVersion: PROTOCOL_VERSION,
       monacoVersion: page.monacoVersion || null,
-      capabilities: ['lsp'],
+      capabilities: ['lsp', 'diff'],
     });
   };
 })();

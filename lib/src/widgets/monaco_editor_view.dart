@@ -842,7 +842,10 @@ class _MonacoEditorState extends State<MonacoEditor> {
                 return;
               }
               _webFocusNode.requestFocus();
-              unawaited(
+              // Routed through _ignoreAsync: a click during a boot that
+              // later fails must land in onError/FlutterError, not as an
+              // unhandled zone error from this queued focus request.
+              _ignoreAsync(
                 _controller!.requestFocus(
                   attempts: 1,
                   intent: MonacoFocusIntent.user,

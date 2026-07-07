@@ -141,7 +141,7 @@ class FakePlatformWebViewController implements PlatformWebViewController {
             'name': 'pageReady',
             'protocolVersion': 3,
             'monacoVersion': 'test',
-            'capabilities': ['lsp'],
+            'capabilities': ['lsp', 'diff'],
           }),
         );
       });
@@ -339,7 +339,7 @@ class FakePlatformWebViewController implements PlatformWebViewController {
         'name': 'pageReady',
         'protocolVersion': 3,
         'monacoVersion': monacoVersion,
-        'capabilities': ['lsp'],
+        'capabilities': ['lsp', 'diff'],
       }),
     );
     tryEmitToChannel(

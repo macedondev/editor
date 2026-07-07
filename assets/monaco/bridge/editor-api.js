@@ -443,7 +443,12 @@ window.__FMB.editorApi = function (ctx) {
                   });
                   FM.register('docs.open', (p) => api.createModel(p.text, p.language, p.uri));
                   FM.register('docs.close', (p) => {
-                    resolveModel(p.uri).dispose();
+                    const model = resolveModel(p.uri);
+                    // Drop the dirty baseline with the model: a stale entry
+                    // would make a fresh document at the same URI read as
+                    // dirty (baselines are keyed by URI, not model).
+                    api._baselines.delete(model.uri.toString());
+                    model.dispose();
                     return true;
                   });
                   FM.register('docs.list', () => api.listModels());
@@ -663,6 +668,18 @@ window.__FMB.completions = function (ctx) {
             );
           }),
       };
+
+      // Dispose-then-replace on duplicate ids (mirrors actions.register):
+      // a transient unregister failure must not leave two live providers
+      // answering the same providerId with duplicated suggestions.
+      const existing = completion.providers[id];
+      if (existing && existing.disposables) {
+        for (const d of existing.disposables) {
+          try {
+            d.dispose();
+          } catch (_) {}
+        }
+      }
 
       const disposables = langs.map((l) =>
         monaco.languages.registerCompletionItemProvider(l, provider),
