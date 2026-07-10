@@ -2,7 +2,7 @@
 // plumbing here are extracted verbatim from the 2.3.0 generated page
 // (lib/src/core/monaco_assets.dart generateIndexHtml); see upcoming/v3.md
 // Section 14 (verbatim-port inventory). The gesture-ownership arbitration
-// ("boundary lock", 3.4.0) intentionally diverges from the 2.3.0 forwarding
+// ("boundary lock", 3.3.0) intentionally diverges from the 2.3.0 forwarding
 // behavior; the 2.3.0 semantics remain available as the 'continuous' policy.
 /* eslint-disable */
 'use strict';

@@ -31,7 +31,7 @@ class ScrollHandoffDriver {
 
   /// The gestureId whose deltas may move the host, or `null` when no
   /// sessionized gesture is active. The legacy id `0` (continuous policy or
-  /// a pre-3.4 page) bypasses the gate entirely.
+  /// a pre-3.3 page) bypasses the gate entirely.
   int? _activeGestureId;
 
   /// Handles one forwarded handoff message from the editor page.

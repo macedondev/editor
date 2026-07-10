@@ -166,7 +166,7 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
                         'there, momentum included. Start a new gesture at '
                         'the edge to continue into the page (or enable '
                         'continuous chaining to spill mid-gesture, the '
-                        'pre-3.4 behavior). Reversing direction gives the '
+                        'pre-3.3 behavior). Reversing direction gives the '
                         'wheel back to the editor. Ctrl/meta wheel (zoom) '
                         'and Monaco popups are never handed off.',
                   ),

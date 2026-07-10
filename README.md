@@ -513,7 +513,7 @@ Behavior with `MonacoScrollHandoff.edge()`:
 - `scrollBeyondLastLine` blank space counts as editor-scrollable; set it to `false` in `EditorOptions` if you want handoff to begin at the real last line.
 - Multiple editors route independently: each editor forwards only to its own configured target.
 
-The boundary behavior is a policy. `MonacoScrollBoundaryPolicy.newGestureOnly` (the default since 3.4.0) gives the native wall feel described above; `MonacoScrollBoundaryPolicy.continuous` restores the pre-3.4 behavior where every unconsumed delta chains to the page immediately, mid-gesture:
+The boundary behavior is a policy. `MonacoScrollBoundaryPolicy.newGestureOnly` (the default since 3.3.0) gives the native wall feel described above; `MonacoScrollBoundaryPolicy.continuous` restores the pre-3.3 behavior where every unconsumed delta chains to the page immediately, mid-gesture:
 
 ```dart
 MonacoScrollHandoff.edge(
