@@ -70,13 +70,15 @@ jobs:
         run: flutter test
 
   bridge-js:
-    name: Bridge JS syntax
+    name: Bridge JS syntax + semantics
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: node --check every bridge script
         run: find assets/monaco/bridge -name '*.js' -print -exec node --check {} +
+      - name: Execute the real bridge against the Monaco stub
+        run: node --test tool/bridge_tests/*_test.mjs
 
   pana:
     name: Pana

@@ -556,15 +556,79 @@ void main() {
       await fromServer.close();
     });
 
-    test('connect after dispose throws', () async {
+    test('connect after dispose throws MonacoDisposedError', () async {
       controller.dispose();
       expect(
         () => controller.connectLanguageServer(
           id: 'late',
           transport: LspWebSocketTransport(url: Uri.parse('ws://localhost:1')),
         ),
-        throwsStateError,
+        throwsA(isA<MonacoDisposedError>()),
       );
+    });
+  });
+
+  group('bridged transport hardening', () {
+    test('a throwing toServer fails the connection', () async {
+      final fromServer = StreamController<Map<String, Object?>>();
+      addTearDown(fromServer.close);
+      final connection = await controller.connectLanguageServer(
+        id: 'crashy',
+        transport: LspBridgedTransport(
+          fromServer: fromServer.stream,
+          toServer: (_) => throw StateError('stdin is gone'),
+        ),
+      );
+      await pumpMicrotasks();
+      expect(connection.state.status, LspConnectionStatus.open);
+
+      harness.emitLspMessage('crashy', {
+        'jsonrpc': '2.0',
+        'id': 1,
+        'method': 'workspace/configuration',
+      });
+      await pumpMicrotasks();
+
+      // A send that throws means the local plumbing is gone; the connection
+      // must stop claiming to be open.
+      expect(connection.state.status, LspConnectionStatus.closed);
+      expect(connection.state.error, isNotNull);
+      expect(controller.languageServerConnections, isEmpty);
+    });
+
+    test('disconnect() awaits the bridged transport onClose', () async {
+      final fromServer = StreamController<Map<String, Object?>>();
+      addTearDown(fromServer.close);
+      final closeGate = Completer<void>();
+      var closeStarted = false;
+      final connection = await controller.connectLanguageServer(
+        id: 'proc',
+        transport: LspBridgedTransport(
+          fromServer: fromServer.stream,
+          toServer: (_) {},
+          onClose: () {
+            closeStarted = true;
+            return closeGate.future;
+          },
+        ),
+      );
+      await pumpMicrotasks();
+
+      var disconnected = false;
+      final done = connection.disconnect().then((_) => disconnected = true);
+      await pumpMicrotasks();
+      expect(closeStarted, isTrue);
+      expect(
+        disconnected,
+        isFalse,
+        reason:
+            'an awaited disconnect must mean the local process/socket '
+            'shutdown completed',
+      );
+
+      closeGate.complete();
+      await done;
+      expect(disconnected, isTrue);
     });
   });
 }

@@ -118,6 +118,92 @@ void main() {
       expect(details.atRight, isFalse);
     });
 
+    test('parses a sessionized payload', () {
+      final details = MonacoScrollHandoffDetails.tryParse({
+        'source': 'wheel',
+        'phase': 'begin',
+        'gestureId': 17,
+        'momentum': true,
+        'deltaX': 0,
+        'deltaY': 44.5,
+        'atTop': false,
+        'atBottom': true,
+        'atLeft': true,
+        'atRight': true,
+      });
+
+      expect(details, isNotNull);
+      expect(details!.phase, MonacoScrollHandoffPhase.begin);
+      expect(details.gestureId, 17);
+      expect(details.momentum, isTrue);
+    });
+
+    test('parses every phase name', () {
+      MonacoScrollHandoffPhase? phaseOf(String name) {
+        return MonacoScrollHandoffDetails.tryParse({
+          'source': 'wheel',
+          'phase': name,
+          'deltaX': 0,
+          'deltaY': 1,
+        })?.phase;
+      }
+
+      expect(phaseOf('begin'), MonacoScrollHandoffPhase.begin);
+      expect(phaseOf('update'), MonacoScrollHandoffPhase.update);
+      expect(phaseOf('end'), MonacoScrollHandoffPhase.end);
+      expect(phaseOf('cancel'), MonacoScrollHandoffPhase.cancel);
+    });
+
+    test('legacy payloads default to update/0/no-momentum', () {
+      final details = MonacoScrollHandoffDetails.tryParse({
+        'source': 'wheel',
+        'deltaX': 0,
+        'deltaY': 44.5,
+      });
+
+      expect(details, isNotNull);
+      expect(details!.phase, MonacoScrollHandoffPhase.update);
+      expect(details.gestureId, 0);
+      expect(details.momentum, isFalse);
+    });
+
+    test('drops payloads with an unknown phase', () {
+      expect(
+        MonacoScrollHandoffDetails.tryParse({
+          'source': 'wheel',
+          'phase': 'flick',
+          'deltaX': 0,
+          'deltaY': 1,
+        }),
+        isNull,
+      );
+      expect(
+        MonacoScrollHandoffDetails.tryParse({
+          'source': 'wheel',
+          'phase': 7,
+          'deltaX': 0,
+          'deltaY': 1,
+        }),
+        isNull,
+      );
+    });
+
+    test('malformed gesture ids fall back to the legacy id 0', () {
+      int? idOf(Object? raw) {
+        return MonacoScrollHandoffDetails.tryParse({
+          'source': 'wheel',
+          'gestureId': ?raw,
+          'deltaX': 0,
+          'deltaY': 1,
+        })?.gestureId;
+      }
+
+      expect(idOf('seventeen'), 0);
+      expect(idOf(-4), 0);
+      expect(idOf(double.nan), 0);
+      expect(idOf(3.0), 3);
+    });
+
     test('supports value equality', () {
       const a = MonacoScrollHandoffDetails(
         source: MonacoScrollHandoffSource.wheel,
@@ -151,6 +237,44 @@ void main() {
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(equals(c)));
       expect(a.toString(), contains('wheel'));
+    });
+
+    test('equality covers the session fields', () {
+      const base = MonacoScrollHandoffDetails(
+        source: MonacoScrollHandoffSource.wheel,
+        deltaX: 0,
+        deltaY: 10,
+        atTop: false,
+        atBottom: true,
+        atLeft: true,
+        atRight: true,
+      );
+      const sameSession = MonacoScrollHandoffDetails(
+        source: MonacoScrollHandoffSource.wheel,
+        deltaX: 0,
+        deltaY: 10,
+        atTop: false,
+        atBottom: true,
+        atLeft: true,
+        atRight: true,
+      );
+      const otherGesture = MonacoScrollHandoffDetails(
+        source: MonacoScrollHandoffSource.wheel,
+        phase: MonacoScrollHandoffPhase.begin,
+        gestureId: 2,
+        momentum: true,
+        deltaX: 0,
+        deltaY: 10,
+        atTop: false,
+        atBottom: true,
+        atLeft: true,
+        atRight: true,
+      );
+
+      expect(base, equals(sameSession));
+      expect(base, isNot(equals(otherGesture)));
+      expect(otherGesture.toString(), contains('begin'));
+      expect(otherGesture.toString(), contains('2'));
     });
   });
 
@@ -197,6 +321,18 @@ void main() {
       expect(config.controller, same(controller));
       expect(config.useNearestScrollable, isFalse);
       expect(config.onHandoff, same(handler));
+    });
+
+    test('boundary policy defaults to newGestureOnly and is configurable', () {
+      const disabled = MonacoScrollHandoff.disabled();
+      const edge = MonacoScrollHandoff.edge();
+      const chaining = MonacoScrollHandoff.edge(
+        policy: MonacoScrollBoundaryPolicy.continuous,
+      );
+
+      expect(disabled.policy, MonacoScrollBoundaryPolicy.newGestureOnly);
+      expect(edge.policy, MonacoScrollBoundaryPolicy.newGestureOnly);
+      expect(chaining.policy, MonacoScrollBoundaryPolicy.continuous);
     });
   });
 }

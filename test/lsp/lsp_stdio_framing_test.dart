@@ -131,5 +131,21 @@ void main() {
       expect(decoder.addBytes(frame.sublist(split)).single['id'], 9);
       expect(decoder.pendingBytes, 0);
     });
+
+    test('throws when the header never terminates within the cap', () {
+      final decoder = LspStdioMessageDecoder(maxHeaderBytes: 64);
+
+      expect(
+        () => decoder.addBytes(List<int>.filled(65, 0x61)),
+        throwsFormatException,
+      );
+    });
+
+    test('throws on a Content-Length beyond the body cap', () {
+      final decoder = LspStdioMessageDecoder(maxBodyBytes: 1024);
+      final frame = utf8.encode('Content-Length: 4096\r\n\r\n');
+
+      expect(() => decoder.addBytes(frame), throwsFormatException);
+    });
   });
 }

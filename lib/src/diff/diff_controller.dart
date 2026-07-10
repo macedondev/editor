@@ -50,7 +50,8 @@ class MonacoDiffController {
 
   /// Creates a diff controller and starts the (non-blocking) boot.
   ///
-  /// Returns immediately on every platform; await [whenReady] for
+  /// Returns before the editor is ready (asset preparation and WebView
+  /// setup are still awaited here); await [whenReady] for
   /// readiness. [options] configures the inner editors (fonts, minimap,
   /// ...), [diff] the diff-specific behavior (side-by-side vs inline,
   /// ...). [original]/[modified]/[language] seed the two models so the
@@ -208,10 +209,32 @@ class MonacoDiffController {
     }
   }
 
-  Future<Object?> _invoke(String method, Map<String, Object?> params) async {
+  /// Manually fail the ready signal for tests (mirrors a boot failure).
+  @visibleForTesting
+  void failReadyForTesting(Object error, [StackTrace? stackTrace]) {
+    _onReady.future.ignore();
     if (!_onReady.isCompleted) {
-      await _onReady.future;
+      _onReady.completeError(error, stackTrace ?? StackTrace.current);
     }
+  }
+
+  /// Awaits the readiness future unconditionally: a completer that failed is
+  /// still `isCompleted`, so an isCompleted fast path would let commands skip
+  /// the boot error and enter the protocol of a dead page. Every command
+  /// after a failed boot must keep rethrowing the ORIGINAL boot error.
+  Future<void> _ensureReady() {
+    if (_disposed) {
+      return Future.error(
+        const MonacoDisposedError(
+          message: 'MonacoDiffController has been disposed.',
+        ),
+      );
+    }
+    return _onReady.future;
+  }
+
+  Future<Object?> _invoke(String method, Map<String, Object?> params) async {
+    await _ensureReady();
     final result = await _protocol.invoke(method, params);
     return identical(result, monacoJsUndefined) ? null : result;
   }
@@ -242,9 +265,30 @@ class MonacoDiffController {
   }
 
   /// The number of changed line blocks Monaco currently reports.
+  ///
+  /// `0` always means a genuinely computed "no changes" result. When Monaco
+  /// has not finished computing the diff within the bridge's grace window
+  /// (throttled or offscreen views), this throws a [MonacoTimeoutError]
+  /// instead of silently reporting zero; retry once the view is visible.
   Future<int> getLineChangeCount() async {
     final state = await _invoke('diff.getState', {});
-    return state is Map ? (state['lineChangeCount'] as int? ?? 0) : 0;
+    if (state is! Map) {
+      throw MonacoProtocolError(
+        message:
+            'diff.getState returned no state map, got ${state.runtimeType}',
+        operation: 'diff.getState',
+      );
+    }
+    final count = state['lineChangeCount'];
+    if (count is num) return count.toInt();
+    throw const MonacoTimeoutError(
+      message:
+          'Monaco has not finished computing the diff; 0 would be '
+          'indistinguishable from a real "no changes" result. Retry once '
+          'the diff view is visible.',
+      timeout: Duration(seconds: 3),
+      operation: 'diff.getState',
+    );
   }
 
   /// Applies sparse editor options (fonts, minimap, ...) to the diff pair.
@@ -295,15 +339,22 @@ class MonacoDiffController {
   ///
   /// Identical contract to `MonacoController.setScrollHandoffSources`: an
   /// enabled source installs the matching DOM listeners and posts
-  /// `scrollHandoff` events (surfaced through [onScrollHandoff]) for deltas
-  /// the diff editor cannot consume; disabling removes the listeners again.
-  /// `MonacoDiffEditor` calls this automatically from its `scrollHandoff`
-  /// configuration.
+  /// `scrollHandoff` events (surfaced through [onScrollHandoff]) for scroll
+  /// gestures the diff editor cannot consume, arbitrated by [policy] (the
+  /// momentum-absorbing [MonacoScrollBoundaryPolicy.newGestureOnly] by
+  /// default); disabling removes the listeners again. `MonacoDiffEditor`
+  /// calls this automatically from its `scrollHandoff` configuration.
   Future<void> setScrollHandoffSources({
     bool wheel = false,
     bool touch = false,
+    MonacoScrollBoundaryPolicy policy =
+        MonacoScrollBoundaryPolicy.newGestureOnly,
   }) async {
-    await _invoke('page.setScrollHandoff', {'wheel': wheel, 'touch': touch});
+    await _invoke('page.setScrollHandoff', {
+      'wheel': wheel,
+      'touch': touch,
+      'policy': policy.name,
+    });
   }
 
   /// Releases the WebView and fails all in-flight commands.

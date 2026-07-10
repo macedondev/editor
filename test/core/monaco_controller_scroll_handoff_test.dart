@@ -155,5 +155,25 @@ void main() {
       expect(params['wheel'], isFalse);
       expect(params['touch'], isFalse);
     });
+
+    test('sends the boundary policy, newGestureOnly by default', () async {
+      final bundle = await _createBundle();
+      addTearDown(bundle.controller.dispose);
+
+      await bundle.controller.setScrollHandoffSources(wheel: true);
+      await bundle.controller.setScrollHandoffSources(
+        wheel: true,
+        policy: MonacoScrollBoundaryPolicy.continuous,
+      );
+
+      final calls = bundle.webview.dispatched
+          .where((d) => d['method'] == 'page.setScrollHandoff')
+          .toList();
+      expect(calls, hasLength(2));
+      final first = calls.first['params']! as Map<String, Object?>;
+      final second = calls.last['params']! as Map<String, Object?>;
+      expect(first['policy'], 'newGestureOnly');
+      expect(second['policy'], 'continuous');
+    });
   });
 }

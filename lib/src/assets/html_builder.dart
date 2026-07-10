@@ -26,6 +26,13 @@ String sanitizeConnectSources(List<String> sources) {
   return cleaned.isEmpty ? '' : ' ${cleaned.join(' ')}';
 }
 
+/// Neutralizes `</` sequences so injected CSS can never terminate its
+/// `<style>` element early (an embedded `</style>` would promote the rest
+/// of the block to markup, i.e. script injection). `\/` is a valid CSS
+/// escape for `/`, so legitimate CSS - including content strings such as
+/// `"</b>"` - keeps its meaning.
+String _escapeStyleText(String css) => css.replaceAll('</', r'<\/');
+
 /// The bridge JavaScript files referenced by the generated page, in load
 /// order. `boot.js` must stay last: it runs the installers the other files
 /// define. `viewport-fit.js` is only emitted on web.
@@ -115,7 +122,7 @@ String buildMonacoIndexHtml({
       window.parent.postMessage(msg, '*');
     }
   };
-  window.flutterMonacoToken = '${messageToken ?? ''}';
+  window.flutterMonacoToken = ${jsonEncode(messageToken ?? '')};
   window.flutterMonacoPostMessage = function(message) {
     var token = window.flutterMonacoToken;
     if (typeof message !== 'string') {
@@ -246,7 +253,7 @@ String buildMonacoIndexHtml({
         overscroll-behavior: none;
       }''' : ''}
     </style>
-    ${customCss != null ? '<style id="flutter-monaco-custom">\n$customCss\n</style>' : ''}
+    ${customCss != null ? '<style id="flutter-monaco-custom">\n${_escapeStyleText(customCss)}\n</style>' : ''}
     $pageConfig
     $platformScript
   </head>

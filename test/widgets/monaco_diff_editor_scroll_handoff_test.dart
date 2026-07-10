@@ -353,6 +353,26 @@ void main() {
       expect(scripts, hasLength(1));
       expect(scripts.single, contains('"wheel":true'));
       expect(scripts.single, contains('"touch":false'));
+      expect(scripts.single, contains('"policy":"newGestureOnly"'));
+
+      await tester.pumpWidget(
+        _diffInScrollView(
+          controller: bundle.controller,
+          scrollController: scrollController,
+          scrollHandoff: const MonacoScrollHandoff.edge(
+            policy: MonacoScrollBoundaryPolicy.continuous,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      scripts = bundle.webview.scriptsContaining('page.setScrollHandoff');
+      expect(
+        scripts,
+        hasLength(2),
+        reason: 'a policy change alone must re-sync the page',
+      );
+      expect(scripts.last, contains('"policy":"continuous"'));
 
       await tester.pumpWidget(
         _diffInScrollView(
@@ -363,7 +383,7 @@ void main() {
       await tester.pump();
 
       scripts = bundle.webview.scriptsContaining('page.setScrollHandoff');
-      expect(scripts, hasLength(2));
+      expect(scripts, hasLength(3));
       expect(scripts.last, contains('"wheel":false'));
 
       // Behavioral: after disabling, deltas no longer move the parent.

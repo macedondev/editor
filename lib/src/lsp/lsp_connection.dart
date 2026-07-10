@@ -71,6 +71,11 @@ class LanguageServerConnection {
   bool _userDisconnected = false;
   bool _finalized = false;
 
+  /// The bridged transport's onClose future, started by finalization; an
+  /// explicit [disconnect] awaits it so "disconnected" includes the local
+  /// process/socket shutdown. Null for non-bridged transports.
+  Future<void>? _transportShutdown;
+
   /// The most recent connection state.
   LspConnectionState get state => _state;
 
@@ -91,8 +96,9 @@ class LanguageServerConnection {
   /// in-page LSP client installed.
   ///
   /// Non-destructive to editor content and models. Safe to call multiple
-  /// times. For bridged transports this also invokes the transport's
-  /// `onClose` callback (e.g. stopping the server process).
+  /// times. For bridged transports the returned future completes only after
+  /// the transport's `onClose` callback finished (e.g. the local server
+  /// process exited), so awaiting it means the local side is down too.
   Future<void> disconnect() => _manager._disconnect(this);
 
   /// **Experimental.** Sends a raw JSON-RPC request through the open
@@ -393,6 +399,11 @@ class MonacoLspManager {
       debugPrint(
         '[MonacoLsp] toServer callback for "${connection.id}" threw: $error',
       );
+      // A throwing send means the local process/socket plumbing is gone;
+      // the connection cannot be trusted to stay "open". Route it through
+      // the same path as a transport-reported close (which also honors the
+      // reconnect policy).
+      _handleRemoteClosed(connection, error);
     }
   }
 
@@ -470,12 +481,22 @@ class MonacoLspManager {
   // ─── Disconnect / disposal ────────────────────────────────────────────────
 
   Future<void> _disconnect(LanguageServerConnection connection) async {
-    if (connection._finalized) return;
+    if (connection._finalized) {
+      // Already finalized elsewhere; still let an explicit disconnect wait
+      // out an in-flight transport shutdown.
+      await connection._transportShutdown;
+      return;
+    }
     connection._userDisconnected = true;
     connection._reconnectTimer?.cancel();
     await _invokeSafely('lsp.disconnect', {'id': connection.id});
-    if (connection._finalized) return;
-    _finalize(connection, LspConnectionStatus.closed);
+    if (!connection._finalized) {
+      _finalize(connection, LspConnectionStatus.closed);
+    }
+    // An awaited disconnect means the LOCAL side is down too: for bridged
+    // transports (LspServerProcess and friends) that is the onClose
+    // process/socket shutdown, which _finalize starts without awaiting.
+    await connection._transportShutdown;
   }
 
   void _finalize(
@@ -504,15 +525,18 @@ class MonacoLspManager {
 
     final transport = connection.transport;
     if (transport is LspBridgedTransport && transport.onClose != null) {
-      unawaited(
-        Future<void>.sync(() => transport.onClose!()).catchError((
-          Object closeError,
-        ) {
+      // Started here without awaiting (this runs from synchronous dispose
+      // paths); stored on the connection so an explicit disconnect() can
+      // await the local shutdown.
+      final shutdown = Future<void>.sync(() => transport.onClose!()).catchError(
+        (Object closeError) {
           debugPrint(
             '[MonacoLsp] onClose for "${connection.id}" threw: $closeError',
           );
-        }),
+        },
       );
+      connection._transportShutdown = shutdown;
+      unawaited(shutdown);
     }
   }
 

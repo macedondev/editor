@@ -21,13 +21,13 @@ const String monacoHtmlFileName = 'index.html';
 ///
 /// Internal: called by the platform WebView controllers; not exported by
 /// the barrel. The [cacheKey] is derived from configuration options that
-/// affect HTML generation (`MonacoPageConfig.hashCode`), enabling multiple
+/// affect HTML generation (`MonacoPageConfig.stableCacheKey`), enabling multiple
 /// cached HTML variants. Native platforms get
 /// `{appSupport}/monaco_editor_cache/monaco-{version}/monaco_{key}.html`
 /// (the file itself is written lazily by the WebView controller); web gets
 /// the static asset path and ignores [cacheKey] (HTML is generated as a
 /// blob URL there).
-Future<String> monacoIndexHtmlPath({required int cacheKey}) async {
+Future<String> monacoIndexHtmlPath({required String cacheKey}) async {
   if (kIsWeb) {
     return 'assets/$monacoAssetBaseDir/index.html';
   }
@@ -217,6 +217,16 @@ class MonacoAssets {
   /// invalid after clearing. Dispose and recreate them after calling this
   /// method.
   static Future<void> clearCache() async {
+    // Let any in-flight ensureReady finish first: deleting the tree while
+    // extraction is mid-write leaves whichever finishes last inconsistent
+    // (a failure of that extraction is irrelevant to clearing).
+    final inFlight = _initCompleter;
+    if (inFlight != null && !inFlight.isCompleted) {
+      try {
+        await inFlight.future;
+      } catch (_) {}
+    }
+
     // On web, only clear in-memory caches (no file system access)
     if (kIsWeb) {
       _initCompleter = null;

@@ -104,7 +104,7 @@ Future<String> monacoAssetCacheDir({
 
 /// Returns the native generated HTML path for a configuration cache key.
 Future<String> monacoAssetHtmlPath({
-  required int cacheKey,
+  required String cacheKey,
   required String assetBaseDir,
   required String cacheSubDir,
   required String monacoVersion,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -2095,6 +2097,201 @@ void main() {
           bundle.controller.runJavaScriptReturningResultRaw('badQuery()'),
           throwsStateError,
         );
+      });
+    });
+
+    group('failed boot gating', () {
+      test(
+        'a command issued after a failed boot rethrows the boot error',
+        () async {
+          final bundle = await _createBundle(ready: false);
+          final bootError = const MonacoTimeoutError(
+            message: 'boot timed out',
+            timeout: Duration(seconds: 1),
+            operation: 'boot',
+          );
+          bundle.controller.failReadyForTesting(bootError);
+
+          await expectLater(
+            bundle.controller.whenReady,
+            throwsA(same(bootError)),
+          );
+          await expectLater(
+            bundle.controller.getTheme(),
+            throwsA(same(bootError)),
+          );
+          // The failed controller must never enter the protocol.
+          expect(bundle.webview.dispatched, isEmpty);
+        },
+      );
+
+      test(
+        'a command queued before a failed boot receives the boot error',
+        () async {
+          final bundle = await _createBundle(ready: false);
+          final pending = bundle.controller.getTheme();
+          final bootError = const MonacoTimeoutError(
+            message: 'boot timed out',
+            timeout: Duration(seconds: 1),
+            operation: 'boot',
+          );
+          bundle.controller.failReadyForTesting(bootError);
+
+          await expectLater(pending, throwsA(same(bootError)));
+          expect(bundle.webview.dispatched, isEmpty);
+        },
+      );
+
+      test(
+        'a command after dispose-during-boot throws MonacoDisposedError',
+        () async {
+          final bundle = await _createBundle(ready: false);
+          bundle.controller.dispose();
+
+          await expectLater(
+            bundle.controller.getTheme().timeout(const Duration(seconds: 1)),
+            throwsA(isA<MonacoDisposedError>()),
+          );
+        },
+      );
+
+      test(
+        'commands issued before ready dispatch FIFO in call order',
+        () async {
+          final bundle = await _createBundle(ready: false);
+          final futures = [
+            bundle.controller.document.setText('a'),
+            bundle.controller.updateOptions(const EditorOptions(fontSize: 11)),
+            bundle.controller.document.setText('b'),
+          ];
+          bundle.controller.completeReadyForTesting();
+          await Future.wait(futures);
+
+          final methods = bundle.webview.dispatched
+              .map((d) => d['method'])
+              .toList();
+          expect(methods, [
+            'document.setText',
+            'editor.updateOptions',
+            'document.setText',
+          ]);
+          expect(_paramsOf(bundle.webview.dispatched[0])['text'], 'a');
+          expect(_paramsOf(bundle.webview.dispatched[2])['text'], 'b');
+        },
+      );
+    });
+
+    group('interaction disable composition', () {
+      test('overlapping runWithInteractionDisabled scopes stay disabled until '
+          'the LAST one completes', () async {
+        final bundle = await _createBundle();
+        final gateA = Completer<void>();
+        final gateB = Completer<void>();
+
+        final runA = bundle.controller.runWithInteractionDisabled(
+          () => gateA.future,
+        );
+        final runB = bundle.controller.runWithInteractionDisabled(
+          () => gateB.future,
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(bundle.webview.interactionEnabled, false);
+
+        gateA.complete();
+        await runA;
+        expect(
+          bundle.webview.interactionEnabled,
+          false,
+          reason: 'run B still needs interaction disabled',
+        );
+
+        gateB.complete();
+        await runB;
+        expect(bundle.webview.interactionEnabled, true);
+      });
+
+      test(
+        'setInteractionEnabled(false) during a run survives the run',
+        () async {
+          final bundle = await _createBundle();
+          final gate = Completer<void>();
+
+          final run = bundle.controller.runWithInteractionDisabled(
+            () => gate.future,
+          );
+          await Future<void>.delayed(Duration.zero);
+          await bundle.controller.setInteractionEnabled(false);
+
+          gate.complete();
+          await run;
+          expect(
+            bundle.webview.interactionEnabled,
+            false,
+            reason: 'the finally block must not clobber the external disable',
+          );
+          expect(bundle.controller.isInteractionEnabled, false);
+        },
+      );
+    });
+
+    group('find options wiring', () {
+      test('findMatches forwards searchOnlyEditableRange', () async {
+        final bundle = await _createBundle();
+        bundle.webview.injectCommandSuccess(
+          'document.findMatches',
+          value: <Map<String, dynamic>>[],
+        );
+
+        await bundle.controller.document.findMatches(
+          'query',
+          options: const FindOptions(searchOnlyEditableRange: true),
+        );
+
+        final call = _dispatchesOf(bundle.webview, 'document.findMatches');
+        expect(_paramsOf(call.single)['searchOnlyEditableRange'], true);
+      });
+
+      test(
+        'findMatches applies limitResultCount as an additional cap',
+        () async {
+          final bundle = await _createBundle();
+          bundle.webview.injectCommandSuccess(
+            'document.findMatches',
+            value: <Map<String, dynamic>>[],
+          );
+
+          await bundle.controller.document.findMatches(
+            'query',
+            options: const FindOptions(limitResultCount: 5),
+          );
+
+          final call = _dispatchesOf(bundle.webview, 'document.findMatches');
+          expect(_paramsOf(call.single)['limit'], 5);
+        },
+      );
+
+      test('lineAt requests a STRICT ranged read', () async {
+        final bundle = await _createBundle();
+        bundle.webview.injectCommandSuccess(
+          'document.getLines',
+          value: <String>['hello'],
+        );
+
+        await bundle.controller.document.lineAt(3);
+
+        final call = _dispatchesOf(bundle.webview, 'document.getLines');
+        expect(_paramsOf(call.single)['strict'], true);
+      });
+    });
+
+    group('capabilities surface', () {
+      test('capabilities retains the raw set and answers supports()', () async {
+        final bundle = await _createBundle();
+
+        final capabilities = bundle.controller.capabilities;
+        expect(capabilities.raw, containsAll(<String>['lsp', 'diff']));
+        expect(capabilities.supports('lsp'), true);
+        expect(capabilities.supports('holograms'), false);
       });
     });
   });

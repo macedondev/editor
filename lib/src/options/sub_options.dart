@@ -20,6 +20,13 @@ sealed class MonacoPadding with _$MonacoPadding {
 
   const MonacoPadding._();
 
+  /// Returns a copy where non-null fields of [other] override this
+  /// instance's fields. Returns `this` when [other] is null.
+  MonacoPadding merge(MonacoPadding? other) {
+    if (other == null) return this;
+    return MonacoPadding(top: other.top ?? top, bottom: other.bottom ?? bottom);
+  }
+
   /// Parses a padding map produced by [toJson].
   ///
   /// Throws a [FormatException] on wrongly-typed values.
@@ -61,6 +68,19 @@ sealed class MonacoMinimapOptions with _$MonacoMinimapOptions {
   }) = _MonacoMinimapOptions;
 
   const MonacoMinimapOptions._();
+
+  /// Returns a copy where non-null fields of [other] override this
+  /// instance's fields. Returns `this` when [other] is null.
+  MonacoMinimapOptions merge(MonacoMinimapOptions? other) {
+    if (other == null) return this;
+    return MonacoMinimapOptions(
+      enabled: other.enabled ?? enabled,
+      side: other.side ?? side,
+      renderCharacters: other.renderCharacters ?? renderCharacters,
+      maxColumn: other.maxColumn ?? maxColumn,
+      scale: other.scale ?? scale,
+    );
+  }
 
   /// Parses a minimap map produced by [toJson].
   ///
@@ -125,6 +145,22 @@ sealed class MonacoScrollbarOptions with _$MonacoScrollbarOptions {
   }) = _MonacoScrollbarOptions;
 
   const MonacoScrollbarOptions._();
+
+  /// Returns a copy where non-null fields of [other] override this
+  /// instance's fields. Returns `this` when [other] is null.
+  MonacoScrollbarOptions merge(MonacoScrollbarOptions? other) {
+    if (other == null) return this;
+    return MonacoScrollbarOptions(
+      vertical: other.vertical ?? vertical,
+      horizontal: other.horizontal ?? horizontal,
+      verticalScrollbarSize:
+          other.verticalScrollbarSize ?? verticalScrollbarSize,
+      horizontalScrollbarSize:
+          other.horizontalScrollbarSize ?? horizontalScrollbarSize,
+      handleMouseWheel: other.handleMouseWheel ?? handleMouseWheel,
+      useShadows: other.useShadows ?? useShadows,
+    );
+  }
 
   /// Parses a scrollbar map produced by [toJson].
   ///
@@ -196,6 +232,16 @@ sealed class MonacoGuidesOptions with _$MonacoGuidesOptions {
 
   const MonacoGuidesOptions._();
 
+  /// Returns a copy where non-null fields of [other] override this
+  /// instance's fields. Returns `this` when [other] is null.
+  MonacoGuidesOptions merge(MonacoGuidesOptions? other) {
+    if (other == null) return this;
+    return MonacoGuidesOptions(
+      bracketPairs: other.bracketPairs ?? bracketPairs,
+      indentation: other.indentation ?? indentation,
+    );
+  }
+
   /// Parses a guides map produced by [toJson].
   ///
   /// Throws a [FormatException] on wrongly-typed values.
@@ -231,6 +277,16 @@ sealed class MonacoStickyScroll with _$MonacoStickyScroll {
   }) = _MonacoStickyScroll;
 
   const MonacoStickyScroll._();
+
+  /// Returns a copy where non-null fields of [other] override this
+  /// instance's fields. Returns `this` when [other] is null.
+  MonacoStickyScroll merge(MonacoStickyScroll? other) {
+    if (other == null) return this;
+    return MonacoStickyScroll(
+      enabled: other.enabled ?? enabled,
+      maxLineCount: other.maxLineCount ?? maxLineCount,
+    );
+  }
 
   /// Parses a sticky scroll map produced by [toJson].
   ///

@@ -96,6 +96,41 @@ void main() {
       expect(await controller.getLineChangeCount(), 3);
     });
 
+    test(
+      'getLineChangeCount treats an uncomputed diff as a timeout, not 0',
+      () async {
+        final webview = FakePlatformWebViewController();
+        final controller = await _createController(webview);
+
+        // The bridge reports lineChangeCount null when Monaco has not
+        // computed the diff within the grace window; 0 is a real result.
+        webview.injectCommandSuccess(
+          'diff.getState',
+          value: {'modifiedText': 'x', 'lineChangeCount': null},
+        );
+
+        await expectLater(
+          controller.getLineChangeCount(),
+          throwsA(isA<MonacoTimeoutError>()),
+        );
+      },
+    );
+
+    test(
+      'getLineChangeCount throws MonacoProtocolError on bad shape',
+      () async {
+        final webview = FakePlatformWebViewController();
+        final controller = await _createController(webview);
+
+        webview.injectCommandSuccess('diff.getState', value: 'garbage');
+
+        await expectLater(
+          controller.getLineChangeCount(),
+          throwsA(isA<MonacoProtocolError>()),
+        );
+      },
+    );
+
     test('updateOptions sends sparse editor options', () async {
       final webview = FakePlatformWebViewController();
       final controller = await _createController(webview);
@@ -197,6 +232,45 @@ void main() {
       await expectLater(
         controller.setTexts(original: 'a', modified: 'b'),
         throwsA(isA<MonacoException>()),
+      );
+    });
+
+    group('failed boot gating', () {
+      test(
+        'a command issued after a failed boot rethrows the boot error',
+        () async {
+          final webview = FakePlatformWebViewController();
+          final controller = await _createController(webview, markReady: false);
+          final bootError = const MonacoTimeoutError(
+            message: 'boot timed out',
+            timeout: Duration(seconds: 1),
+            operation: 'boot',
+          );
+          controller.failReadyForTesting(bootError);
+
+          await expectLater(controller.whenReady, throwsA(same(bootError)));
+          await expectLater(
+            controller.setTexts(original: 'a', modified: 'b'),
+            throwsA(same(bootError)),
+          );
+          expect(webview.dispatched, isEmpty);
+        },
+      );
+
+      test(
+        'a command after dispose-during-boot throws MonacoDisposedError',
+        () async {
+          final webview = FakePlatformWebViewController();
+          final controller = await _createController(webview, markReady: false);
+          controller.dispose();
+
+          await expectLater(
+            controller
+                .setTexts(original: 'a', modified: 'b')
+                .timeout(const Duration(seconds: 1)),
+            throwsA(isA<MonacoDisposedError>()),
+          );
+        },
       );
     });
   });

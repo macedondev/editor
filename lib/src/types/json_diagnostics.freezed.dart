@@ -381,7 +381,7 @@ mixin _$JsonDiagnosticsSchema {
 ///
 /// Use `['*']` to apply this schema to every JSON model. For targeted
 /// matching, set a meaningful URI when calling
-/// [MonacoController.createModel] and use a pattern that matches it.
+/// `MonacoController.openDocument` and use a pattern that matches it.
 /// When `null`, the schema is registered but not automatically applied.
  List<String>? get fileMatch;/// The JSON Schema definition as a Dart map.
 ///
@@ -586,14 +586,14 @@ class _JsonDiagnosticsSchema extends JsonDiagnosticsSchema {
 ///
 /// Use `['*']` to apply this schema to every JSON model. For targeted
 /// matching, set a meaningful URI when calling
-/// [MonacoController.createModel] and use a pattern that matches it.
+/// `MonacoController.openDocument` and use a pattern that matches it.
 /// When `null`, the schema is registered but not automatically applied.
  final  List<String>? _fileMatch;
 /// Glob patterns matched against the Monaco model URI (not file paths).
 ///
 /// Use `['*']` to apply this schema to every JSON model. For targeted
 /// matching, set a meaningful URI when calling
-/// [MonacoController.createModel] and use a pattern that matches it.
+/// `MonacoController.openDocument` and use a pattern that matches it.
 /// When `null`, the schema is registered but not automatically applied.
 @override List<String>? get fileMatch {
   final value = _fileMatch;

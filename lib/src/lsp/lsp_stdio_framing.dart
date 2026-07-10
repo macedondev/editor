@@ -33,10 +33,28 @@ abstract final class LspStdioMessageEncoder {
 /// a throw the decoder state is undefined; discard it together with the
 /// connection.
 class LspStdioMessageDecoder {
+  /// Creates a decoder.
+  ///
+  /// [maxHeaderBytes] bounds how many bytes may accumulate before the
+  /// header terminator (`\r\n\r\n`) appears; [maxBodyBytes] bounds the
+  /// advertised `Content-Length`. Both exist so a broken or hostile server
+  /// cannot grow memory without bound; exceeding either throws a
+  /// [FormatException] (discard the decoder with the connection).
+  LspStdioMessageDecoder({
+    this.maxHeaderBytes = 16 * 1024,
+    this.maxBodyBytes = 64 * 1024 * 1024,
+  });
+
   static final RegExp _contentLength = RegExp(
     r'content-length:\s*(\d+)',
     caseSensitive: false,
   );
+
+  /// Upper bound for buffered bytes while waiting for a header terminator.
+  final int maxHeaderBytes;
+
+  /// Upper bound for a frame's advertised body length, in bytes.
+  final int maxBodyBytes;
 
   final List<int> _buffer = <int>[];
   int _start = 0;
@@ -53,7 +71,15 @@ class LspStdioMessageDecoder {
     while (true) {
       if (_expectedBodyLength == null) {
         final headerEnd = _indexOfHeaderTerminator();
-        if (headerEnd < 0) break;
+        if (headerEnd < 0) {
+          if (pendingBytes > maxHeaderBytes) {
+            throw FormatException(
+              'LSP frame header exceeded $maxHeaderBytes bytes without a '
+              'terminator.',
+            );
+          }
+          break;
+        }
 
         final headerText = ascii.decode(
           _buffer.sublist(_start, headerEnd),
@@ -65,7 +91,14 @@ class LspStdioMessageDecoder {
             'LSP frame is missing a Content-Length header: "$headerText"',
           );
         }
-        _expectedBodyLength = int.parse(match.group(1)!);
+        final bodyLength = int.parse(match.group(1)!);
+        if (bodyLength > maxBodyBytes) {
+          throw FormatException(
+            'LSP frame advertises a $bodyLength-byte body, over the '
+            '$maxBodyBytes-byte cap.',
+          );
+        }
+        _expectedBodyLength = bodyLength;
         _start = headerEnd + 4; // consume "\r\n\r\n"
       }
 

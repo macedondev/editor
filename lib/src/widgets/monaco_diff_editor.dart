@@ -137,10 +137,13 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
   );
   StreamSubscription<MonacoScrollHandoffDetails>? _scrollHandoffSub;
 
-  /// The handoff sources last pushed to the diff page, so config rebuilds
-  /// only produce bridge traffic when the effective sources change.
+  /// The handoff sources and boundary policy last pushed to the diff page,
+  /// so config rebuilds only produce bridge traffic when the effective
+  /// configuration changes.
   bool _syncedWheelSource = false;
   bool _syncedTouchSource = false;
+  MonacoScrollBoundaryPolicy _syncedPolicy =
+      MonacoScrollBoundaryPolicy.newGestureOnly;
 
   /// The texts/language last pushed to (or booted into) the controller, so
   /// prop changes that land during the connecting window are re-applied at
@@ -255,6 +258,12 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
       final bootOriginal = widget.original;
       final bootModified = widget.modified;
       final bootLanguage = widget.language;
+      // Snapshot the configuration the boot applies; the widget may rebuild
+      // with different values while boot is in flight (didUpdateWidget
+      // drops changes during `connecting`), so readiness reconciles against
+      // these below.
+      final bootOptions = widget.options;
+      final bootDiffOptions = widget.diffOptions;
       final controller =
           widget.controller ??
           await (widget.controllerFactory?.call() ??
@@ -293,9 +302,13 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
       // are only pushed when the widget actually carries content -
       // otherwise the defaults ('' vs '') would wipe the diff an external
       // controller booted with.
+      var appliedOptions = bootOptions;
+      var appliedDiffOptions = bootDiffOptions;
       if (!usedInternalCreate) {
-        await _controller!.updateOptions(widget.options);
-        await _controller!.updateDiffOptions(widget.diffOptions);
+        appliedOptions = widget.options;
+        appliedDiffOptions = widget.diffOptions;
+        await _controller!.updateOptions(appliedOptions);
+        await _controller!.updateDiffOptions(appliedDiffOptions);
         final resolvedTheme = _resolveTheme();
         _appliedResolvedTheme = resolvedTheme;
         await _controller!.setTheme(resolvedTheme);
@@ -314,6 +327,25 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
         }
       }
 
+      // Option/diff-option/theme props may have changed while the boot was
+      // in flight (didUpdateWidget cannot see them during `connecting`);
+      // apply the delta before reporting ready. Texts are reconciled by
+      // _syncTexts below.
+      if (widget.options != appliedOptions) {
+        await _controller!.updateOptions(widget.options);
+      }
+      if (widget.diffOptions != appliedDiffOptions) {
+        await _controller!.updateDiffOptions(widget.diffOptions);
+      }
+      final reconciledTheme = _resolveTheme();
+      if (reconciledTheme != _appliedResolvedTheme) {
+        _appliedResolvedTheme = reconciledTheme;
+        await _controller!.setTheme(reconciledTheme);
+      }
+      if (!_isBootstrapCurrent(bootstrapToken)) {
+        return;
+      }
+
       _wireScrollHandoff();
       _syncScrollHandoffSources();
 
@@ -321,18 +353,39 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
       // Content props may have changed while the boot was in flight;
       // re-apply the delta now that didUpdateWidget can no longer see it.
       _syncTexts();
-      widget.onReady?.call(_controller!);
+      _invokeOnReady();
     } catch (e, st) {
       if (!_isBootstrapCurrent(bootstrapToken)) return;
       // Boot failures render the error surface; onError is informed when
       // set, but there is no FlutterError fallback - the failure is
-      // already visible.
+      // already visible. An owned controller is disposed here (matching
+      // MonacoEditor) instead of leaking its WebView until retry/dispose.
       widget.onError?.call(e, st);
+      _teardown(disposeOldController: _ownsController);
       setState(() {
         _connectionState = _DiffConnectionState.error;
         _error = e;
         _stack = st;
       });
+    }
+  }
+
+  /// An application onReady exception is not an editor boot failure: report
+  /// it through FlutterError and leave the healthy diff editor alone.
+  void _invokeOnReady() {
+    final callback = widget.onReady;
+    if (callback == null) return;
+    try {
+      callback(_controller!);
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'flutter_monaco',
+          context: ErrorDescription('while calling MonacoDiffEditor.onReady'),
+        ),
+      );
     }
   }
 
@@ -372,19 +425,29 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
     );
   }
 
-  /// Pushes the desired handoff sources to the diff page when they differ
-  /// from what was last pushed. A disabled config therefore produces no
-  /// bridge traffic at all.
+  /// Pushes the desired handoff sources and boundary policy to the diff
+  /// page when they differ from what was last pushed. A disabled config
+  /// therefore produces no bridge traffic at all.
   void _syncScrollHandoffSources() {
     final controller = _controller;
     if (controller == null) return;
     final wheel = widget.scrollHandoff.wheelSourceEnabled;
     final touch = widget.scrollHandoff.touchSourceEnabled;
-    if (wheel == _syncedWheelSource && touch == _syncedTouchSource) return;
+    final policy = widget.scrollHandoff.policy;
+    if (wheel == _syncedWheelSource &&
+        touch == _syncedTouchSource &&
+        policy == _syncedPolicy) {
+      return;
+    }
     _syncedWheelSource = wheel;
     _syncedTouchSource = touch;
+    _syncedPolicy = policy;
     _ignoreAsync(
-      controller.setScrollHandoffSources(wheel: wheel, touch: touch),
+      controller.setScrollHandoffSources(
+        wheel: wheel,
+        touch: touch,
+        policy: policy,
+      ),
     );
   }
 
@@ -425,6 +488,7 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
     }
     _syncedWheelSource = false;
     _syncedTouchSource = false;
+    _syncedPolicy = MonacoScrollBoundaryPolicy.newGestureOnly;
     _scrollHandoffDriver.clearPending();
     if (disposeOldController) {
       controller?.dispose();

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -1603,6 +1605,218 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(themeDispatches(bundle.webview).length, dispatchCount);
+      });
+    });
+
+    group('boot-error isolation (onReady)', () {
+      testWidgets('a throwing onReady does not destroy a healthy editor', (
+        tester,
+      ) async {
+        final bundle = await _createBundle();
+        final reported = <FlutterErrorDetails>[];
+        final oldHandler = FlutterError.onError;
+        FlutterError.onError = reported.add;
+        addTearDown(() => FlutterError.onError = oldHandler);
+
+        await tester.pumpWidget(
+          _wrap(
+            MonacoEditor(
+              controller: bundle.controller,
+              onReady: (_) => throw StateError('app bug in onReady'),
+              errorBuilder: (context, error, st) => const Text('ERROR-UI'),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The editor stays alive and ready; the app bug is reported through
+        // FlutterError instead of tearing the editor down.
+        expect(find.text('ERROR-UI'), findsNothing);
+        expect(find.byKey(const Key('webview')), findsOneWidget);
+        expect(
+          reported.map((d) => d.exception.toString()).join(),
+          contains('app bug in onReady'),
+        );
+      });
+    });
+
+    group('boot-time desired-state reconciliation', () {
+      testWidgets('options changed during boot are applied before ready', (
+        tester,
+      ) async {
+        final bundle = await _createBundle(ready: false);
+        Future<MonacoController> factory() async => bundle.controller;
+
+        await tester.pumpWidget(
+          _wrap(
+            MonacoEditor(
+              controllerFactory: factory,
+              options: const EditorOptions(fontSize: 14),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // Hold the post-ready apply open so the widget rebuild lands while
+        // the bootstrap is still in flight (didUpdateWidget drops it).
+        bundle.webview.autoRespond = false;
+        bundle.controller.completeReadyForTesting();
+        await tester.pump();
+
+        await tester.pumpWidget(
+          _wrap(
+            MonacoEditor(
+              controllerFactory: factory,
+              options: const EditorOptions(fontSize: 22),
+            ),
+          ),
+        );
+
+        // Answer every pending dispatch until the bootstrap settles.
+        var answered = 0;
+        var idle = 0;
+        while (idle < 5) {
+          if (answered < bundle.webview.dispatched.length) {
+            final call = bundle.webview.dispatched[answered++];
+            bundle.webview.emitToChannel(
+              'flutterChannel',
+              jsonEncode({
+                'v': 3,
+                'kind': 'response',
+                'id': call['id'],
+                'ok': true,
+                'undefined': true,
+                'value': null,
+              }),
+            );
+            idle = 0;
+          } else {
+            idle++;
+          }
+          await tester.pump();
+        }
+
+        final optionUpdates = bundle.webview.dispatched
+            .where((d) => d['method'] == 'editor.updateOptions')
+            .map((d) => (d['params']! as Map)['options']! as Map)
+            .toList();
+        expect(
+          optionUpdates.any((o) => o['fontSize'] == 22),
+          isTrue,
+          reason:
+              'the fontSize set during boot must be reconciled before ready; '
+              'saw: $optionUpdates',
+        );
+      });
+    });
+
+    group('background color reset', () {
+      testWidgets('clearing backgroundColor restores the resolved default', (
+        tester,
+      ) async {
+        final bundle = await _createBundle();
+
+        await tester.pumpWidget(
+          _wrap(
+            MonacoEditor(
+              controller: bundle.controller,
+              backgroundColor: const Color(0xFFFF0000),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        bundle.webview.dispatched.clear();
+
+        await tester.pumpWidget(
+          _wrap(MonacoEditor(controller: bundle.controller)),
+        );
+        await tester.pumpAndSettle();
+
+        final backgroundCalls = bundle.webview.dispatched
+            .where((d) => d['method'] == 'page.setBackground')
+            .map((d) => ((d['params']! as Map)['color']).toString())
+            .toList();
+        expect(
+          backgroundCalls,
+          isNotEmpty,
+          reason:
+              'null backgroundColor must restore the default, '
+              'not keep the stale red',
+        );
+        expect(backgroundCalls.last, contains('rgba(255, 255, 255'));
+      });
+    });
+
+    group('content pulls across controller swaps', () {
+      testWidgets('a stale pull from a replaced controller never emits', (
+        tester,
+      ) async {
+        final bundleA = await _createBundle();
+        final bundleB = await _createBundle();
+        final received = <String>[];
+
+        await tester.pumpWidget(
+          _wrap(
+            MonacoEditor(
+              controller: bundleA.controller,
+              contentDebounce: Duration.zero,
+              onContentChanged: received.add,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Block controller A's getText pull, then trigger it.
+        bundleA.webview.autoRespond = false;
+        bundleA.webview.emitToChannel(
+          'flutterChannel',
+          jsonEncode({
+            'v': 3,
+            'kind': 'event',
+            'seq': 1,
+            'name': 'contentChanged',
+            'data': {
+              'uri': null,
+              'isFlush': false,
+              'truncated': false,
+              'changes': <Object?>[],
+            },
+          }),
+        );
+        await tester.pump(Duration.zero);
+        await tester.pump();
+
+        final pull = bundleA.webview.dispatched.lastWhere(
+          (d) => d['method'] == 'document.getText',
+        );
+
+        // Swap to controller B while A's pull is still in flight.
+        await tester.pumpWidget(
+          _wrap(
+            MonacoEditor(
+              controller: bundleB.controller,
+              contentDebounce: Duration.zero,
+              onContentChanged: received.add,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // A's pull now completes with stale text.
+        bundleA.webview.emitToChannel(
+          'flutterChannel',
+          jsonEncode({
+            'v': 3,
+            'kind': 'response',
+            'id': pull['id'],
+            'ok': true,
+            'undefined': false,
+            'value': 'stale text from A',
+          }),
+        );
+        await tester.pumpAndSettle();
+
+        expect(received, isNot(contains('stale text from A')));
       });
     });
   });

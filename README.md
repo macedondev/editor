@@ -109,7 +109,7 @@ Leave `EditorOptions.theme` unset and the editor follows your app's brightness (
 
 ### Using the controller directly
 
-`MonacoController.create` returns immediately on every platform; await `whenReady` before treating the editor as live. Content and model operations live on `controller.document`; editor-level operations (theme, actions, view state, focus) stay on the controller.
+`MonacoController.create` returns before the editor is ready (asset preparation and WebView setup are still awaited); await `whenReady` before treating the editor as live. Content and model operations live on `controller.document`; editor-level operations (theme, actions, view state, focus) stay on the controller.
 
 ```dart
 final controller = await MonacoController.create(
@@ -506,12 +506,20 @@ SingleChildScrollView(
 
 Behavior with `MonacoScrollHandoff.edge()`:
 
-- A scrollable editor consumes the wheel until its top/bottom edge, then the page continues scrolling; reversing direction immediately returns the wheel to the editor.
-- A non-scrollable editor (short snippet) hands everything off, so the page scrolls straight through it.
+- A scrollable editor consumes the wheel until its top/bottom edge. The gesture that reaches the edge **stops there**: its remaining input, trackpad momentum included, is absorbed like a native nested scroll "wall" and never jerks the page. To scroll the page, stop and start a new gesture while the editor is at its edge; reversing direction immediately returns the wheel to the editor.
+- A non-scrollable editor (short snippet) hands new gestures straight to the page, so the page scrolls through it.
 - The delta goes to the explicit `controller` if provided, otherwise to the nearest enclosing vertical `Scrollable` (`useNearestScrollable: true` by default). Provide `onHandoff` and return `true` to consume deltas yourself.
 - Ctrl/meta wheel (editor `mouseWheelZoom`, browser zoom, macOS pinch) is never handed off, and Monaco-owned scrollable overlays (suggest list, hover docs, menus, peek editors) keep their own wheel handling.
 - `scrollBeyondLastLine` blank space counts as editor-scrollable; set it to `false` in `EditorOptions` if you want handoff to begin at the real last line.
 - Multiple editors route independently: each editor forwards only to its own configured target.
+
+The boundary behavior is a policy. `MonacoScrollBoundaryPolicy.newGestureOnly` (the default since 3.3.0) gives the native wall feel described above; `MonacoScrollBoundaryPolicy.continuous` restores the pre-3.3 behavior where every unconsumed delta chains to the page immediately, mid-gesture:
+
+```dart
+MonacoScrollHandoff.edge(
+  policy: MonacoScrollBoundaryPolicy.continuous, // opt out of the wall
+)
+```
 
 Headless / custom-widget integrations can skip the widget wiring and consume the stream directly:
 
@@ -526,7 +534,7 @@ controller.onScrollHandoff.listen((details) {
 
 This is **edge scroll handoff, not native nested scrolling**. Monaco lives inside a WebView/iframe, so the platform gesture itself never enters Flutter's gesture arena; the package forwards the unconsumed scroll intent across the bridge instead. Wheel and trackpad input is the stable, supported source on macOS, Windows, and desktop web (plus external mice on mobile where the WebView reports wheel events).
 
-Touch forwarding is a separate, **experimental** opt-in (`mobileTouch: true`). It is observation-only: it never blocks Monaco's own touch handling, never opens the keyboard, and yields to text selection, but there is no native momentum or fling transfer, and iOS Safari on Flutter Web remains best-effort.
+Touch forwarding is a separate, **experimental** opt-in (`mobileTouch: true`). It is observation-only: it never blocks Monaco's own touch handling, never opens the keyboard, and yields to text selection, but there is no native momentum or fling transfer, and iOS Safari on Flutter Web remains best-effort. Under the default boundary policy a drag that starts over scrollable editor content belongs to the editor for its whole lifetime (it is contained at the edge); only a drag that starts while the editor is already at the edge scrolls the page.
 
 See `example/lib/scroll_handoff_example.dart` for a full page with short, long, and handoff-disabled editors.
 
@@ -562,7 +570,7 @@ See `example/lib/scroll_handoff_example.dart` for a full page with short, long, 
 | `setDecorations/addInlineDecorations/addLineDecorations/clearDecorations` | `createDecorationSet()` + `set/clear/dispose` | one set per concern; `DecorationOptions.inlineClass/line` factories unchanged |
 | `createModel/setModel/disposeModel/listModels` | `openDocument/activateDocument/document.close()/listDocuments` | |
 | `format()/find()/replace()/toggleWordWrap()/selectAll()/undo()/redo()/cut()/copy()/paste()/foldAll()/unfoldAll()/toggleLineComment()/indentLines()/outdentLines()` | deleted (D19) | `executeAction(.formatDocument)`, `.find` -> `MonacoAction.find`, replace -> `.startFindReplaceAction`, toggleLineComment -> `.commentLine`, others map to the same-named `MonacoAction` constants |
-| `focus()` / `ensureEditorFocus({attempts, interval, intent})` | `requestFocus({intent})` (D20) | attempts/interval internalized (same defaults) |
+| `focus()` / `ensureEditorFocus({attempts, interval, intent})` | `requestFocus({intent})` (D20) | retry tuning stays available as optional parameters (same defaults) |
 | `releaseNativeInputFocus()` | `releaseNativeFocus()` | rename |
 | `liveStats` (`ValueNotifier<LiveStats>`) | `stats` (`ValueListenable<MonacoLiveStats>`) | labels moved to UI; `.value.lineCount` is now an `int` |
 | `getStatistics()` | `stats.value` | |
@@ -572,7 +580,7 @@ See `example/lib/scroll_handoff_example.dart` for a full page with short, long, 
 | `saveViewState(): Map` / `restoreViewState(Map)` | `captureViewState(): MonacoViewState` / `restoreViewState(MonacoViewState)` | persist via `toJson()` |
 | `evaluateJavaScript` / `runJavaScript` / `runJavaScriptReturningResultRaw` | unchanged | |
 | `registerCompletionSource(...): Future<String>` / `unregisterCompletionSource(id)` | `registerCompletions(...): Future<MonacoCompletionRegistration>` / `registration.dispose()`; `languages` is now `List<MonacoLanguage>` | |
-| `create({options, customCss, allowCdnFonts, allowedConnectSources, readyTimeout})` | `create({options, initialText, page, readyTimeout})`; returns immediately, use `whenReady` (D05) | native callers relying on blocking create: `final c = await MonacoController.create(...); await c.whenReady;` |
+| `create({options, customCss, allowCdnFonts, allowedConnectSources, readyTimeout})` | `create({options, initialText, page, readyTimeout})`; returns before readiness, use `whenReady` (D05) | native callers relying on blocking create: `final c = await MonacoController.create(...); await c.whenReady;` |
 | `onReady` future getter | `whenReady` | rename |
 | `MonacoEditor.initialValue` | `MonacoEditor.initialText` | rename |
 | `MonacoEditor.customCss/allowCdnFonts/allowedConnectSources` | `MonacoEditor.page: MonacoPageConfig` | wrap |
@@ -618,7 +626,7 @@ Closed sets stay enums: `CursorBlinking`, `CursorStyle`, `RenderWhitespace`, `Au
 ### MonacoController
 
 ```dart
-// Lifecycle: create returns immediately on every platform.
+// Lifecycle: create returns before the editor is ready.
 final controller = await MonacoController.create();
 await controller.whenReady;
 print(controller.isReady);                      // true
@@ -1186,7 +1194,7 @@ class _MyEditorState extends State<MyEditor> {
 This pattern works on all platforms and is the recommended approach. The `MonacoEditor` widget handles controller lifecycle internally and provides the controller via `onReady` callback once initialized.
 
 **Why this matters on web:**
-- `MonacoController.create()` returns immediately on every platform; readiness is signaled by `controller.whenReady`
+- `MonacoController.create()` returns before the editor is ready; readiness is signaled by `controller.whenReady`
 - The iframe must be attached to the DOM for Monaco JS to initialize, so `whenReady` cannot complete until the editor's widget is in the tree
 - Awaiting `whenReady` in `initState` (before `build`) will therefore time out
 - The `MonacoEditor` widget sequences attachment, boot, and readiness for you
