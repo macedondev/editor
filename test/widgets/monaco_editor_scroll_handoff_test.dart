@@ -39,6 +39,27 @@ void _emitHandoff(
   });
 }
 
+void _emitSessionHandoff(
+  FakePlatformWebViewController webview, {
+  required String phase,
+  required int gestureId,
+  double deltaY = 0,
+  bool momentum = false,
+}) {
+  webview.emitEvent('scrollHandoff', {
+    'source': 'wheel',
+    'phase': phase,
+    'gestureId': gestureId,
+    'momentum': momentum,
+    'deltaX': 0,
+    'deltaY': deltaY,
+    'atTop': false,
+    'atBottom': true,
+    'atLeft': true,
+    'atRight': true,
+  });
+}
+
 /// Delivers pending broadcast-stream events, then runs the coalescing
 /// frame callback.
 Future<void> _settleHandoff(WidgetTester tester) async {
@@ -475,6 +496,240 @@ void main() {
 
       _emitHandoff(bundle.webview, deltaY: 50);
       await _settleHandoff(tester);
+      expect(scrollController.offset, 50);
+    });
+
+    testWidgets('sessionized begin and update deltas accumulate and scroll', (
+      tester,
+    ) async {
+      final bundle = await _createBundle();
+      addTearDown(bundle.controller.dispose);
+      final scrollController = ScrollController();
+      addTearDown(scrollController.dispose);
+
+      await tester.pumpWidget(
+        _editorInScrollView(
+          controller: bundle.controller,
+          scrollController: scrollController,
+          scrollHandoff: const MonacoScrollHandoff.edge(),
+        ),
+      );
+      await tester.pump();
+
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'begin',
+        gestureId: 7,
+        deltaY: 20,
+      );
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'update',
+        gestureId: 7,
+        deltaY: 30,
+      );
+      await _settleHandoff(tester);
+
+      expect(scrollController.offset, 50);
+    });
+
+    testWidgets('updates from a stale or unknown gesture never scroll', (
+      tester,
+    ) async {
+      final bundle = await _createBundle();
+      addTearDown(bundle.controller.dispose);
+      final scrollController = ScrollController();
+      addTearDown(scrollController.dispose);
+
+      await tester.pumpWidget(
+        _editorInScrollView(
+          controller: bundle.controller,
+          scrollController: scrollController,
+          scrollHandoff: const MonacoScrollHandoff.edge(),
+        ),
+      );
+      await tester.pump();
+
+      // No begin was ever seen for gesture 3.
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'update',
+        gestureId: 3,
+        deltaY: 50,
+      );
+      await _settleHandoff(tester);
+      expect(scrollController.offset, 0);
+
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'begin',
+        gestureId: 7,
+        deltaY: 20,
+      );
+      await _settleHandoff(tester);
+      expect(scrollController.offset, 20);
+
+      // Gesture 3 is stale now too: only 7 may move the host.
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'update',
+        gestureId: 3,
+        deltaY: 40,
+      );
+      await _settleHandoff(tester);
+      expect(scrollController.offset, 20);
+    });
+
+    testWidgets('cancel drops deltas that have not been applied yet', (
+      tester,
+    ) async {
+      final bundle = await _createBundle();
+      addTearDown(bundle.controller.dispose);
+      final scrollController = ScrollController();
+      addTearDown(scrollController.dispose);
+
+      await tester.pumpWidget(
+        _editorInScrollView(
+          controller: bundle.controller,
+          scrollController: scrollController,
+          scrollHandoff: const MonacoScrollHandoff.edge(),
+        ),
+      );
+      await tester.pump();
+
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'begin',
+        gestureId: 7,
+        deltaY: 40,
+      );
+      _emitSessionHandoff(bundle.webview, phase: 'cancel', gestureId: 7);
+      await _settleHandoff(tester);
+
+      expect(scrollController.offset, 0);
+    });
+
+    testWidgets('end keeps deltas that were already accumulated', (
+      tester,
+    ) async {
+      final bundle = await _createBundle();
+      addTearDown(bundle.controller.dispose);
+      final scrollController = ScrollController();
+      addTearDown(scrollController.dispose);
+
+      await tester.pumpWidget(
+        _editorInScrollView(
+          controller: bundle.controller,
+          scrollController: scrollController,
+          scrollHandoff: const MonacoScrollHandoff.edge(),
+        ),
+      );
+      await tester.pump();
+
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'begin',
+        gestureId: 7,
+        deltaY: 40,
+      );
+      _emitSessionHandoff(bundle.webview, phase: 'end', gestureId: 7);
+      await _settleHandoff(tester);
+
+      expect(scrollController.offset, 40);
+    });
+
+    testWidgets('a new begin supersedes the previous session', (tester) async {
+      final bundle = await _createBundle();
+      addTearDown(bundle.controller.dispose);
+      final scrollController = ScrollController();
+      addTearDown(scrollController.dispose);
+
+      await tester.pumpWidget(
+        _editorInScrollView(
+          controller: bundle.controller,
+          scrollController: scrollController,
+          scrollHandoff: const MonacoScrollHandoff.edge(),
+        ),
+      );
+      await tester.pump();
+
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'begin',
+        gestureId: 7,
+        deltaY: 40,
+      );
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'begin',
+        gestureId: 8,
+        deltaY: 10,
+      );
+      await _settleHandoff(tester);
+      expect(
+        scrollController.offset,
+        10,
+        reason: 'unapplied deltas of gesture 7 die with it',
+      );
+
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'update',
+        gestureId: 7,
+        deltaY: 100,
+      );
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'update',
+        gestureId: 8,
+        deltaY: 5,
+      );
+      await _settleHandoff(tester);
+      expect(scrollController.offset, 15);
+    });
+
+    testWidgets('onHandoff sees payload phases but not lifecycle phases', (
+      tester,
+    ) async {
+      final bundle = await _createBundle();
+      addTearDown(bundle.controller.dispose);
+      final scrollController = ScrollController();
+      addTearDown(scrollController.dispose);
+      final phases = <MonacoScrollHandoffPhase>[];
+
+      await tester.pumpWidget(
+        _editorInScrollView(
+          controller: bundle.controller,
+          scrollController: scrollController,
+          scrollHandoff: MonacoScrollHandoff.edge(
+            onHandoff: (details) {
+              phases.add(details.phase);
+              return false;
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'begin',
+        gestureId: 7,
+        deltaY: 20,
+      );
+      _emitSessionHandoff(
+        bundle.webview,
+        phase: 'update',
+        gestureId: 7,
+        deltaY: 30,
+      );
+      _emitSessionHandoff(bundle.webview, phase: 'end', gestureId: 7);
+      await _settleHandoff(tester);
+
+      expect(phases, [
+        MonacoScrollHandoffPhase.begin,
+        MonacoScrollHandoffPhase.update,
+      ]);
       expect(scrollController.offset, 50);
     });
 
