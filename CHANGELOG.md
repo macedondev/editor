@@ -5,7 +5,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.3.0] - 2026-07-10
 
-Correctness release driven by an external architecture audit of v3: two release-blocking fixes (dirty tracking, boot-error propagation), a set of lifecycle repairs, and small API additions. No public API is removed.
+Two independent improvements in one release. Correctness fixes driven by an external architecture audit of v3: two release-blocking fixes (dirty tracking, boot-error propagation), a set of lifecycle repairs, and small API additions; no public API is removed. And edge scroll handoff gains native nested-scroll boundary behavior: the gesture that reaches the editor's scroll edge stops there instead of jerking the surrounding page.
 
 ### Fixed
 - **Dirty tracking no longer misses the first edit.** Dirty baselines were created lazily on the first `isDirty()` query, so querying after the first edit recorded the already-edited version as "clean" and returned `false` - the exact pattern of updating a dirty marker from `onContentChanged`. Every document (the boot document and each `openDocument`) is now baselined at creation.
@@ -28,12 +28,16 @@ Correctness release driven by an external architecture audit of v3: two release-
 - **`MonacoViewState` is now truly value-typed:** `toJson()` returns an independent deep copy and equality/hashCode are deep over nested payloads.
 
 ### Changed
+- **Edge scroll handoff absorbs a gesture's remaining momentum at the editor's scroll boundary.** A wheel/trackpad gesture that starts inside the editor now stops dead at the edge, inertial tail included; the host page scrolls only when a physically distinct gesture starts while the editor is already at its edge. Reversing direction still hands input back to the editor immediately. This is the new default (`MonacoScrollBoundaryPolicy.newGestureOnly`); restore the previous unconsumed-delta chaining with `MonacoScrollHandoff.edge(policy: MonacoScrollBoundaryPolicy.continuous)` or the `policy` parameter of `setScrollHandoffSources`.
+- Experimental touch forwarding under the default policy decides ownership once per drag: a drag that starts over scrollable editor content belongs to the editor for its whole lifetime (contained at the edge), and only a drag that starts at an outward edge scrolls the host.
 - **`MonacoDiffController.getLineChangeCount` is loud about an uncomputed diff:** when Monaco has not finished computing (throttled/offscreen views) it throws `MonacoTimeoutError` instead of silently returning `0`, so zero always means a real "no changes" result. `diff.getState` reports the pending state as a `null` count.
 - **`MonacoDocument.lineAt` is strict:** reading a line beyond the end of the document now throws instead of silently clamping to the last line. The ranged `getLines` keeps its documented clamping.
 - **Content-change events also truncate on change count:** deltas are omitted (with `truncated: true`) for events carrying more than 1000 individual changes, not only for 64 KiB of inserted text - multi-cursor edit storms previously shipped unbounded envelopes.
 - **`LanguageServerConnection.disconnect()` now completes only after a bridged transport's `onClose` finished** - for `LspServerProcess`, that means the local server process has exited.
 
 ### Added
+- `MonacoScrollBoundaryPolicy` (`newGestureOnly` | `continuous`) on `MonacoScrollHandoff.edge` and on `setScrollHandoffSources` of both controllers.
+- Host-owned handoff gestures arrive sessionized: `MonacoScrollHandoffDetails` gains `phase` (`begin`/`update`/`end`/`cancel` via `MonacoScrollHandoffPhase`), `gestureId`, and `momentum`. The built-in scrolling applies updates only for the gesture it saw begin, so stale deltas can never move the host; custom `onScrollHandoff` consumers can enforce the same rule. Payloads without session fields keep working unchanged.
 - **`MonacoCapabilities.raw` and `supports(String)`**: the verbatim capability strings from the page handshake, so apps can feature-gate capabilities this package version has no typed field for.
 - **`FindOptions.searchOnlyEditableRange` and `limitResultCount` are now honored** by `findMatches`/`replaceMatches` (they previously serialized but had no effect); `limitResultCount` composes with the `limit` parameter as the smaller cap.
 - **`MonacoPageConfig.stableCacheKey()`**: a process-stable digest of the page configuration.

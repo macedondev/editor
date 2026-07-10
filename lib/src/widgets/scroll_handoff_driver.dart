@@ -29,7 +29,16 @@ class ScrollHandoffDriver {
   double _pendingDelta = 0;
   bool _frameScheduled = false;
 
-  /// Handles one forwarded delta from the editor page.
+  /// The gestureId whose deltas may move the host, or `null` when no
+  /// sessionized gesture is active. The legacy id `0` (continuous policy or
+  /// a pre-3.3 page) bypasses the gate entirely.
+  int? _activeGestureId;
+
+  /// Handles one forwarded handoff message from the editor page.
+  ///
+  /// Session bookkeeping happens for every message; only payload-bearing
+  /// phases (begin/update) can reach [MonacoScrollHandoff.onHandoff] and the
+  /// built-in scrolling.
   void handle(MonacoScrollHandoffDetails details) {
     final config = _config();
     if (!config.isEnabled) return;
@@ -39,8 +48,32 @@ class ScrollHandoffDriver {
     };
     if (!sourceEnabled) return;
 
-    // The callback sees every raw delta; coalescing below only affects the
-    // built-in parent scrolling.
+    switch (details.phase) {
+      case MonacoScrollHandoffPhase.begin:
+        // A new host-owned gesture supersedes whatever came before it,
+        // including deltas of the old gesture still waiting for a frame.
+        _activeGestureId = details.gestureId;
+        _pendingDelta = 0;
+      case MonacoScrollHandoffPhase.update:
+        // Only the active gesture may move the host. Id 0 is the
+        // unsessionized legacy stream and is always live.
+        final stale =
+            details.gestureId != 0 && details.gestureId != _activeGestureId;
+        if (stale) return;
+      case MonacoScrollHandoffPhase.end:
+        // The gesture is over; deltas it already accumulated still apply.
+        if (details.gestureId == _activeGestureId) _activeGestureId = null;
+        return;
+      case MonacoScrollHandoffPhase.cancel:
+        if (details.gestureId == _activeGestureId) {
+          _activeGestureId = null;
+          _pendingDelta = 0;
+        }
+        return;
+    }
+
+    // The callback sees every payload delta; coalescing below only affects
+    // the built-in parent scrolling.
     final onHandoff = config.onHandoff;
     if (onHandoff != null && onHandoff(details)) return;
 
@@ -49,10 +82,12 @@ class ScrollHandoffDriver {
     _scheduleFlush();
   }
 
-  /// Drops any accumulated delta; call when the controller goes away so a
-  /// pending flush cannot scroll on behalf of a dead editor.
+  /// Drops any accumulated delta and forgets the active gesture; call when
+  /// the controller goes away so a pending flush cannot scroll on behalf of
+  /// a dead editor.
   void clearPending() {
     _pendingDelta = 0;
+    _activeGestureId = null;
   }
 
   /// Coalesces high-frequency bridge deltas into one scroll application per

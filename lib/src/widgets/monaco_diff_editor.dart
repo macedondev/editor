@@ -137,10 +137,13 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
   );
   StreamSubscription<MonacoScrollHandoffDetails>? _scrollHandoffSub;
 
-  /// The handoff sources last pushed to the diff page, so config rebuilds
-  /// only produce bridge traffic when the effective sources change.
+  /// The handoff sources and boundary policy last pushed to the diff page,
+  /// so config rebuilds only produce bridge traffic when the effective
+  /// configuration changes.
   bool _syncedWheelSource = false;
   bool _syncedTouchSource = false;
+  MonacoScrollBoundaryPolicy _syncedPolicy =
+      MonacoScrollBoundaryPolicy.newGestureOnly;
 
   /// The texts/language last pushed to (or booted into) the controller, so
   /// prop changes that land during the connecting window are re-applied at
@@ -422,19 +425,29 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
     );
   }
 
-  /// Pushes the desired handoff sources to the diff page when they differ
-  /// from what was last pushed. A disabled config therefore produces no
-  /// bridge traffic at all.
+  /// Pushes the desired handoff sources and boundary policy to the diff
+  /// page when they differ from what was last pushed. A disabled config
+  /// therefore produces no bridge traffic at all.
   void _syncScrollHandoffSources() {
     final controller = _controller;
     if (controller == null) return;
     final wheel = widget.scrollHandoff.wheelSourceEnabled;
     final touch = widget.scrollHandoff.touchSourceEnabled;
-    if (wheel == _syncedWheelSource && touch == _syncedTouchSource) return;
+    final policy = widget.scrollHandoff.policy;
+    if (wheel == _syncedWheelSource &&
+        touch == _syncedTouchSource &&
+        policy == _syncedPolicy) {
+      return;
+    }
     _syncedWheelSource = wheel;
     _syncedTouchSource = touch;
+    _syncedPolicy = policy;
     _ignoreAsync(
-      controller.setScrollHandoffSources(wheel: wheel, touch: touch),
+      controller.setScrollHandoffSources(
+        wheel: wheel,
+        touch: touch,
+        policy: policy,
+      ),
     );
   }
 
@@ -475,6 +488,7 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
     }
     _syncedWheelSource = false;
     _syncedTouchSource = false;
+    _syncedPolicy = MonacoScrollBoundaryPolicy.newGestureOnly;
     _scrollHandoffDriver.clearPending();
     if (disposeOldController) {
       controller?.dispose();

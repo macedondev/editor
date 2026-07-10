@@ -53,6 +53,7 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
   bool _handoffEnabled = true;
   bool _mobileTouch = false;
   bool _scrollBeyondLastLine = true;
+  bool _continuousChaining = false;
   MonacoScrollHandoffDetails? _lastHandoff;
 
   static final String _shortSnippet = [
@@ -83,6 +84,11 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
     return MonacoScrollHandoff.edge(
       controller: _pageScrollController,
       mobileTouch: _mobileTouch,
+      // newGestureOnly (default) absorbs a gesture's momentum at the
+      // editor edge; continuous lets it spill into the page mid-gesture.
+      policy: _continuousChaining
+          ? MonacoScrollBoundaryPolicy.continuous
+          : MonacoScrollBoundaryPolicy.newGestureOnly,
       onHandoff: (details) {
         // Observe only: returning false keeps the built-in page scrolling.
         if (_lastHandoff != details) {
@@ -125,6 +131,13 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
                 : null,
           ),
           _ToggleAction(
+            label: 'Continuous chaining',
+            value: _continuousChaining,
+            onChanged: _handoffEnabled
+                ? (value) => setState(() => _continuousChaining = value)
+                : null,
+          ),
+          _ToggleAction(
             label: 'scrollBeyondLastLine',
             value: _scrollBeyondLastLine,
             onChanged: (value) => setState(() => _scrollBeyondLastLine = value),
@@ -149,10 +162,13 @@ class _ScrollHandoffExamplePageState extends State<ScrollHandoffExamplePage> {
                         'Scroll this page with the wheel or trackpad. With '
                         'handoff enabled, the pointer can stay over an '
                         'editor: Monaco scrolls while it has somewhere to '
-                        'go and the page continues once the editor hits '
-                        'its edge. Reversing direction gives the wheel '
-                        'back to the editor. Ctrl/meta wheel (zoom) and '
-                        'Monaco popups are never handed off.',
+                        'go, and the gesture that reaches its edge stops '
+                        'there, momentum included. Start a new gesture at '
+                        'the edge to continue into the page (or enable '
+                        'continuous chaining to spill mid-gesture, the '
+                        'pre-3.3 behavior). Reversing direction gives the '
+                        'wheel back to the editor. Ctrl/meta wheel (zoom) '
+                        'and Monaco popups are never handed off.',
                   ),
                   const SizedBox(height: 16),
                   _EditorCard(

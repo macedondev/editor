@@ -151,9 +151,11 @@ export 'src/types/markers.dart'
     show MarkerData, MarkerSeverity, RelatedInformation;
 export 'src/types/scroll_handoff.dart'
     show
+        MonacoScrollBoundaryPolicy,
         MonacoScrollHandoff,
         MonacoScrollHandoffDetails,
         MonacoScrollHandoffMode,
+        MonacoScrollHandoffPhase,
         MonacoScrollHandoffSource;
 export 'src/types/stats.dart' show EditorState, MonacoLiveStats;
 export 'src/types/text.dart'
