@@ -78,7 +78,7 @@ jobs:
       - name: node --check every bridge script
         run: find assets/monaco/bridge -name '*.js' -print -exec node --check {} +
       - name: Execute the real bridge against the Monaco stub
-        run: node --test tool/bridge_tests/editor_api_test.mjs
+        run: node --test tool/bridge_tests/*_test.mjs
 
   pana:
     name: Pana

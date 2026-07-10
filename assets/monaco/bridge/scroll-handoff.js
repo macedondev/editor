@@ -1,30 +1,61 @@
-// flutter_monaco bridge - extracted verbatim from the 2.3.0 generated page
-// (lib/src/core/monaco_assets.dart generateIndexHtml). Do not reformat the
-// ported bodies; see upcoming/v3.md Section 14 (verbatim-port inventory).
+// flutter_monaco bridge - the scroll metrics, region filtering, and listener
+// plumbing here are extracted verbatim from the 2.3.0 generated page
+// (lib/src/core/monaco_assets.dart generateIndexHtml); see upcoming/v3.md
+// Section 14 (verbatim-port inventory). The gesture-ownership arbitration
+// ("boundary lock", 3.4.0) intentionally diverges from the 2.3.0 forwarding
+// behavior; the 2.3.0 semantics remain available as the 'continuous' policy.
 /* eslint-disable */
 'use strict';
 window.__FMB = window.__FMB || {};
 
-// Edge scroll handoff module. VERBATIM PORT, extended for diff pages:
+// Edge scroll handoff module, extended for diff pages:
 // ctx.handoffScope (optional) widens the accepted wheel region to a set of
 // editor DOM nodes under one region root, while ctx.E stays the vertical
 // scroll master whose metrics gate the handoff. Without a scope the region
-// is exactly the single editor, byte-for-byte the 2.3.0 behavior.
+// is exactly the single editor.
 window.__FMB.scrollHandoff = function (ctx) {
   const { E, post } = ctx;
   const handoffScope = ctx.handoffScope || null;
-                // Edge scroll handoff (opt-in): forward scroll deltas the
-                // editor cannot consume to Flutter, which applies them to a
+                // Edge scroll handoff (opt-in): forward scroll intent the
+                // editor cannot consume to Flutter, which applies it to a
                 // host scrollable. Sources are toggled from Dart through
                 // flutterMonaco.setScrollHandoff; while disabled this module
                 // installs no DOM listeners and adds no per-event work, so
                 // the default editor behavior is untouched.
+                //
+                // Ownership model (policy 'newGestureOnly', the default):
+                // the component that owns a scroll transaction when it
+                // begins keeps it until that transaction ends. A gesture
+                // that starts while the editor can scroll belongs to the
+                // editor; when it reaches the scroll edge, its remaining
+                // input - the whole inertial tail included - is absorbed at
+                // the wall and never forwarded. Flutter receives only
+                // transactions that START at the edge, as begin/update/end
+                // sessions keyed by gestureId. Policy 'continuous' keeps
+                // the 2.3.0 chaining: any delta the editor cannot consume
+                // is forwarded immediately, with the legacy payload shape.
                 (function () {
                   const EDGE_EPSILON = 1;
                   const TOUCH_SLOP = 8;
+                  // Wheel events carry no transaction boundaries (beyond
+                  // the Pointer Events level 4 'momentum' flag where a
+                  // browser ships it), so gesture ends fall back to quiet
+                  // periods: an editor-owned transaction expires after
+                  // WHEEL_NORMAL_IDLE_MS without events; once a transaction
+                  // has touched the boundary, the parent can be acquired
+                  // only after WHEEL_BOUNDARY_QUIET_MS of silence. The
+                  // re-arm window is the conservative one because a false
+                  // "same gesture" merely delays host scrolling by about a
+                  // quarter second, while a false "new gesture" jerks the
+                  // host page - the exact bug this arbiter exists to stop.
+                  const WHEEL_NORMAL_IDLE_MS = 120;
+                  const WHEEL_BOUNDARY_QUIET_MS = 260;
+
                   const handoffState = {
                     wheel: false,
                     touch: false,
+                    policy: 'newGestureOnly',
+                    gestureSeq: 0,
                     touchGesture: null,
                     touchSelectionWatch: null,
                   };
@@ -104,6 +135,21 @@ window.__FMB.scrollHandoff = function (ctx) {
                     return true;
                   };
 
+                  // Whether the editor itself can scroll in the requested
+                  // vertical direction (wheel semantics: wantsDown scrolls
+                  // the content down).
+                  const canChildConsume = (ed, metrics, wantsDown) =>
+                    !editorWheelDisabled(ed) &&
+                    metrics.maxTop > EDGE_EPSILON &&
+                    (wantsDown ? !metrics.atBottom : !metrics.atTop);
+
+                  const blockLocal = (event) => {
+                    if (event.cancelable !== false) event.preventDefault();
+                    event.stopPropagation();
+                  };
+
+                  // Legacy payload, byte-compatible with 2.3.0: emitted only
+                  // under policy 'continuous'.
                   const postHandoff = (source, deltaX, deltaY, metrics) => {
                     post('scrollHandoff', {
                       source: source,
@@ -114,6 +160,195 @@ window.__FMB.scrollHandoff = function (ctx) {
                       atLeft: metrics.atLeft,
                       atRight: metrics.atRight,
                     });
+                  };
+
+                  // Sessionized payload for policy 'newGestureOnly'. The
+                  // Dart driver applies updates only for the gestureId it
+                  // saw begin, so stale or superseded deltas can never move
+                  // the host.
+                  const postSession = (source, phase, gestureId, deltaX, deltaY, metrics, momentum) => {
+                    post('scrollHandoff', {
+                      source: source,
+                      phase: phase,
+                      gestureId: gestureId,
+                      momentum: !!momentum,
+                      deltaX: deltaX,
+                      deltaY: deltaY,
+                      atTop: metrics.atTop,
+                      atBottom: metrics.atBottom,
+                      atLeft: metrics.atLeft,
+                      atRight: metrics.atRight,
+                    });
+                  };
+                  const NO_METRICS = Object.freeze({
+                    atTop: false, atBottom: false, atLeft: false, atRight: false,
+                  });
+
+                  // ---- wheel transaction arbiter (policy newGestureOnly) --
+                  // States: 'idle' (no transaction), 'child' (the editor
+                  // owns it), 'locked' (an editor-owned transaction reached
+                  // the wall; residual input is absorbed), 'parent' (it
+                  // started at the wall; Flutter owns it, inertia included).
+                  const wheelSession = {
+                    owner: 'idle',
+                    gestureId: 0,
+                    direction: 0,
+                    lastEventAt: -Infinity,
+                    // Survives idle on purpose: the freshest editor-owned
+                    // activity, used to keep the sparse end of an inertial
+                    // tail from acquiring the parent after a boundary hit.
+                    lastChildLikeAt: -Infinity,
+                    lastChildLikeDir: 0,
+                    sawMomentum: false,
+                    lastMetrics: NO_METRICS,
+                    endTimer: 0,
+                  };
+
+                  const noteChildLike = (now, dir) => {
+                    wheelSession.lastChildLikeAt = now;
+                    wheelSession.lastChildLikeDir = dir;
+                  };
+
+                  const finishWheelSession = (phase) => {
+                    if (wheelSession.endTimer) {
+                      clearTimeout(wheelSession.endTimer);
+                      wheelSession.endTimer = 0;
+                    }
+                    if (wheelSession.owner === 'parent') {
+                      postSession('wheel', phase, wheelSession.gestureId,
+                        0, 0, wheelSession.lastMetrics, false);
+                    }
+                    wheelSession.owner = 'idle';
+                    wheelSession.direction = 0;
+                    wheelSession.sawMomentum = false;
+                  };
+
+                  const scheduleWheelFinish = () => {
+                    if (wheelSession.endTimer) clearTimeout(wheelSession.endTimer);
+                    const delay = wheelSession.owner === 'child'
+                      ? WHEEL_NORMAL_IDLE_MS
+                      : WHEEL_BOUNDARY_QUIET_MS;
+                    wheelSession.endTimer = setTimeout(function () {
+                      wheelSession.endTimer = 0;
+                      finishWheelSession('end');
+                    }, delay);
+                  };
+
+                  const arbitrateWheel = (event, ed, metrics, deltaX, deltaY) => {
+                    const now = event.timeStamp;
+                    const dir = deltaY > 0 ? 1 : -1;
+                    const consumable = canChildConsume(ed, metrics, dir > 0);
+                    const momentumKnown = 'momentum' in event;
+                    const isMomentum = momentumKnown && event.momentum === true;
+                    // With momentum metadata, the first direct event after
+                    // an inertial tail is a new physical gesture even when
+                    // it arrives with no time gap (fingers back on the pad).
+                    const directAfterMomentum =
+                      momentumKnown && wheelSession.sawMomentum && !isMomentum;
+                    const sessionGapMs = wheelSession.owner === 'child'
+                      ? WHEEL_NORMAL_IDLE_MS
+                      : WHEEL_BOUNDARY_QUIET_MS;
+                    const fresh =
+                      wheelSession.owner === 'idle' ||
+                      now - wheelSession.lastEventAt > sessionGapMs ||
+                      directAfterMomentum;
+                    wheelSession.lastEventAt = now;
+                    wheelSession.lastMetrics = metrics;
+
+                    if (fresh) {
+                      finishWheelSession('end');
+                      handoffState.gestureSeq += 1;
+                      wheelSession.gestureId = handoffState.gestureSeq;
+                      wheelSession.direction = dir;
+                      wheelSession.sawMomentum = isMomentum;
+                      if (consumable) {
+                        // The editor can scroll: this transaction belongs to
+                        // it. Monaco receives the event untouched (that
+                        // includes a momentum tail resuming after a lull).
+                        wheelSession.owner = 'child';
+                        noteChildLike(now, dir);
+                        scheduleWheelFinish();
+                        return;
+                      }
+                      const recentlyChildLike =
+                        !directAfterMomentum &&
+                        dir === wheelSession.lastChildLikeDir &&
+                        now - wheelSession.lastChildLikeAt < WHEEL_BOUNDARY_QUIET_MS;
+                      if (isMomentum || recentlyChildLike) {
+                        // Leftover kinetic energy: a tagged momentum event,
+                        // or the detached tail of recent editor-owned
+                        // activity in the same direction. Absorb it at the
+                        // wall; it may never acquire the parent.
+                        wheelSession.owner = 'locked';
+                        noteChildLike(now, dir);
+                        blockLocal(event);
+                        scheduleWheelFinish();
+                        return;
+                      }
+                      // A genuinely new gesture starting at the edge: the
+                      // parent owns it until it ends or reverses back into
+                      // the editor, its inertia included.
+                      wheelSession.owner = 'parent';
+                      blockLocal(event);
+                      postSession('wheel', 'begin', wheelSession.gestureId,
+                        deltaX, deltaY, metrics, isMomentum);
+                      scheduleWheelFinish();
+                      return;
+                    }
+
+                    // Continuing the active transaction.
+                    wheelSession.sawMomentum = wheelSession.sawMomentum || isMomentum;
+                    switch (wheelSession.owner) {
+                      case 'child':
+                        if (consumable) {
+                          wheelSession.direction = dir;
+                          noteChildLike(now, dir);
+                          scheduleWheelFinish();
+                          return; // Monaco consumes it, reversals included.
+                        }
+                        // The transaction began in the editor and just hit
+                        // the wall: everything it has left is absorbed.
+                        wheelSession.owner = 'locked';
+                        wheelSession.direction = dir;
+                        noteChildLike(now, dir);
+                        blockLocal(event);
+                        scheduleWheelFinish();
+                        return;
+                      case 'locked':
+                        if (consumable) {
+                          // Deliberate reversal back into content: the
+                          // editor takes the transaction again.
+                          wheelSession.owner = 'child';
+                          wheelSession.direction = dir;
+                          noteChildLike(now, dir);
+                          scheduleWheelFinish();
+                          return;
+                        }
+                        noteChildLike(now, dir);
+                        blockLocal(event);
+                        scheduleWheelFinish();
+                        return;
+                      case 'parent':
+                        if (dir !== wheelSession.direction && consumable) {
+                          // Reversal back into the editor never leaks: close
+                          // the parent session, Monaco consumes this event.
+                          finishWheelSession('end');
+                          wheelSession.owner = 'child';
+                          wheelSession.direction = dir;
+                          wheelSession.sawMomentum = isMomentum;
+                          noteChildLike(now, dir);
+                          scheduleWheelFinish();
+                          return;
+                        }
+                        wheelSession.direction = dir;
+                        blockLocal(event);
+                        postSession('wheel', 'update', wheelSession.gestureId,
+                          deltaX, deltaY, metrics, isMomentum);
+                        scheduleWheelFinish();
+                        return;
+                      default:
+                        return;
+                    }
                   };
 
                   const onHandoffWheel = (event) => {
@@ -140,16 +375,15 @@ window.__FMB.scrollHandoff = function (ctx) {
                       // input stays with the editor.
                       if (deltaY === 0 || Math.abs(deltaY) <= Math.abs(deltaX)) return;
 
-                      const wantsDown = deltaY > 0;
-                      const editorCannotConsume =
-                        editorWheelDisabled(ed) ||
-                        metrics.maxTop <= EDGE_EPSILON ||
-                        (wantsDown ? metrics.atBottom : metrics.atTop);
-                      if (!editorCannotConsume) return;
-
-                      event.preventDefault();
-                      event.stopPropagation();
-                      postHandoff('wheel', deltaX, deltaY, metrics);
+                      if (handoffState.policy === 'continuous') {
+                        // 2.3.0 chaining: forward whatever the editor cannot
+                        // consume, immediately and unsessionized.
+                        if (canChildConsume(ed, metrics, deltaY > 0)) return;
+                        blockLocal(event);
+                        postHandoff('wheel', deltaX, deltaY, metrics);
+                        return;
+                      }
+                      arbitrateWheel(event, ed, metrics, deltaX, deltaY);
                     } catch (_) {}
                   };
 
@@ -157,7 +391,12 @@ window.__FMB.scrollHandoff = function (ctx) {
                   // that never block, refocus, or select, so Monaco's touch
                   // handling and the mobile focus guards keep working exactly
                   // as before. Worst case is an extra parent scroll, never a
-                  // broken editor gesture.
+                  // broken editor gesture. Under policy 'newGestureOnly' the
+                  // owner is decided once per touch gesture (its boundaries
+                  // are explicit): a drag that starts over scrollable editor
+                  // content is the editor's for its whole lifetime and is
+                  // contained at the wall; only a drag that starts at an
+                  // outward edge is forwarded, as one session.
                   const gestureTouch = (event) => {
                     const gesture = handoffState.touchGesture;
                     if (!gesture) return null;
@@ -167,9 +406,19 @@ window.__FMB.scrollHandoff = function (ctx) {
                     }
                     return null;
                   };
+                  const finishTouchSession = (gesture, phase) => {
+                    if (!gesture || gesture.owner !== 'parent' ||
+                        !gesture.began || gesture.sessionClosed) {
+                      return;
+                    }
+                    gesture.sessionClosed = true;
+                    postSession('touch', phase, gesture.gestureId,
+                      0, 0, gesture.lastMetrics || NO_METRICS, false);
+                  };
                   const onHandoffTouchStart = (event) => {
                     try {
                       if (event.touches && event.touches.length > 1) {
+                        finishTouchSession(handoffState.touchGesture, 'cancel');
                         handoffState.touchGesture = null;
                         return;
                       }
@@ -178,6 +427,7 @@ window.__FMB.scrollHandoff = function (ctx) {
                       if (!touchPoint) return;
                       const ed = E();
                       if (!ed || !isMainScrollRegion(ed, event.target)) {
+                        finishTouchSession(handoffState.touchGesture, 'cancel');
                         handoffState.touchGesture = null;
                         return;
                       }
@@ -188,6 +438,13 @@ window.__FMB.scrollHandoff = function (ctx) {
                         lastY: touchPoint.clientY,
                         moved: false,
                         cancelled: false,
+                        // Ownership (policy newGestureOnly) is decided at
+                        // the first vertical movement past the slop.
+                        owner: null,
+                        gestureId: 0,
+                        began: false,
+                        sessionClosed: false,
+                        lastMetrics: null,
                       };
                     } catch (_) {}
                   };
@@ -217,13 +474,48 @@ window.__FMB.scrollHandoff = function (ctx) {
                       const editorCannotConsume =
                         metrics.maxTop <= EDGE_EPSILON ||
                         (wantsDown ? metrics.atBottom : metrics.atTop);
+
+                      if (handoffState.policy === 'continuous') {
+                        // 2.3.0 behavior: forward the moves the editor
+                        // cannot consume, regardless of gesture history.
+                        if (!editorCannotConsume) return;
+                        postHandoff('touch', 0, deltaY, metrics);
+                        return;
+                      }
+
+                      if (gesture.owner === null) {
+                        // Direct-manipulation gestures never migrate between
+                        // scrollables mid-flight: whoever can consume the
+                        // first movement owns the whole drag.
+                        gesture.owner = editorCannotConsume ? 'parent' : 'child';
+                      }
+                      // Containment: an editor-owned drag reaching the wall
+                      // is absorbed (Monaco simply stops), never forwarded.
+                      if (gesture.owner === 'child') return;
+                      // Parent-owned: forward only what the editor cannot
+                      // consume. This listener is passive, so a consumable
+                      // reversal is Monaco's to apply; forwarding it too
+                      // would scroll both surfaces at once.
                       if (!editorCannotConsume) return;
-                      postHandoff('touch', 0, deltaY, metrics);
+                      gesture.lastMetrics = metrics;
+                      if (!gesture.began) {
+                        gesture.began = true;
+                        handoffState.gestureSeq += 1;
+                        gesture.gestureId = handoffState.gestureSeq;
+                        postSession('touch', 'begin', gesture.gestureId,
+                          0, deltaY, metrics, false);
+                        return;
+                      }
+                      postSession('touch', 'update', gesture.gestureId,
+                        0, deltaY, metrics, false);
                     } catch (_) {}
                   };
                   const onHandoffTouchEnd = (event) => {
                     try {
-                      if (gestureTouch(event)) handoffState.touchGesture = null;
+                      if (gestureTouch(event)) {
+                        finishTouchSession(handoffState.touchGesture, 'end');
+                        handoffState.touchGesture = null;
+                      }
                     } catch (_) {}
                   };
 
@@ -244,10 +536,15 @@ window.__FMB.scrollHandoff = function (ctx) {
                       const ed = E();
                       if (ed && ed.onDidChangeCursorSelection && !handoffState.touchSelectionWatch) {
                         // Text selection wins: a selection change during a
-                        // moved gesture stops forwarding for that gesture.
+                        // moved gesture stops forwarding for that gesture
+                        // (and cancels its parent-owned session, so pending
+                        // deltas are dropped host-side).
                         handoffState.touchSelectionWatch = ed.onDidChangeCursorSelection(() => {
                           const gesture = handoffState.touchGesture;
-                          if (gesture && gesture.moved) gesture.cancelled = true;
+                          if (gesture && gesture.moved && !gesture.cancelled) {
+                            gesture.cancelled = true;
+                            finishTouchSession(gesture, 'cancel');
+                          }
                         });
                       }
                     } catch (_) {}
@@ -262,6 +559,7 @@ window.__FMB.scrollHandoff = function (ctx) {
                     if (watch && watch.dispose) {
                       try { watch.dispose(); } catch (_) {}
                     }
+                    finishTouchSession(handoffState.touchGesture, 'cancel');
                     handoffState.touchGesture = null;
                   };
 
@@ -271,10 +569,28 @@ window.__FMB.scrollHandoff = function (ctx) {
                   window.flutterMonaco.setScrollHandoff = function (cfg) {
                     const wheel = !!(cfg && cfg.wheel);
                     const touch = !!(cfg && cfg.touch);
+                    if (cfg && typeof cfg.policy === 'string') {
+                      // Only an explicit policy changes it; unknown names
+                      // fall back to the default so a newer Dart side can
+                      // never strand the page on 'continuous'.
+                      const policy = cfg.policy === 'continuous'
+                        ? 'continuous'
+                        : 'newGestureOnly';
+                      if (policy !== handoffState.policy) {
+                        handoffState.policy = policy;
+                        // Open sessions do not survive a semantics change.
+                        finishWheelSession('cancel');
+                        finishTouchSession(handoffState.touchGesture, 'cancel');
+                        handoffState.touchGesture = null;
+                      }
+                    }
                     if (wheel !== handoffState.wheel) {
                       handoffState.wheel = wheel;
                       if (wheel) { installScrollHandoffWheel(); }
-                      else { removeScrollHandoffWheel(); }
+                      else {
+                        removeScrollHandoffWheel();
+                        finishWheelSession('cancel');
+                      }
                     }
                     if (touch !== handoffState.touch) {
                       handoffState.touch = touch;
@@ -287,5 +603,9 @@ window.__FMB.scrollHandoff = function (ctx) {
 
                 // ---- protocol v3 command registry ----
                 window.FlutterMonaco.register('page.setScrollHandoff', (p) =>
-                  window.flutterMonaco.setScrollHandoff({ wheel: !!p.wheel, touch: !!p.touch }));
+                  window.flutterMonaco.setScrollHandoff({
+                    wheel: !!p.wheel,
+                    touch: !!p.touch,
+                    policy: typeof p.policy === 'string' ? p.policy : undefined,
+                  }));
 };
