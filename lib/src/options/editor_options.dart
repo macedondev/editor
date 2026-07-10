@@ -423,8 +423,12 @@ sealed class EditorOptions with _$EditorOptions {
   }
 
   /// Returns a copy where non-null fields of [other] override this
-  /// instance's fields ([extra] maps are merged key-wise, [other]'s keys
-  /// winning). Returns `this` when [other] is null.
+  /// instance's fields. Structured options ([minimap], [padding],
+  /// [scrollbar], [guides], [stickyScroll]) merge field-wise, so a partial
+  /// override (e.g. only `minimap.side`) keeps this instance's other nested
+  /// values instead of resetting them to Monaco's defaults. [extra] maps are
+  /// merged key-wise, [other]'s keys winning. Returns `this` when [other]
+  /// is null.
   EditorOptions merge(EditorOptions? other) {
     if (other == null) return this;
     return EditorOptions(
@@ -437,7 +441,7 @@ sealed class EditorOptions with _$EditorOptions {
       letterSpacing: other.letterSpacing ?? letterSpacing,
       wordWrap: other.wordWrap ?? wordWrap,
       wordWrapColumn: other.wordWrapColumn ?? wordWrapColumn,
-      minimap: other.minimap ?? minimap,
+      minimap: minimap?.merge(other.minimap) ?? other.minimap,
       lineNumbers: other.lineNumbers ?? lineNumbers,
       rulers: other.rulers ?? rulers,
       tabSize: other.tabSize ?? tabSize,
@@ -446,8 +450,8 @@ sealed class EditorOptions with _$EditorOptions {
       readOnly: other.readOnly ?? readOnly,
       readOnlyMessage: other.readOnlyMessage ?? readOnlyMessage,
       automaticLayout: other.automaticLayout ?? automaticLayout,
-      padding: other.padding ?? padding,
-      scrollbar: other.scrollbar ?? scrollbar,
+      padding: padding?.merge(other.padding) ?? other.padding,
+      scrollbar: scrollbar?.merge(other.scrollbar) ?? other.scrollbar,
       scrollBeyondLastLine: other.scrollBeyondLastLine ?? scrollBeyondLastLine,
       smoothScrolling: other.smoothScrolling ?? smoothScrolling,
       mouseWheelZoom: other.mouseWheelZoom ?? mouseWheelZoom,
@@ -460,7 +464,7 @@ sealed class EditorOptions with _$EditorOptions {
       renderLineHighlight: other.renderLineHighlight ?? renderLineHighlight,
       bracketPairColorization:
           other.bracketPairColorization ?? bracketPairColorization,
-      guides: other.guides ?? guides,
+      guides: guides?.merge(other.guides) ?? other.guides,
       autoClosingBrackets: other.autoClosingBrackets ?? autoClosingBrackets,
       autoClosingQuotes: other.autoClosingQuotes ?? autoClosingQuotes,
       formatOnPaste: other.formatOnPaste ?? formatOnPaste,
@@ -477,7 +481,8 @@ sealed class EditorOptions with _$EditorOptions {
       folding: other.folding ?? folding,
       showFoldingControls: other.showFoldingControls ?? showFoldingControls,
       links: other.links ?? links,
-      stickyScroll: other.stickyScroll ?? stickyScroll,
+      stickyScroll:
+          stickyScroll?.merge(other.stickyScroll) ?? other.stickyScroll,
       overviewRulerBorder: other.overviewRulerBorder ?? overviewRulerBorder,
       disableLayerHinting: other.disableLayerHinting ?? disableLayerHinting,
       disableMonospaceOptimizations:

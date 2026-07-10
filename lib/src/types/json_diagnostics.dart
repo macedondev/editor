@@ -157,7 +157,7 @@ sealed class JsonDiagnosticsSchema with _$JsonDiagnosticsSchema {
     ///
     /// Use `['*']` to apply this schema to every JSON model. For targeted
     /// matching, set a meaningful URI when calling
-    /// [MonacoController.createModel] and use a pattern that matches it.
+    /// `MonacoController.openDocument` and use a pattern that matches it.
     /// When `null`, the schema is registered but not automatically applied.
     List<String>? fileMatch,
 

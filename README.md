@@ -109,7 +109,7 @@ Leave `EditorOptions.theme` unset and the editor follows your app's brightness (
 
 ### Using the controller directly
 
-`MonacoController.create` returns immediately on every platform; await `whenReady` before treating the editor as live. Content and model operations live on `controller.document`; editor-level operations (theme, actions, view state, focus) stay on the controller.
+`MonacoController.create` returns before the editor is ready (asset preparation and WebView setup are still awaited); await `whenReady` before treating the editor as live. Content and model operations live on `controller.document`; editor-level operations (theme, actions, view state, focus) stay on the controller.
 
 ```dart
 final controller = await MonacoController.create(
@@ -562,7 +562,7 @@ See `example/lib/scroll_handoff_example.dart` for a full page with short, long, 
 | `setDecorations/addInlineDecorations/addLineDecorations/clearDecorations` | `createDecorationSet()` + `set/clear/dispose` | one set per concern; `DecorationOptions.inlineClass/line` factories unchanged |
 | `createModel/setModel/disposeModel/listModels` | `openDocument/activateDocument/document.close()/listDocuments` | |
 | `format()/find()/replace()/toggleWordWrap()/selectAll()/undo()/redo()/cut()/copy()/paste()/foldAll()/unfoldAll()/toggleLineComment()/indentLines()/outdentLines()` | deleted (D19) | `executeAction(.formatDocument)`, `.find` -> `MonacoAction.find`, replace -> `.startFindReplaceAction`, toggleLineComment -> `.commentLine`, others map to the same-named `MonacoAction` constants |
-| `focus()` / `ensureEditorFocus({attempts, interval, intent})` | `requestFocus({intent})` (D20) | attempts/interval internalized (same defaults) |
+| `focus()` / `ensureEditorFocus({attempts, interval, intent})` | `requestFocus({intent})` (D20) | retry tuning stays available as optional parameters (same defaults) |
 | `releaseNativeInputFocus()` | `releaseNativeFocus()` | rename |
 | `liveStats` (`ValueNotifier<LiveStats>`) | `stats` (`ValueListenable<MonacoLiveStats>`) | labels moved to UI; `.value.lineCount` is now an `int` |
 | `getStatistics()` | `stats.value` | |
@@ -572,7 +572,7 @@ See `example/lib/scroll_handoff_example.dart` for a full page with short, long, 
 | `saveViewState(): Map` / `restoreViewState(Map)` | `captureViewState(): MonacoViewState` / `restoreViewState(MonacoViewState)` | persist via `toJson()` |
 | `evaluateJavaScript` / `runJavaScript` / `runJavaScriptReturningResultRaw` | unchanged | |
 | `registerCompletionSource(...): Future<String>` / `unregisterCompletionSource(id)` | `registerCompletions(...): Future<MonacoCompletionRegistration>` / `registration.dispose()`; `languages` is now `List<MonacoLanguage>` | |
-| `create({options, customCss, allowCdnFonts, allowedConnectSources, readyTimeout})` | `create({options, initialText, page, readyTimeout})`; returns immediately, use `whenReady` (D05) | native callers relying on blocking create: `final c = await MonacoController.create(...); await c.whenReady;` |
+| `create({options, customCss, allowCdnFonts, allowedConnectSources, readyTimeout})` | `create({options, initialText, page, readyTimeout})`; returns before readiness, use `whenReady` (D05) | native callers relying on blocking create: `final c = await MonacoController.create(...); await c.whenReady;` |
 | `onReady` future getter | `whenReady` | rename |
 | `MonacoEditor.initialValue` | `MonacoEditor.initialText` | rename |
 | `MonacoEditor.customCss/allowCdnFonts/allowedConnectSources` | `MonacoEditor.page: MonacoPageConfig` | wrap |
@@ -618,7 +618,7 @@ Closed sets stay enums: `CursorBlinking`, `CursorStyle`, `RenderWhitespace`, `Au
 ### MonacoController
 
 ```dart
-// Lifecycle: create returns immediately on every platform.
+// Lifecycle: create returns before the editor is ready.
 final controller = await MonacoController.create();
 await controller.whenReady;
 print(controller.isReady);                      // true
@@ -1186,7 +1186,7 @@ class _MyEditorState extends State<MyEditor> {
 This pattern works on all platforms and is the recommended approach. The `MonacoEditor` widget handles controller lifecycle internally and provides the controller via `onReady` callback once initialized.
 
 **Why this matters on web:**
-- `MonacoController.create()` returns immediately on every platform; readiness is signaled by `controller.whenReady`
+- `MonacoController.create()` returns before the editor is ready; readiness is signaled by `controller.whenReady`
 - The iframe must be attached to the DOM for Monaco JS to initialize, so `whenReady` cannot complete until the editor's widget is in the tree
 - Awaiting `whenReady` in `initState` (before `build`) will therefore time out
 - The `MonacoEditor` widget sequences attachment, boot, and readiness for you

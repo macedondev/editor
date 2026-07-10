@@ -27,7 +27,7 @@ Future<String> monacoAssetCacheDir({
 
 /// Returns the browser-visible Monaco HTML asset path.
 Future<String> monacoAssetHtmlPath({
-  required int cacheKey,
+  required String cacheKey,
   required String assetBaseDir,
   required String cacheSubDir,
   required String monacoVersion,

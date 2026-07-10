@@ -74,6 +74,32 @@ void main() {
       expect(config, isNot(different));
       expect(config, isNot(const MonacoPageConfig(allowCdnFonts: true)));
     });
+
+    test('stableCacheKey is deterministic and config-sensitive', () {
+      const a = MonacoPageConfig(
+        customCss: '.x{}',
+        allowCdnFonts: true,
+        allowedConnectSources: ['wss://a'],
+      );
+      const b = MonacoPageConfig(
+        customCss: '.x{}',
+        allowCdnFonts: true,
+        allowedConnectSources: ['wss://a'],
+      );
+
+      expect(a.stableCacheKey(), b.stableCacheKey());
+      expect(
+        a.stableCacheKey(),
+        isNot(const MonacoPageConfig().stableCacheKey()),
+      );
+      expect(a.stableCacheKey(), matches(RegExp(r'^[0-9a-f]{16}$')));
+
+      // Golden pins: the key names generated HTML files on disk, so it must
+      // stay stable across processes AND releases (unlike hashCode, which
+      // Dart seeds per run). Changing the algorithm orphans cached files.
+      expect(const MonacoPageConfig().stableCacheKey(), '27e4515bfc9e5827');
+      expect(a.stableCacheKey(), '66223b0815404914');
+    });
   });
 
   group('MonacoCapabilities', () {
@@ -108,6 +134,53 @@ void main() {
       expect(state.hashCode, same.hashCode);
       expect(state, isNot(const MonacoViewState.fromJson({'a': 1})));
       expect('$state', 'MonacoViewState(2 entries)');
+    });
+
+    test('toJson returns an independent copy of the payload', () {
+      const state = MonacoViewState.fromJson({
+        'scroll': {'top': 10},
+      });
+
+      final leaked = state.toJson();
+      leaked['scroll'] = 'clobbered';
+      (state.toJson()['scroll']! as Map)['top'] = 99;
+
+      expect(state.toJson(), {
+        'scroll': {'top': 10},
+      });
+    });
+
+    test('equality and hashCode are deep over nested payloads', () {
+      // Deliberately NON-const: const literals canonicalize to the same
+      // instance, which would test identity instead of deep equality.
+      // ignore: prefer_const_constructors
+      final a = MonacoViewState.fromJson({
+        'cursorState': [
+          {'position': 4},
+        ],
+        'scroll': {'top': 10},
+      });
+      // ignore: prefer_const_constructors
+      final b = MonacoViewState.fromJson({
+        'cursorState': [
+          {'position': 4},
+        ],
+        'scroll': {'top': 10},
+      });
+
+      expect(a, b);
+      expect(a.hashCode, b.hashCode);
+      expect(
+        a,
+        isNot(
+          const MonacoViewState.fromJson({
+            'cursorState': [
+              {'position': 5},
+            ],
+            'scroll': {'top': 10},
+          }),
+        ),
+      );
     });
   });
 

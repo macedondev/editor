@@ -84,7 +84,9 @@ abstract class WebViewController implements PlatformWebViewController {
   ///
   /// Returns the absolute path to the generated HTML file.
   Future<String> _ensureHtmlFile(MonacoPageConfig page) async {
-    final htmlFilePath = await monacoIndexHtmlPath(cacheKey: page.hashCode);
+    final htmlFilePath = await monacoIndexHtmlPath(
+      cacheKey: page.stableCacheKey(),
+    );
 
     final htmlFile = File(htmlFilePath);
 

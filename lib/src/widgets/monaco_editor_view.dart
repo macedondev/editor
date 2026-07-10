@@ -65,7 +65,7 @@ bool _pointerShouldRecoverInputFocus(
 ///
 /// ```dart
 /// MonacoEditor(
-///   initialValue: 'print("Hello World");',
+///   initialText: 'print("Hello World");',
 ///   options: EditorOptions(
 ///     language: MonacoLanguage.python,
 ///     theme: MonacoTheme.vsDark,
@@ -168,7 +168,8 @@ class MonacoEditor extends StatefulWidget {
 
   /// Callback invoked when the text content changes.
   ///
-  /// This is debounced by [contentDebounce] unless it's a "flush" event (e.g., `setValue`).
+  /// This is debounced by [contentDebounce] unless it's a "flush" event
+  /// (e.g. `document.setText`).
   final ValueChanged<String>? onContentChanged;
 
   /// Callback invoked for every content change signal from Monaco.
@@ -383,12 +384,13 @@ class _MonacoEditorState extends State<MonacoEditor> {
       }
     }
 
-    if (widget.backgroundColor != oldWidget.backgroundColor &&
-        widget.backgroundColor != null) {
-      _ignoreAsync(_controller!.setBackgroundColor(widget.backgroundColor!));
-      _ignoreAsync(
-        _controller!.setHostPageBackgroundColor(widget.backgroundColor!),
-      );
+    if (widget.backgroundColor != oldWidget.backgroundColor) {
+      // A null background restores the widget's resolved default; leaving
+      // the previous color baked into the native view and host page would
+      // make backgroundColor a one-way mutation.
+      final color = widget.backgroundColor ?? _resolveBackgroundColor();
+      _ignoreAsync(_controller!.setBackgroundColor(color));
+      _ignoreAsync(_controller!.setHostPageBackgroundColor(color));
     }
 
     // If the content change callback has been updated, we need to rewire the listener.
@@ -416,6 +418,11 @@ class _MonacoEditorState extends State<MonacoEditor> {
           widget.controller == null && widget.controllerFactory == null;
       final bootTheme = _resolveTheme();
       _appliedResolvedTheme = bootTheme;
+      // What the boot command will actually configure. The widget can
+      // rebuild with different options while the boot is in flight
+      // (didUpdateWidget drops changes during `connecting`), so readiness
+      // reconciles against this snapshot below.
+      final bootOptionsSnapshot = widget.options;
       final controller =
           widget.controller ??
           await (widget.controllerFactory?.call() ??
@@ -469,12 +476,14 @@ class _MonacoEditorState extends State<MonacoEditor> {
       // The internal create path boots the editor with options, theme,
       // language, and initial text already applied (two-phase boot); only
       // externally supplied controllers need them applied here.
+      var appliedOptions = bootOptionsSnapshot;
       if (!usedInternalCreate && _isBootstrapCurrent(bootstrapToken)) {
-        await _controller!.updateOptions(widget.options);
+        appliedOptions = widget.options;
+        await _controller!.updateOptions(appliedOptions);
         final resolvedTheme = _resolveTheme();
         _appliedResolvedTheme = resolvedTheme;
         await _controller!.setTheme(resolvedTheme);
-        final language = widget.options.language;
+        final language = appliedOptions.language;
         if (language != null) {
           await _controller!.document.setLanguage(language);
         }
@@ -484,6 +493,10 @@ class _MonacoEditorState extends State<MonacoEditor> {
         if (!_isBootstrapCurrent(bootstrapToken)) {
           return;
         }
+      }
+      await _reconcileAfterBoot(appliedOptions, bootstrapToken);
+      if (!_isBootstrapCurrent(bootstrapToken)) {
+        return;
       }
       if (widget.initialSelection != null) {
         await _controller!.setSelection(widget.initialSelection!);
@@ -506,7 +519,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
 
       if (_isBootstrapCurrent(bootstrapToken)) {
         setState(() => _connectionState = _ConnectionState.ready);
-        widget.onReady?.call(_controller!);
+        _invokeOnReady();
       }
     } catch (e, st) {
       if (!_isBootstrapCurrent(bootstrapToken)) return;
@@ -517,6 +530,53 @@ class _MonacoEditorState extends State<MonacoEditor> {
         _error = e;
         _stack = st;
       });
+    }
+  }
+
+  /// An application onReady exception is not an editor boot failure: report
+  /// it through FlutterError and leave the healthy editor alone instead of
+  /// letting it trip the bootstrap catch (which would dispose an owned
+  /// controller and render the error surface).
+  void _invokeOnReady() {
+    final callback = widget.onReady;
+    if (callback == null) return;
+    try {
+      callback(_controller!);
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'flutter_monaco',
+          context: ErrorDescription('while calling MonacoEditor.onReady'),
+        ),
+      );
+    }
+  }
+
+  /// Applies option/theme/language changes that arrived while the boot was
+  /// in flight: [applied] is what the boot (or the post-ready apply) pushed,
+  /// `widget.options` is what the widget wants NOW.
+  Future<void> _reconcileAfterBoot(EditorOptions applied, int token) async {
+    final desired = widget.options;
+    if (desired != applied) {
+      final delta = _diffOptions(applied, desired);
+      if (delta.toMonacoOptions().isNotEmpty) {
+        await _controller!.updateOptions(delta);
+        if (!_isBootstrapCurrent(token)) return;
+      }
+      final language = desired.language;
+      if (language != null && language != applied.language) {
+        await _controller!.document.setLanguage(language);
+        if (!_isBootstrapCurrent(token)) return;
+      }
+    }
+    // The theme re-resolves against the CURRENT ambient brightness too - it
+    // may have flipped during a slow boot.
+    final resolvedTheme = _resolveTheme();
+    if (resolvedTheme != _appliedResolvedTheme) {
+      _appliedResolvedTheme = resolvedTheme;
+      await _controller!.setTheme(resolvedTheme);
     }
   }
 
@@ -570,6 +630,14 @@ class _MonacoEditorState extends State<MonacoEditor> {
     return brightness == Brightness.dark
         ? MonacoDefaults.darkTheme
         : MonacoDefaults.lightTheme;
+  }
+
+  /// The background painted when [MonacoEditor.backgroundColor] is null.
+  Color _resolveBackgroundColor() {
+    final brightness = mounted ? Theme.of(context).brightness : Brightness.dark;
+    return brightness == Brightness.dark
+        ? const Color(0xFF1E1E1E)
+        : Colors.white;
   }
 
   /// Subscribes to all relevant event streams from the controller.
@@ -665,8 +733,15 @@ class _MonacoEditorState extends State<MonacoEditor> {
       // 3) Flush = immediate fetch (no debounce), else debounced.
       Future<void> pullAndEmit() async {
         final seq = ++_contentSeq;
-        final text = await _controller!.document.getText();
-        if (!mounted || seq != _contentSeq) return; // drop stale
+        final controller = _controller!;
+        final text = await controller.document.getText();
+        // Drop stale results: a newer pull superseded this one, or the
+        // widget swapped controllers while the pull was in flight.
+        if (!mounted ||
+            seq != _contentSeq ||
+            !identical(controller, _controller)) {
+          return;
+        }
         widget.onContentChanged!(text);
       }
 
@@ -726,12 +801,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final bg =
-        widget.backgroundColor ??
-        (theme.brightness == Brightness.dark
-            ? const Color(0xFF1E1E1E)
-            : Colors.white);
+    final bg = widget.backgroundColor ?? _resolveBackgroundColor();
 
     return Container(
       color: bg,

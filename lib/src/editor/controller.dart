@@ -17,7 +17,7 @@ import 'package:flutter_monaco/src/protocol/protocol.dart';
 ///
 /// ### Usage
 /// * Call [create] to instantiate a controller off-widget (headless or advanced usage).
-/// * Use [setValue] / [getValue] to manage content.
+/// * Use `controller.document.setText` / `getText` to manage content.
 /// * Listen to [onContentChanged] for real-time updates.
 class MonacoController {
   MonacoController._(this._protocol, this._webViewController) {
@@ -31,7 +31,17 @@ class MonacoController {
   final Completer<void> _onReady = Completer<void>();
   late final MonacoLspManager _lspManager;
   bool _disposed = false;
+
+  /// The EFFECTIVE interaction state ([_baseInteractionEnabled] with no
+  /// active [runWithInteractionDisabled] scopes).
   bool _interactionEnabled = true;
+
+  /// The state the app last requested through [setInteractionEnabled].
+  bool _baseInteractionEnabled = true;
+
+  /// Active [runWithInteractionDisabled] scopes; interaction re-enables
+  /// only when the LAST overlapping scope exits.
+  int _interactionBlocks = 0;
 
   /// Real-time statistics from the editor, updated on every cursor/content
   /// change via the `stats` protocol event.
@@ -64,7 +74,7 @@ class MonacoController {
   /// commands. Completes with the boot error if initialization fails
   /// (asset load, page load, protocol handshake, or editor creation).
   ///
-  /// [create] returns immediately on every platform; await this future (or
+  /// [create] returns before the editor is ready; await this future (or
   /// use the `MonacoEditor` widget, which renders loading/error chrome) for
   /// readiness.
   Future<void> get whenReady => _onReady.future;
@@ -130,8 +140,9 @@ class MonacoController {
 
   /// Creates a new [MonacoController] and boots the editor.
   ///
-  /// Returns immediately on every platform (the WebView is created and the
-  /// page load + boot continue in the background). Await [whenReady] before
+  /// Returns before the editor is ready: asset preparation and WebView
+  /// setup are awaited here, then the page load + boot continue in the
+  /// background. Await [whenReady] before
   /// issuing commands directly, or hand the controller to the `MonacoEditor`
   /// widget, which renders loading and error chrome. Boot failures complete
   /// [whenReady] with the error.
@@ -302,6 +313,15 @@ class MonacoController {
         'capabilities': ['lsp', 'diff'],
       }),
     );
+    // The boot chain normally captures the handshake; mirror it here so
+    // `capabilities` works exactly like it does against a live page.
+    _capabilities ??= const MonacoCapabilities(
+      monacoVersion: 'test',
+      protocolVersion: kMonacoProtocolVersion,
+      lsp: true,
+      diff: true,
+      raw: {'lsp', 'diff'},
+    );
     _protocol.handleChannelMessage(
       jsonEncode({
         'v': kMonacoProtocolVersion,
@@ -315,14 +335,33 @@ class MonacoController {
     }
   }
 
+  /// Manually fail the ready signal for tests (mirrors a boot failure).
+  @visibleForTesting
+  void failReadyForTesting(Object error, [StackTrace? stackTrace]) {
+    _onReady.future.ignore();
+    if (!_onReady.isCompleted) {
+      _onReady.completeError(error, stackTrace ?? StackTrace.current);
+    }
+  }
+
   /// Get the platform-specific WebView widget
   Widget get webViewWidget => _webViewController.widget;
 
-  /// Ensure the editor is ready before executing commands
-  Future<void> _ensureReady() async {
-    if (!_onReady.isCompleted) {
-      await _onReady.future;
+  /// Ensure the editor is ready before executing commands.
+  ///
+  /// Awaits the readiness future unconditionally: a completer that failed is
+  /// still `isCompleted`, so an isCompleted fast path would let commands skip
+  /// the boot error and enter the protocol of a dead page. Every command
+  /// after a failed boot must keep rethrowing the ORIGINAL boot error.
+  Future<void> _ensureReady() {
+    if (_disposed) {
+      return Future.error(
+        const MonacoDisposedError(
+          message: 'MonacoController has been disposed.',
+        ),
+      );
     }
+    return _onReady.future;
   }
 
   /// Dispatches a protocol command after readiness; maps a JavaScript
@@ -439,8 +478,17 @@ class MonacoController {
   Future<void> setInteractionEnabled(bool enabled) async {
     // No need to wait for ready, can be set immediately
     if (_disposed) return;
-    _interactionEnabled = enabled;
-    await _webViewController.setInteractionEnabled(enabled);
+    _baseInteractionEnabled = enabled;
+    await _applyEffectiveInteraction();
+  }
+
+  /// Pushes `base && no active disable scopes` to the platform view, so a
+  /// [setInteractionEnabled] call during a [runWithInteractionDisabled] run
+  /// composes instead of being clobbered by the run's exit.
+  Future<void> _applyEffectiveInteraction() async {
+    final effective = _baseInteractionEnabled && _interactionBlocks == 0;
+    _interactionEnabled = effective;
+    await _webViewController.setInteractionEnabled(effective);
   }
 
   /// Runs [action] with editor interaction temporarily disabled, restoring the
@@ -472,16 +520,18 @@ class MonacoController {
       return await Future<T>.value(action());
     }
 
-    final wasEnabled = _interactionEnabled;
-    if (wasEnabled) {
-      await setInteractionEnabled(false);
-    }
-
+    // Ref-counted, not snapshot/restore: overlapping runs (two toasts, a
+    // snackbar racing a dialog) keep interaction disabled until the LAST
+    // scope exits, and an external setInteractionEnabled during the run
+    // updates the base state instead of being overwritten on exit.
+    _interactionBlocks++;
+    await _applyEffectiveInteraction();
     try {
       return await Future<T>.value(action());
     } finally {
-      if (wasEnabled && !_disposed) {
-        await setInteractionEnabled(true);
+      _interactionBlocks--;
+      if (!_disposed) {
+        await _applyEffectiveInteraction();
       }
     }
   }
@@ -987,7 +1037,7 @@ class MonacoController {
   /// ### Model URIs matter
   ///
   /// Language servers key their state on document URIs. Create models with
-  /// stable, file-like URIs ([createModel] with a `file:///...` uri) so the
+  /// stable, file-like URIs ([openDocument] with a `file:///...` uri) so the
   /// server can associate diagnostics and cross-file features correctly.
   ///
   /// ### Scoping and multiple servers

@@ -67,11 +67,14 @@ window.__FMB.diffApi = function (ctx) {
     var editor = requireDiff();
     var models = editor.getModel();
     var finish = function () {
-      var changes = editor.getLineChanges() || [];
+      var changes = editor.getLineChanges();
       return {
         originalText: models.original.getValue(),
         modifiedText: models.modified.getValue(),
-        lineChangeCount: changes.length,
+        // null = the diff has not been computed (still pending after the
+        // grace window); 0 is a real "no changes" result. The two must be
+        // distinguishable ("typed and loud" contract).
+        lineChangeCount: changes === null ? null : changes.length,
         language: state.language,
       };
     };
@@ -81,7 +84,7 @@ window.__FMB.diffApi = function (ctx) {
       // waitForDiff observes (and thereby forces) the computation, which
       // may otherwise never run for a throttled/offscreen view. Race a
       // timeout so a pathological model can never hang the bridge -
-      // callers then simply see lineChangeCount 0.
+      // callers then see lineChangeCount null.
       return Promise.race([
         editor.waitForDiff(),
         new Promise(function (resolve) { setTimeout(resolve, 3000); }),

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter_monaco/src/common/exceptions.dart';
 import 'package:flutter_monaco/src/options/language.dart';
 import 'package:flutter_monaco/src/types/geometry.dart';
@@ -63,7 +65,8 @@ final class MonacoDocument {
   }
 
   /// Returns lines [startLine]..[endLine] (1-based, inclusive) in one
-  /// bridge call. Out-of-range bounds are clamped JS-side.
+  /// bridge call. Out-of-range bounds are clamped JS-side; use [lineAt]
+  /// for a strict single-line read.
   Future<List<String>> getLines(int startLine, int endLine) async {
     if (startLine < 1) {
       throw RangeError.range(startLine, 1, null, 'startLine');
@@ -86,15 +89,27 @@ final class MonacoDocument {
   }
 
   /// Returns the content of one [line] (1-based).
+  ///
+  /// Strict, unlike the ranged [getLines]: a line beyond the end of the
+  /// document throws a [MonacoJavaScriptError] instead of silently
+  /// clamping to the last line.
   Future<String> lineAt(int line) async {
-    final lines = await getLines(line, line);
-    if (lines.isEmpty) {
-      throw MonacoProtocolError(
-        operation: 'document.getLines',
-        message: 'Expected one line for line $line, got none.',
-      );
+    if (line < 1) {
+      throw RangeError.range(line, 1, null, 'line');
     }
-    return lines.first;
+    final result = await _invoke('document.getLines', {
+      'uri': _uriParam,
+      'startLine': line,
+      'endLine': line,
+      'strict': true,
+    });
+    if (result is List && result.isNotEmpty) {
+      return result.first?.toString() ?? '';
+    }
+    throw MonacoProtocolError(
+      operation: 'document.getLines',
+      message: 'Expected one line for line $line, got $result.',
+    );
   }
 
   /// Returns the document language.
@@ -140,18 +155,25 @@ final class MonacoDocument {
   }
 
   /// Finds up to [limit] matches of [query].
+  ///
+  /// When [FindOptions.limitResultCount] is also set, the smaller of the
+  /// two caps applies.
   Future<List<FindMatch>> findMatches(
     String query, {
     FindOptions options = const FindOptions(),
     int limit = 1000,
   }) async {
+    final limitCap = options.limitResultCount;
+    final effectiveLimit = limitCap == null ? limit : math.min(limit, limitCap);
     final matches = await _invoke('document.findMatches', {
       'uri': _uriParam,
       'query': query,
       'isRegex': options.isRegex,
       'matchCase': options.matchCase,
       'wholeWord': options.wholeWord,
-      'limit': limit,
+      if (options.searchOnlyEditableRange != null)
+        'searchOnlyEditableRange': options.searchOnlyEditableRange,
+      'limit': effectiveLimit,
     });
     if (matches is! List) {
       throw MonacoProtocolError(
@@ -167,6 +189,9 @@ final class MonacoDocument {
 
   /// Replaces every match of [query] with [replacement]; returns the
   /// replacement count.
+  ///
+  /// [replacement] is inserted LITERALLY: regex capture references such as
+  /// `$1` are not substituted, even when [FindOptions.isRegex] is set.
   Future<int> replaceMatches(
     String query,
     String replacement, {
@@ -179,6 +204,8 @@ final class MonacoDocument {
       'isRegex': options.isRegex,
       'matchCase': options.matchCase,
       'wholeWord': options.wholeWord,
+      if (options.searchOnlyEditableRange != null)
+        'searchOnlyEditableRange': options.searchOnlyEditableRange,
     });
     if (result is int) return result;
     if (result is num) return result.toInt();

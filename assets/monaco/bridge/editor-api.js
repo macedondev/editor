@@ -148,8 +148,12 @@ window.__FMB.editorApi = function (ctx) {
                     const ed = requireEditor();
                     const action = ed.getAction ? ed.getAction(actionId) : null;
                     if (action && typeof action.run === 'function') {
-                      action.run(args);
-                      return true;
+                      // Action runs can be asynchronous; settle the protocol
+                      // response only after the returned promise does, so an
+                      // async failure surfaces to Dart instead of reporting
+                      // success while the action is still running.
+                      return Promise.resolve(action.run(args))
+                        .then(function () { return true; });
                     }
                     ed.trigger('flutter-bridge', actionId, args);
                     return true;
@@ -371,8 +375,11 @@ window.__FMB.editorApi = function (ctx) {
                   };
                   const findMatchesIn = (model, q, opts, limit) => {
                     const s = searchSpec(q, opts);
+                    // Second argument selects Monaco's searchOnlyEditableRange
+                    // overload; false/null both mean "whole model".
                     return model.findMatches(
-                      s.search, null, s.useRegex, s.matchCase, null, false, limit || 9999);
+                      s.search, !!(opts && opts.searchOnlyEditableRange),
+                      s.useRegex, s.matchCase, null, false, limit || 9999);
                   };
                   const markDirtyBaseline = (model) => {
                     if (model && model.uri) {
@@ -382,9 +389,80 @@ window.__FMB.editorApi = function (ctx) {
                   const isModelDirty = (model) => {
                     if (!model || !model.uri) return false;
                     const uri = model.uri.toString();
+                    // Every model created through the bridge is baselined at
+                    // registerDocument time; this lazy fallback only covers
+                    // models created behind the bridge's back (page.eval).
                     if (!api._baselines.has(uri)) markDirtyBaseline(model);
                     return model.getAlternativeVersionId() !== api._baselines.get(uri);
                   };
+
+                  // ---- document registry ----
+                  // Every model the bridge knows gets (1) a dirty baseline AT
+                  // CREATION - baselining lazily on the first isDirty query
+                  // records an already-edited version and misses the first
+                  // edit - and (2) its own content subscription, so pinned
+                  // edits to INACTIVE documents emit contentChanged exactly
+                  // like active ones (the editor-level listener only ever saw
+                  // the attached model).
+                  const emitEvent = ctx.post
+                    ? ctx.post
+                    : function (name, data) { FM.emit(name, data); };
+                  const emitModelContentChange = (model, e) => {
+                    var changes = [];
+                    var totalLength = 0;
+                    for (var i = 0; i < e.changes.length; i++) {
+                      var c = e.changes[i];
+                      totalLength += (c.text || '').length;
+                      changes.push({ range: c.range, text: c.text });
+                    }
+                    // D15: omit the deltas when the combined inserted text
+                    // tops 64 KiB, or when the change COUNT alone would
+                    // bloat the envelope (multi-cursor edit storms carry a
+                    // range object per change even with tiny text).
+                    var truncated = totalLength > 65536 || e.changes.length > 1000;
+                    emitEvent('contentChanged', {
+                      uri: model && model.uri ? model.uri.toString() : null,
+                      isFlush: e.isFlush,
+                      changes: truncated ? undefined : changes,
+                      truncated: truncated,
+                    });
+                  };
+                  const modelSubscriptions = new Map();
+                  const unregisterDocument = (uri) => {
+                    const subs = modelSubscriptions.get(uri);
+                    if (subs) {
+                      try { subs.content.dispose(); } catch (_) {}
+                      try { if (subs.willDispose) subs.willDispose.dispose(); } catch (_) {}
+                      modelSubscriptions.delete(uri);
+                    }
+                    // Baselines are keyed by URI, not model: a stale entry
+                    // would make a fresh document at the same URI read dirty.
+                    api._baselines.delete(uri);
+                  };
+                  const registerDocument = (model) => {
+                    if (!model || !model.uri) return model;
+                    const uri = model.uri.toString();
+                    if (!api._baselines.has(uri)) {
+                      api._baselines.set(uri, model.getAlternativeVersionId());
+                    }
+                    if (!modelSubscriptions.has(uri)) {
+                      const content = model.onDidChangeContent(function (e) {
+                        emitModelContentChange(model, e);
+                      });
+                      const willDispose = model.onWillDispose
+                        ? model.onWillDispose(function () { unregisterDocument(uri); })
+                        : null;
+                      modelSubscriptions.set(uri, {
+                        content: content,
+                        willDispose: willDispose,
+                      });
+                    }
+                    return model;
+                  };
+                  // The boot document already exists when this module
+                  // installs (boot.js creates it before monaco.editor.create
+                  // fires onDidCreateEditor).
+                  monaco.editor.getModels().forEach(registerDocument);
 
                   FM.register('focus.force', (p) =>
                     api.forceFocus(p && p.replayInputFocus ? { replayInputFocus: true } : {}));
@@ -404,6 +482,13 @@ window.__FMB.editorApi = function (ctx) {
                   FM.register('document.getLines', (p) => {
                     const model = resolveModel(p.uri);
                     const lineCount = model.getLineCount();
+                    if (p.strict &&
+                        (p.startLine < 1 || p.startLine > lineCount ||
+                         p.endLine > lineCount)) {
+                      throw new Error(
+                        'Line out of range: ' + p.startLine + '-' + p.endLine +
+                        ' (document has ' + lineCount + ' lines).');
+                    }
                     const start = Math.min(Math.max(1, p.startLine), lineCount);
                     const end = Math.min(Math.max(start, p.endLine), lineCount);
                     const lines = [];
@@ -422,13 +507,15 @@ window.__FMB.editorApi = function (ctx) {
                   FM.register('document.findMatches', (p) => {
                     const model = resolveModel(p.uri);
                     const matches = findMatchesIn(model, p.query,
-                      { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord }, p.limit);
+                      { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord,
+                        searchOnlyEditableRange: p.searchOnlyEditableRange }, p.limit);
                     return matches.map((mm) => ({ range: mm.range, match: model.getValueInRange(mm.range) }));
                   });
                   FM.register('document.replaceMatches', (p) => {
                     const model = resolveModel(p.uri);
                     const matches = findMatchesIn(model, p.query,
-                      { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord }, 9999);
+                      { isRegex: p.isRegex, matchCase: p.matchCase, wholeWord: p.wholeWord,
+                        searchOnlyEditableRange: p.searchOnlyEditableRange }, 9999);
                     const edits = matches.map((mm) => ({ range: mm.range, text: p.replacement }));
                     model.pushEditOperations([], edits, () => null);
                     return edits.length;
@@ -447,13 +534,17 @@ window.__FMB.editorApi = function (ctx) {
                     monaco.editor.setModelMarkers(resolveModel(p.uri), p.owner || 'flutter', p.markers || []);
                     return true;
                   });
-                  FM.register('docs.open', (p) => api.createModel(p.text, p.language, p.uri));
+                  FM.register('docs.open', (p) => {
+                    const uri = api.createModel(p.text, p.language, p.uri);
+                    registerDocument(monaco.editor.getModel(monaco.Uri.parse(uri)));
+                    return uri;
+                  });
                   FM.register('docs.close', (p) => {
                     const model = resolveModel(p.uri);
-                    // Drop the dirty baseline with the model: a stale entry
-                    // would make a fresh document at the same URI read as
-                    // dirty (baselines are keyed by URI, not model).
-                    api._baselines.delete(model.uri.toString());
+                    // Unregister BEFORE dispose so a straggling edit on a
+                    // stale handle can no longer emit; the onWillDispose hook
+                    // covers models disposed behind the bridge's back.
+                    unregisterDocument(model.uri.toString());
                     model.dispose();
                     return true;
                   });
@@ -609,7 +700,9 @@ window.__FMB.completions = function (ctx) {
         }
         return {
           label: it.label,
-          insertText: it.insertText || it.label,
+          // Nullish (not falsy) fallback: an intentionally EMPTY insertText
+          // must stay empty instead of inserting the label.
+          insertText: it.insertText ?? it.label,
           kind: kind || monaco.languages.CompletionItemKind.Text,
           detail: it.detail,
           documentation: it.documentation,

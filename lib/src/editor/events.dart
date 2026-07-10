@@ -84,8 +84,9 @@ final class MonacoContentChanged extends MonacoEvent {
   /// The individual text deltas, oldest first. `null` when [truncated].
   final List<MonacoTextChange>? changes;
 
-  /// `true` when [changes] was omitted because the combined delta text
-  /// exceeded 64 KiB; pull the full text instead.
+  /// `true` when [changes] was omitted because the event was too large to
+  /// ship (over 64 KiB of inserted text, or more than 1000 individual
+  /// changes); pull the full text instead.
   final bool truncated;
 }
 

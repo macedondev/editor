@@ -180,5 +180,63 @@ void main() {
       bundle.controller.dispose();
       expect(bundle.webview.disposed, isTrue);
     });
+
+    testWidgets('a throwing onReady does not destroy a healthy diff editor', (
+      tester,
+    ) async {
+      final bundle = await _createBundle();
+      final reported = <FlutterErrorDetails>[];
+      final oldHandler = FlutterError.onError;
+      FlutterError.onError = reported.add;
+      addTearDown(() => FlutterError.onError = oldHandler);
+
+      await tester.pumpWidget(
+        _wrap(
+          MonacoDiffEditor(
+            controller: bundle.controller,
+            onReady: (_) => throw StateError('app bug in diff onReady'),
+            errorBuilder: (context, error, st) => const Text('DIFF-ERROR-UI'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('DIFF-ERROR-UI'), findsNothing);
+      expect(find.byKey(const Key('diff-webview')), findsOneWidget);
+      expect(
+        reported.map((d) => d.exception.toString()).join(),
+        contains('app bug in diff onReady'),
+      );
+    });
+
+    testWidgets('an owned controller is disposed on boot failure', (
+      tester,
+    ) async {
+      final bundle = await _createBundle(ready: false);
+
+      await tester.pumpWidget(
+        _wrap(
+          MonacoDiffEditor(
+            controllerFactory: () async => bundle.controller,
+            errorBuilder: (context, error, st) => const Text('BOOT-FAILED'),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      bundle.controller.failReadyForTesting(
+        const MonacoTimeoutError(
+          message: 'boot timed out',
+          timeout: Duration(seconds: 1),
+          operation: 'boot',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('BOOT-FAILED'), findsOneWidget);
+      // The single editor disposes its failed owned controller immediately;
+      // the diff editor must not leak its WebView until retry/dispose.
+      expect(bundle.webview.disposed, isTrue);
+    });
   });
 }

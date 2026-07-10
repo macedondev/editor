@@ -115,28 +115,15 @@ window.__FMB = window.__FMB || {};
               };
               editor.onDidChangeModelContent(sendStats);
               editor.onDidChangeCursorSelection(sendStats);
+              // Live stats must refresh the moment docs.activate swaps the
+              // attached model, not on the next keystroke.
+              editor.onDidChangeModel(sendStats);
               sendStats();
 
-                E().onDidChangeModelContent(e => {
-                  // D15: ship the per-change deltas unless their combined
-                  // text exceeds 64 KiB - then omit them and flag truncated
-                  // so Dart consumers know to pull the full text instead.
-                  var model = E().getModel();
-                  var changes = [];
-                  var totalLength = 0;
-                  for (var i = 0; i < e.changes.length; i++) {
-                    var c = e.changes[i];
-                    totalLength += (c.text || '').length;
-                    changes.push({ range: c.range, text: c.text });
-                  }
-                  var truncated = totalLength > 65536;
-                  post('contentChanged', {
-                    uri: model && model.uri ? model.uri.toString() : null,
-                    isFlush: e.isFlush,
-                    changes: truncated ? undefined : changes,
-                    truncated: truncated,
-                  });
-                });
+                // contentChanged is emitted per-model by the document
+                // registry in editor-api.js (so INACTIVE pinned documents
+                // report their edits too); no editor-level content listener
+                // here.
                 E().onDidChangeCursorSelection(e => post('selectionChanged', {
                   selection: e.selection && {
                     startLineNumber: e.selection.startLineNumber,

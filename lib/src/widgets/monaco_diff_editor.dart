@@ -255,6 +255,12 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
       final bootOriginal = widget.original;
       final bootModified = widget.modified;
       final bootLanguage = widget.language;
+      // Snapshot the configuration the boot applies; the widget may rebuild
+      // with different values while boot is in flight (didUpdateWidget
+      // drops changes during `connecting`), so readiness reconciles against
+      // these below.
+      final bootOptions = widget.options;
+      final bootDiffOptions = widget.diffOptions;
       final controller =
           widget.controller ??
           await (widget.controllerFactory?.call() ??
@@ -293,9 +299,13 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
       // are only pushed when the widget actually carries content -
       // otherwise the defaults ('' vs '') would wipe the diff an external
       // controller booted with.
+      var appliedOptions = bootOptions;
+      var appliedDiffOptions = bootDiffOptions;
       if (!usedInternalCreate) {
-        await _controller!.updateOptions(widget.options);
-        await _controller!.updateDiffOptions(widget.diffOptions);
+        appliedOptions = widget.options;
+        appliedDiffOptions = widget.diffOptions;
+        await _controller!.updateOptions(appliedOptions);
+        await _controller!.updateDiffOptions(appliedDiffOptions);
         final resolvedTheme = _resolveTheme();
         _appliedResolvedTheme = resolvedTheme;
         await _controller!.setTheme(resolvedTheme);
@@ -314,6 +324,25 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
         }
       }
 
+      // Option/diff-option/theme props may have changed while the boot was
+      // in flight (didUpdateWidget cannot see them during `connecting`);
+      // apply the delta before reporting ready. Texts are reconciled by
+      // _syncTexts below.
+      if (widget.options != appliedOptions) {
+        await _controller!.updateOptions(widget.options);
+      }
+      if (widget.diffOptions != appliedDiffOptions) {
+        await _controller!.updateDiffOptions(widget.diffOptions);
+      }
+      final reconciledTheme = _resolveTheme();
+      if (reconciledTheme != _appliedResolvedTheme) {
+        _appliedResolvedTheme = reconciledTheme;
+        await _controller!.setTheme(reconciledTheme);
+      }
+      if (!_isBootstrapCurrent(bootstrapToken)) {
+        return;
+      }
+
       _wireScrollHandoff();
       _syncScrollHandoffSources();
 
@@ -321,18 +350,39 @@ class _MonacoDiffEditorState extends State<MonacoDiffEditor> {
       // Content props may have changed while the boot was in flight;
       // re-apply the delta now that didUpdateWidget can no longer see it.
       _syncTexts();
-      widget.onReady?.call(_controller!);
+      _invokeOnReady();
     } catch (e, st) {
       if (!_isBootstrapCurrent(bootstrapToken)) return;
       // Boot failures render the error surface; onError is informed when
       // set, but there is no FlutterError fallback - the failure is
-      // already visible.
+      // already visible. An owned controller is disposed here (matching
+      // MonacoEditor) instead of leaking its WebView until retry/dispose.
       widget.onError?.call(e, st);
+      _teardown(disposeOldController: _ownsController);
       setState(() {
         _connectionState = _DiffConnectionState.error;
         _error = e;
         _stack = st;
       });
+    }
+  }
+
+  /// An application onReady exception is not an editor boot failure: report
+  /// it through FlutterError and leave the healthy diff editor alone.
+  void _invokeOnReady() {
+    final callback = widget.onReady;
+    if (callback == null) return;
+    try {
+      callback(_controller!);
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'flutter_monaco',
+          context: ErrorDescription('while calling MonacoDiffEditor.onReady'),
+        ),
+      );
     }
   }
 
