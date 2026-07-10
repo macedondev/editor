@@ -339,15 +339,22 @@ class MonacoDiffController {
   ///
   /// Identical contract to `MonacoController.setScrollHandoffSources`: an
   /// enabled source installs the matching DOM listeners and posts
-  /// `scrollHandoff` events (surfaced through [onScrollHandoff]) for deltas
-  /// the diff editor cannot consume; disabling removes the listeners again.
-  /// `MonacoDiffEditor` calls this automatically from its `scrollHandoff`
-  /// configuration.
+  /// `scrollHandoff` events (surfaced through [onScrollHandoff]) for scroll
+  /// gestures the diff editor cannot consume, arbitrated by [policy] (the
+  /// momentum-absorbing [MonacoScrollBoundaryPolicy.newGestureOnly] by
+  /// default); disabling removes the listeners again. `MonacoDiffEditor`
+  /// calls this automatically from its `scrollHandoff` configuration.
   Future<void> setScrollHandoffSources({
     bool wheel = false,
     bool touch = false,
+    MonacoScrollBoundaryPolicy policy =
+        MonacoScrollBoundaryPolicy.newGestureOnly,
   }) async {
-    await _invoke('page.setScrollHandoff', {'wheel': wheel, 'touch': touch});
+    await _invoke('page.setScrollHandoff', {
+      'wheel': wheel,
+      'touch': touch,
+      'policy': policy.name,
+    });
   }
 
   /// Releases the WebView and fails all in-flight commands.

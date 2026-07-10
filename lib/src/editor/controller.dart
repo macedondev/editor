@@ -718,9 +718,12 @@ class MonacoController {
   ///
   /// When a source is enabled, the page installs the matching DOM listeners
   /// and posts `scrollHandoff` events (surfaced through [onScrollHandoff])
-  /// for deltas the editor cannot consume. Disabling a source removes its
-  /// listeners again, so both sources disabled restores the exact
-  /// pre-feature behavior. Waits for the editor to be ready.
+  /// for scroll gestures the editor cannot consume, arbitrated by [policy]
+  /// (the momentum-absorbing [MonacoScrollBoundaryPolicy.newGestureOnly] by
+  /// default). Changing the policy cancels any handoff gesture in flight.
+  /// Disabling a source removes its listeners again, so both sources
+  /// disabled restores the exact pre-feature behavior. Waits for the editor
+  /// to be ready.
   ///
   /// `MonacoEditor` calls this automatically from its `scrollHandoff`
   /// configuration; call it directly only for headless or custom-widget
@@ -728,8 +731,14 @@ class MonacoController {
   Future<void> setScrollHandoffSources({
     bool wheel = false,
     bool touch = false,
+    MonacoScrollBoundaryPolicy policy =
+        MonacoScrollBoundaryPolicy.newGestureOnly,
   }) async {
-    await _invoke('page.setScrollHandoff', {'wheel': wheel, 'touch': touch});
+    await _invoke('page.setScrollHandoff', {
+      'wheel': wheel,
+      'touch': touch,
+      'policy': policy.name,
+    });
   }
 
   // --- EVENT HANDLING ---

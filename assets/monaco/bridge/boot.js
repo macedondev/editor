@@ -80,6 +80,9 @@ window.__FMB = window.__FMB || {};
                   window.flutterMonaco.setScrollHandoff({
                     wheel: !!diffScrollHandoff.wheel,
                     touch: !!diffScrollHandoff.touch,
+                    policy: typeof diffScrollHandoff.policy === 'string'
+                      ? diffScrollHandoff.policy
+                      : undefined,
                   });
                 }
                 window.FlutterMonaco.lifecycle('ready');
@@ -150,6 +153,9 @@ window.__FMB = window.__FMB || {};
                 window.flutterMonaco.setScrollHandoff({
                   wheel: !!bootScrollHandoff.wheel,
                   touch: !!bootScrollHandoff.touch,
+                  policy: typeof bootScrollHandoff.policy === 'string'
+                    ? bootScrollHandoff.policy
+                    : undefined,
                 });
               }
 

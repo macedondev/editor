@@ -292,10 +292,13 @@ class _MonacoEditorState extends State<MonacoEditor> {
     isMounted: () => mounted,
   );
 
-  /// The handoff sources last pushed to the editor page, so config rebuilds
-  /// only produce bridge traffic when the effective sources change.
+  /// The handoff sources and boundary policy last pushed to the editor
+  /// page, so config rebuilds only produce bridge traffic when the
+  /// effective configuration changes.
   bool _syncedWheelSource = false;
   bool _syncedTouchSource = false;
+  MonacoScrollBoundaryPolicy _syncedPolicy =
+      MonacoScrollBoundaryPolicy.newGestureOnly;
 
   /// The theme most recently pushed to the editor, so ambient brightness
   /// changes (D27) only produce bridge traffic when the resolved theme
@@ -699,19 +702,29 @@ class _MonacoEditorState extends State<MonacoEditor> {
     );
   }
 
-  /// Pushes the desired handoff sources to the editor page when they differ
-  /// from what was last pushed. A disabled config therefore produces no
-  /// bridge traffic at all.
+  /// Pushes the desired handoff sources and boundary policy to the editor
+  /// page when they differ from what was last pushed. A disabled config
+  /// therefore produces no bridge traffic at all.
   void _syncScrollHandoffSources() {
     final controller = _controller;
     if (controller == null) return;
     final wheel = widget.scrollHandoff.wheelSourceEnabled;
     final touch = widget.scrollHandoff.touchSourceEnabled;
-    if (wheel == _syncedWheelSource && touch == _syncedTouchSource) return;
+    final policy = widget.scrollHandoff.policy;
+    if (wheel == _syncedWheelSource &&
+        touch == _syncedTouchSource &&
+        policy == _syncedPolicy) {
+      return;
+    }
     _syncedWheelSource = wheel;
     _syncedTouchSource = touch;
+    _syncedPolicy = policy;
     _ignoreAsync(
-      controller.setScrollHandoffSources(wheel: wheel, touch: touch),
+      controller.setScrollHandoffSources(
+        wheel: wheel,
+        touch: touch,
+        policy: policy,
+      ),
     );
   }
 
@@ -791,6 +804,7 @@ class _MonacoEditorState extends State<MonacoEditor> {
     }
     _syncedWheelSource = false;
     _syncedTouchSource = false;
+    _syncedPolicy = MonacoScrollBoundaryPolicy.newGestureOnly;
     _scrollHandoffDriver.clearPending();
     _appliedResolvedTheme = null;
     if (disposeOldController) {
