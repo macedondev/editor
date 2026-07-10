@@ -27,6 +27,61 @@ enum MonacoScrollHandoffSource {
   touch,
 }
 
+/// How gesture ownership is resolved when a scroll gesture meets the
+/// editor's scroll boundary.
+///
+/// The policy decides one thing: whether the *remainder* of a gesture that
+/// started inside the editor may spill into the Flutter host once the editor
+/// runs out of scroll range. It is applied inside the editor page, before
+/// any delta crosses the bridge, so the host never has to guess whether a
+/// delta was leftover inertia.
+enum MonacoScrollBoundaryPolicy {
+  /// Unconsumed deltas chain to the host immediately (the 2.3.0 behavior).
+  ///
+  /// Fast wheels and trackpad momentum spill into the surrounding page the
+  /// instant the editor hits its edge, mid-gesture. Use this only when the
+  /// embedding wants Android-style continuous nested-scroll chaining.
+  continuous,
+
+  /// The editor keeps every gesture it started; the host gets new gestures
+  /// that start at the boundary (the default).
+  ///
+  /// A gesture (and its whole inertial tail) that reaches the editor's edge
+  /// is absorbed there, like a native macOS/iOS nested scroll "wall". To
+  /// scroll the surrounding page, the user stops and starts a physically
+  /// distinct gesture while the editor is already at its edge; reversing
+  /// direction hands the input back to the editor immediately. Forwarded
+  /// gestures arrive as begin/update/end sessions (see
+  /// [MonacoScrollHandoffDetails.phase]).
+  newGestureOnly,
+}
+
+/// The position of one [MonacoScrollHandoffDetails] message within a
+/// host-owned scroll gesture.
+///
+/// Only gestures the editor page decided the host owns are sessionized;
+/// under [MonacoScrollBoundaryPolicy.continuous] every delta arrives as a
+/// standalone [update] with [MonacoScrollHandoffDetails.gestureId] `0`.
+enum MonacoScrollHandoffPhase {
+  /// The first delta of a host-owned gesture. Carries a payload delta and
+  /// resets any pending state from earlier gestures.
+  begin,
+
+  /// A continuation delta of the gesture announced by [begin] with the same
+  /// [MonacoScrollHandoffDetails.gestureId].
+  update,
+
+  /// The gesture ended (quiet period elapsed, direction reversed back into
+  /// the editor, or it was superseded). Carries zero deltas; already
+  /// accumulated deltas still apply.
+  end,
+
+  /// The gesture was cancelled (handoff disabled, policy changed, or touch
+  /// forwarding yielded to text selection). Carries zero deltas; the host
+  /// drops any deltas of this gesture it has not applied yet.
+  cancel,
+}
+
 /// One unconsumed scroll intent reported by the editor page.
 ///
 /// Deltas use wheel semantics normalized to pixels: positive [deltaY] means
@@ -44,10 +99,38 @@ class MonacoScrollHandoffDetails {
     required this.atBottom,
     required this.atLeft,
     required this.atRight,
+    this.phase = MonacoScrollHandoffPhase.update,
+    this.gestureId = 0,
+    this.momentum = false,
   });
 
   /// The input source that produced this delta.
   final MonacoScrollHandoffSource source;
+
+  /// Where this message sits in its gesture's lifecycle.
+  ///
+  /// Payload deltas arrive as [MonacoScrollHandoffPhase.begin] or
+  /// [MonacoScrollHandoffPhase.update]; [MonacoScrollHandoffPhase.end] and
+  /// [MonacoScrollHandoffPhase.cancel] close a gesture and carry zero
+  /// deltas. Under [MonacoScrollBoundaryPolicy.continuous] every message is
+  /// an [MonacoScrollHandoffPhase.update].
+  final MonacoScrollHandoffPhase phase;
+
+  /// The page-unique id of the host-owned gesture this message belongs to.
+  ///
+  /// `0` marks an unsessionized message ([MonacoScrollBoundaryPolicy
+  /// .continuous]); sessionized gestures count up from `1`. The built-in
+  /// handoff applies an [MonacoScrollHandoffPhase.update] only while its
+  /// gesture is the active one, so a stale delta can never move the host.
+  final int gestureId;
+
+  /// Whether the editor page identified this delta as scroll inertia
+  /// rather than direct input.
+  ///
+  /// Only populated where the browser exposes momentum metadata on wheel
+  /// events; `false` otherwise. Informational: ownership was already decided
+  /// on the editor side.
+  final bool momentum;
 
   /// Horizontal delta in pixels. Reported for completeness; the built-in
   /// handoff applies only [deltaY] in this release.
@@ -72,8 +155,11 @@ class MonacoScrollHandoffDetails {
   /// Parses a `scrollHandoff` bridge payload.
   ///
   /// Returns `null` for malformed payloads instead of throwing: an unknown
-  /// [source], or a missing, non-numeric, or non-finite delta. Absent or
-  /// non-boolean edge flags default to `false`.
+  /// [source], an unknown [phase], or a missing, non-numeric, or non-finite
+  /// delta. Absent or non-boolean edge flags default to `false`. Legacy
+  /// payloads without session fields parse as
+  /// [MonacoScrollHandoffPhase.update] with [gestureId] `0` and no
+  /// [momentum], and a malformed [gestureId] also falls back to `0`.
   static MonacoScrollHandoffDetails? tryParse(Map<String, dynamic> json) {
     final source = switch (json['source']) {
       'wheel' => MonacoScrollHandoffSource.wheel,
@@ -82,12 +168,25 @@ class MonacoScrollHandoffDetails {
     };
     if (source == null) return null;
 
+    final phase = switch (json['phase']) {
+      null => MonacoScrollHandoffPhase.update,
+      'begin' => MonacoScrollHandoffPhase.begin,
+      'update' => MonacoScrollHandoffPhase.update,
+      'end' => MonacoScrollHandoffPhase.end,
+      'cancel' => MonacoScrollHandoffPhase.cancel,
+      _ => null,
+    };
+    if (phase == null) return null;
+
     final deltaX = _finiteDouble(json['deltaX']);
     final deltaY = _finiteDouble(json['deltaY']);
     if (deltaX == null || deltaY == null) return null;
 
     return MonacoScrollHandoffDetails(
       source: source,
+      phase: phase,
+      gestureId: _gestureId(json['gestureId']),
+      momentum: json['momentum'] == true,
       deltaX: deltaX,
       deltaY: deltaY,
       atTop: json['atTop'] == true,
@@ -103,10 +202,22 @@ class MonacoScrollHandoffDetails {
     return result.isFinite ? result : null;
   }
 
+  /// A malformed gesture id degrades to the legacy id `0` (always applied)
+  /// rather than dropping the whole payload: losing session tracking is
+  /// recoverable, losing scroll deltas is user-visible.
+  static int _gestureId(Object? value) {
+    if (value is! num || !value.isFinite) return 0;
+    final id = value.toInt();
+    return id < 0 ? 0 : id;
+  }
+
   @override
   bool operator ==(Object other) {
     return other is MonacoScrollHandoffDetails &&
         other.source == source &&
+        other.phase == phase &&
+        other.gestureId == gestureId &&
+        other.momentum == momentum &&
         other.deltaX == deltaX &&
         other.deltaY == deltaY &&
         other.atTop == atTop &&
@@ -116,13 +227,25 @@ class MonacoScrollHandoffDetails {
   }
 
   @override
-  int get hashCode =>
-      Object.hash(source, deltaX, deltaY, atTop, atBottom, atLeft, atRight);
+  int get hashCode => Object.hash(
+    source,
+    phase,
+    gestureId,
+    momentum,
+    deltaX,
+    deltaY,
+    atTop,
+    atBottom,
+    atLeft,
+    atRight,
+  );
 
   @override
   String toString() {
     return 'MonacoScrollHandoffDetails('
         'source: ${source.name}, '
+        'phase: ${phase.name}, gestureId: $gestureId, '
+        'momentum: $momentum, '
         'deltaX: $deltaX, deltaY: $deltaY, '
         'atTop: $atTop, atBottom: $atBottom, '
         'atLeft: $atLeft, atRight: $atRight)';
@@ -133,9 +256,18 @@ class MonacoScrollHandoffDetails {
 ///
 /// Disabled by default. When enabled with [MonacoScrollHandoff.edge], wheel
 /// or trackpad input over the editor keeps scrolling Monaco until the editor
-/// reaches its scroll edge; deltas the editor cannot consume are forwarded
-/// to a Flutter scroll target so the surrounding page continues scrolling.
-/// Reversing direction hands the input back to Monaco immediately.
+/// reaches its scroll edge; scroll gestures the editor cannot consume are
+/// forwarded to a Flutter scroll target so the surrounding page continues
+/// scrolling. Reversing direction hands the input back to Monaco
+/// immediately.
+///
+/// What happens to the gesture that *reaches* the edge is governed by
+/// [policy]. Under the default [MonacoScrollBoundaryPolicy.newGestureOnly],
+/// that gesture (and its trackpad momentum) stops dead at the boundary like
+/// a native nested scroll view; the host page scrolls only when a new
+/// gesture starts while the editor is already at its edge. Under
+/// [MonacoScrollBoundaryPolicy.continuous] every unconsumed delta chains to
+/// the host immediately, which lets fast scrolls jerk the page.
 ///
 /// The forwarded delta is applied to the first available target:
 ///
@@ -168,24 +300,37 @@ class MonacoScrollHandoff {
       useNearestScrollable = true,
       desktopWheel = true,
       mobileTouch = false,
+      policy = MonacoScrollBoundaryPolicy.newGestureOnly,
       onHandoff = null;
 
   /// Enables edge handoff.
   ///
   /// [desktopWheel] controls the wheel/trackpad source (on by default).
   /// [mobileTouch] additionally opts in to experimental touch forwarding.
-  /// See the class docs for how the scroll target is resolved from
-  /// [onHandoff], [controller], and [useNearestScrollable].
+  /// [policy] selects the boundary behavior (momentum-absorbing
+  /// [MonacoScrollBoundaryPolicy.newGestureOnly] by default). See the class
+  /// docs for how the scroll target is resolved from [onHandoff],
+  /// [controller], and [useNearestScrollable].
   const MonacoScrollHandoff.edge({
     this.controller,
     this.useNearestScrollable = true,
     this.desktopWheel = true,
     this.mobileTouch = false,
+    this.policy = MonacoScrollBoundaryPolicy.newGestureOnly,
     this.onHandoff,
   }) : mode = MonacoScrollHandoffMode.edge;
 
   /// The active handoff mode.
   final MonacoScrollHandoffMode mode;
+
+  /// How gestures that meet the editor's scroll boundary are owned.
+  ///
+  /// Defaults to [MonacoScrollBoundaryPolicy.newGestureOnly]: a gesture that
+  /// starts inside the editor is absorbed at the edge, momentum included,
+  /// and the host scrolls only on a subsequent gesture that starts at the
+  /// edge. Set [MonacoScrollBoundaryPolicy.continuous] to restore the 2.3.0
+  /// unconsumed-delta chaining.
+  final MonacoScrollBoundaryPolicy policy;
 
   /// Explicit scroll target. Wins over [useNearestScrollable]. Only its
   /// vertical positions receive deltas; horizontal positions are ignored.
