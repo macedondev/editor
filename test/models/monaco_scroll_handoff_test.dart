@@ -192,7 +192,7 @@ void main() {
       int? idOf(Object? raw) {
         return MonacoScrollHandoffDetails.tryParse({
           'source': 'wheel',
-          if (raw != null) 'gestureId': raw,
+          'gestureId': ?raw,
           'deltaX': 0,
           'deltaY': 1,
         })?.gestureId;
