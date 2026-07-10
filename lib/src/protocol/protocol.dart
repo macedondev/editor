@@ -39,6 +39,9 @@ class MonacoProtocol {
       StreamController<ProtocolEvent>.broadcast();
   final StreamController<ProtocolRequest> _requests =
       StreamController<ProtocolRequest>.broadcast();
+  final StreamController<MonacoPageReload> _pageReloads =
+      StreamController<MonacoPageReload>.broadcast();
+  Completer<void>? _reloadEditorReady;
   final Map<String, _PendingInvoke> _pending = {};
   int _invokeSeq = 0;
   int _lastEventSeq = 0;
@@ -66,6 +69,22 @@ class MonacoProtocol {
 
   /// JavaScript-initiated requests awaiting a Dart answer via [respond].
   Stream<ProtocolRequest> get requests => _requests.stream;
+
+  /// Fires when the page document loads AGAIN after the first successful
+  /// handshake.
+  ///
+  /// This happens outside the app's control: the Flutter web engine
+  /// re-inserted the editor's iframe during platform-view re-composition
+  /// (re-inserting an iframe reloads its `src`), a native WebView process
+  /// recovered from a crash, or the page was refreshed. The new document is
+  /// a bare shell - every model, registration, and listener of the old page
+  /// is gone, and commands that were in flight fail with
+  /// [MonacoPageReloadedError] the moment the reload is detected.
+  ///
+  /// A reload whose handshake shows a protocol version skew is NOT emitted
+  /// here (the page cannot be re-booted); it only fails the in-flight
+  /// commands.
+  Stream<MonacoPageReload> get pageReloads => _pageReloads.stream;
 
   /// Dispatches [method] with [params] and completes with the response
   /// value.
@@ -206,6 +225,15 @@ class MonacoProtocol {
     switch (name) {
       case 'pageReady':
         final handshake = MonacoHandshake.fromEnvelope(json);
+        final isReload = _pageReady.isCompleted;
+        if (isReload) {
+          // The document loaded again: the old page's state (models,
+          // registrations, response routing) is gone, so nothing still in
+          // flight can ever be answered. Event sequence numbering restarts
+          // with the new page.
+          _failPendingForReload();
+          _lastEventSeq = 0;
+        }
         if (handshake.protocolVersion != kMonacoProtocolVersion) {
           final error = MonacoProtocolError(
             operation: 'handshake',
@@ -217,12 +245,33 @@ class MonacoProtocol {
           );
           if (!_pageReady.isCompleted) _pageReady.completeError(error);
           if (!_editorReady.isCompleted) _editorReady.completeError(error);
+          if (isReload) {
+            // A skewed page cannot be re-booted; don't announce a
+            // recoverable reload.
+            debugPrint('[MonacoProtocol] Reloaded page has ${error.message}');
+          }
           return;
         }
-        if (!_pageReady.isCompleted) _pageReady.complete(handshake);
+        if (isReload) {
+          final editorReadyAgain = Completer<void>();
+          editorReadyAgain.future.ignore();
+          _reloadEditorReady = editorReadyAgain;
+          _pageReloads.add(
+            MonacoPageReload._(
+              handshake: handshake,
+              editorReady: editorReadyAgain.future,
+            ),
+          );
+          return;
+        }
+        _pageReady.complete(handshake);
       case 'ready':
         _editorReadyCompletedOk = true;
         if (!_editorReady.isCompleted) _editorReady.complete();
+        final reloadReady = _reloadEditorReady;
+        if (reloadReady != null && !reloadReady.isCompleted) {
+          reloadReady.complete();
+        }
       case 'fatal':
         final errorJson = json['error'];
         final error = MonacoJavaScriptError.fromJson(
@@ -233,9 +282,32 @@ class MonacoProtocol {
         );
         if (!_pageReady.isCompleted) _pageReady.completeError(error);
         if (!_editorReady.isCompleted) _editorReady.completeError(error);
+        final reloadReady = _reloadEditorReady;
+        if (reloadReady != null && !reloadReady.isCompleted) {
+          reloadReady.completeError(error);
+        }
       default:
         debugPrint('[MonacoProtocol] Unknown lifecycle stage: $name');
     }
+  }
+
+  /// Fails every in-flight invoke with [MonacoPageReloadedError]: their
+  /// responses died with the old page document.
+  void _failPendingForReload() {
+    for (final pending in List.of(_pending.values)) {
+      if (!pending.completer.isCompleted) {
+        pending.completer.completeError(
+          MonacoPageReloadedError(
+            message:
+                'The Monaco page reloaded while the command was in flight. '
+                'Retry after the editor recovers '
+                '(MonacoController.onPageReloaded).',
+            operation: pending.method,
+          ),
+        );
+      }
+    }
+    _pending.clear();
   }
 
   void _handleResponse(ResponseEnvelope envelope) {
@@ -306,8 +378,19 @@ class MonacoProtocol {
         ),
       );
     }
+    final reloadReady = _reloadEditorReady;
+    if (reloadReady != null && !reloadReady.isCompleted) {
+      reloadReady.completeError(
+        const MonacoDisposedError(
+          message:
+              'MonacoProtocol disposed while a page reload was '
+              'being recovered.',
+        ),
+      );
+    }
     _events.close();
     _requests.close();
+    _pageReloads.close();
   }
 
   /// JSON-encodes [value] for safe embedding inside a JavaScript source
@@ -328,4 +411,22 @@ class _PendingInvoke {
 
   final String method;
   final Completer<Object?> completer = Completer<Object?>();
+}
+
+/// One page-reload occurrence delivered on [MonacoProtocol.pageReloads].
+///
+/// Carries the fresh page's [handshake] and an [editorReady] future that
+/// tracks the RELOADED page's editor: after re-dispatching `page.boot`,
+/// await [editorReady] before issuing editor commands. It completes at the
+/// next `lifecycle: ready` and fails at the next `lifecycle: fatal` (or on
+/// dispose).
+final class MonacoPageReload {
+  MonacoPageReload._({required this.handshake, required this.editorReady});
+
+  /// The handshake the reloaded page shell reported.
+  final MonacoHandshake handshake;
+
+  /// Completes when the reloaded page's editor exists and every command is
+  /// registered.
+  final Future<void> editorReady;
 }

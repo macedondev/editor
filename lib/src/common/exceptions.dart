@@ -10,6 +10,9 @@ import 'dart:async';
 /// * [MonacoTimeoutError] - no response arrived in time.
 /// * [MonacoDisposedError] - the controller/protocol was used after dispose,
 ///   or disposed while work was in flight.
+/// * [MonacoPageReloadedError] - the page document reloaded while the
+///   command was in flight; the command can be retried once the editor
+///   recovers (`MonacoController.onPageReloaded`).
 ///
 /// Every read and write on `MonacoController` throws on failure; nothing is
 /// silently defaulted.
@@ -125,5 +128,22 @@ final class MonacoTimeoutError extends MonacoException
 final class MonacoDisposedError extends MonacoException {
   /// Creates a use-after-dispose error.
   const MonacoDisposedError({required String message, String? operation})
+    : super(message, operation: operation);
+}
+
+/// The page document reloaded while the command was in flight, so the
+/// command can never be answered: every page-side object (models,
+/// registrations, pending responses) was discarded with the old document.
+///
+/// Page reloads happen outside the app's control - the Flutter web engine
+/// re-inserted the editor's iframe during platform-view re-composition, a
+/// native WebView process recovered, or the page was refreshed. Unlike
+/// [MonacoDisposedError] this is transient: the controller re-boots the
+/// fresh page automatically and announces recovery through
+/// `MonacoController.onPageReloaded`, after which the command can be
+/// retried.
+final class MonacoPageReloadedError extends MonacoException {
+  /// Creates a reload-interrupted-command error.
+  const MonacoPageReloadedError({required String message, String? operation})
     : super(message, operation: operation);
 }

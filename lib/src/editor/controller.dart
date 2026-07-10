@@ -23,6 +23,7 @@ class MonacoController {
   MonacoController._(this._protocol, this._webViewController) {
     _wireEvents();
     _wireRequests();
+    _wireReloadRecovery();
     _lspManager = MonacoLspManager(protocol: _protocol);
   }
 
@@ -31,6 +32,11 @@ class MonacoController {
   final Completer<void> _onReady = Completer<void>();
   late final MonacoLspManager _lspManager;
   bool _disposed = false;
+
+  /// The exact `page.boot` payload of the first boot, replayed verbatim
+  /// when the page document reloads (see [onPageReloaded]). Null until
+  /// [_startBoot] runs.
+  Map<String, Object?>? _bootPayload;
 
   /// The EFFECTIVE interaction state ([_baseInteractionEnabled] with no
   /// active [runWithInteractionDisabled] scopes).
@@ -53,6 +59,10 @@ class MonacoController {
   final _events = StreamController<MonacoEvent>.broadcast();
   StreamSubscription<ProtocolEvent>? _eventSubscription;
 
+  // Page-reload recovery (see onPageReloaded).
+  final _pageReloaded = StreamController<void>.broadcast();
+  StreamSubscription<MonacoPageReload>? _reloadSubscription;
+
   late final MonacoFocusCoordinator _focus = MonacoFocusCoordinator(
     webView: _webViewController,
     ensureReady: _ensureReady,
@@ -64,8 +74,14 @@ class MonacoController {
   /// model is currently attached to the editor. See [MonacoDocument].
   late final MonacoDocument document = MonacoDocument.internal(_invoke, null);
 
-  final Map<String, CompletionProvider> _completionSources = {};
-  final Map<String, Future<void> Function()> _customActions = {};
+  /// Live completion registrations, keyed by provider id. Each entry keeps
+  /// its `completions.register` params so recovery from a page reload can
+  /// re-register it on the fresh page.
+  final Map<String, _CompletionRegistrationState> _completionSources = {};
+
+  /// Live Dart-defined actions, keyed by action id. Each entry keeps its
+  /// `actions.register` descriptor for page-reload replay.
+  final Map<String, _ActionRegistrationState> _customActions = {};
   StreamSubscription<ProtocolRequest>? _requestSubscription;
   int _registrationSeq = 0;
   MonacoCapabilities? _capabilities;
@@ -137,6 +153,38 @@ class MonacoController {
   Stream<MonacoScrollHandoffDetails> get onScrollHandoff => events
       .where((e) => e is MonacoScrollHandoffEvent)
       .map((e) => (e as MonacoScrollHandoffEvent).details);
+
+  /// Fires after the controller recovered from a page reload.
+  ///
+  /// The page document can reload outside the app's control: the Flutter
+  /// web engine detaches and re-inserts the editor's iframe during
+  /// platform-view re-composition (tab and route churn) and re-inserting an
+  /// iframe reloads it, a native WebView process can recover from a crash,
+  /// or the page can be refreshed. The reloaded document is a bare shell -
+  /// everything page-side is discarded.
+  ///
+  /// The controller recovers on its own before this fires: it re-boots the
+  /// editor with the ORIGINAL boot payload (options, text, language, theme
+  /// as passed to [create]), waits for readiness, and re-registers every
+  /// live [registerCompletions] provider and [addAction] action, so their
+  /// registration handles stay valid. By the time an event arrives here the
+  /// editor accepts commands again.
+  ///
+  /// What the controller cannot restore is state it never owned - listen to
+  /// this stream to restore it:
+  ///
+  /// * Document content and models: text reverts to the boot text; models
+  ///   opened with [openDocument] are gone (their pinned handles now throw
+  ///   [MonacoJavaScriptError]) - re-open and re-activate them.
+  /// * Post-boot configuration: [updateOptions], [setTheme], [defineTheme],
+  ///   [setScrollHandoffSources], markers, decorations, and view states.
+  /// * LSP connections: they died with the page - disconnect and reconnect.
+  ///
+  /// Commands that were in flight when the page reloaded fail with
+  /// [MonacoPageReloadedError]; retry them from here. If the re-boot itself
+  /// fails, the failure is delivered as an error event on this stream and
+  /// the editor stays unusable.
+  Stream<void> get onPageReloaded => _pageReloaded.stream;
 
   /// Creates a new [MonacoController] and boots the editor.
   ///
@@ -238,13 +286,16 @@ class MonacoController {
 
           // Boot the editor with the merged initial state; the response
           // acknowledges acceptance, the ready lifecycle follows creation.
-          await _protocol.invoke('page.boot', {
+          // The payload is kept for page-reload recovery (onPageReloaded).
+          final bootPayload = <String, Object?>{
             'options': bootOptions.toMonacoOptions(),
             'text': initialText ?? '',
             'language': bootLanguage.id,
             'theme': bootTheme.id,
             'scrollHandoff': const {'wheel': false, 'touch': false},
-          }, timeout: null);
+          };
+          _bootPayload = bootPayload;
+          await _protocol.invoke('page.boot', bootPayload, timeout: null);
 
           await _protocol.editorReady;
         }().timeout(
@@ -278,11 +329,20 @@ class MonacoController {
   /// When [markReady] is true, synthetic `pageReady` and `ready` lifecycle
   /// envelopes are pushed through the real protocol decode path so the
   /// controller behaves exactly as it does against a live page.
+  ///
+  /// When [runBoot] is true, the REAL boot pipeline runs against the fake
+  /// WebView instead ([markReady] is ignored): `load()` is expected to emit
+  /// `pageReady`, `page.boot` carries [bootOptions] and [bootInitialText],
+  /// and readiness follows the fake's `ready` lifecycle. Use this to
+  /// exercise flows that depend on boot state, like page-reload recovery.
   @visibleForTesting
   static Future<MonacoController> createForTesting({
     required PlatformWebViewController webViewController,
     bool markReady = true,
     String channelName = 'flutterChannel',
+    bool runBoot = false,
+    EditorOptions? bootOptions,
+    String? bootInitialText,
   }) async {
     final protocol = MonacoProtocol(webView: webViewController);
 
@@ -294,7 +354,14 @@ class MonacoController {
     );
 
     final controller = MonacoController._(protocol, webViewController);
-    if (markReady) {
+    if (runBoot) {
+      controller._startBoot(
+        options: bootOptions,
+        initialText: bootInitialText,
+        page: const MonacoPageConfig(),
+        readyTimeout: const Duration(seconds: 20),
+      );
+    } else if (markReady) {
       controller.completeReadyForTesting();
     }
     return controller;
@@ -571,13 +638,17 @@ class MonacoController {
     }
 
     final providerId = id ?? 'flutter_${++_registrationSeq}';
-    _completionSources[providerId] = provider;
-    try {
-      await _invoke('completions.register', {
+    final registration = _CompletionRegistrationState(
+      provider: provider,
+      params: {
         'id': providerId,
         'languages': [for (final language in languages) language.id],
         'triggerCharacters': List<String>.from(triggerCharacters),
-      });
+      },
+    );
+    _completionSources[providerId] = registration;
+    try {
+      await _invoke('completions.register', registration.params);
     } catch (e) {
       _completionSources.remove(providerId);
       rethrow;
@@ -646,9 +717,13 @@ class MonacoController {
         'Action "$actionId" is already registered',
       );
     }
-    _customActions[actionId] = run;
+    final registration = _ActionRegistrationState(
+      run: run,
+      descriptor: descriptor.toJson(),
+    );
+    _customActions[actionId] = registration;
     try {
-      await _invoke('actions.register', descriptor.toJson());
+      await _invoke('actions.register', registration.descriptor);
     } catch (e) {
       _customActions.remove(actionId);
       rethrow;
@@ -773,6 +848,65 @@ class MonacoController {
     });
   }
 
+  /// Wire up page-reload recovery (see [onPageReloaded]).
+  void _wireReloadRecovery() {
+    _reloadSubscription = _protocol.pageReloads.listen((reload) {
+      unawaited(_recoverFromPageReload(reload));
+    });
+  }
+
+  /// Converges a freshly reloaded page back to a booted, usable editor.
+  ///
+  /// Replays the original boot payload, awaits the reloaded page's ready
+  /// lifecycle, re-registers Dart-side completion providers and custom
+  /// actions, then announces the recovery on [onPageReloaded]. A newer
+  /// reload arriving mid-recovery fails this attempt's commands with
+  /// [MonacoPageReloadedError] and runs its own recovery; a genuine boot
+  /// failure is surfaced as an error on [onPageReloaded].
+  Future<void> _recoverFromPageReload(MonacoPageReload reload) async {
+    if (_disposed) return;
+    final bootPayload = _bootPayload;
+    if (bootPayload == null) {
+      // Reload before the first boot dispatched anything: there is nothing
+      // to replay, and the original boot flow still owns readiness.
+      debugPrint(
+        '[MonacoController] Page reloaded before boot completed; '
+        'leaving recovery to the boot flow.',
+      );
+      return;
+    }
+    debugPrint('[MonacoController] Page reloaded; re-booting the editor.');
+    try {
+      _capabilities = MonacoCapabilities.fromHandshake(reload.handshake);
+      await _protocol.invoke('page.boot', bootPayload, timeout: null);
+      await reload.editorReady;
+      await _replayRegistrations();
+      if (_disposed) return;
+      _pageReloaded.add(null);
+    } on MonacoPageReloadedError {
+      // Superseded by an even newer reload; its recovery takes over.
+    } on MonacoDisposedError {
+      // Disposed mid-recovery; nothing to announce.
+    } catch (e, st) {
+      debugPrint('[MonacoController] Page reload recovery failed: $e');
+      if (!_disposed) _pageReloaded.addError(e, st);
+    }
+  }
+
+  /// Re-registers every live completion provider and custom action on the
+  /// reloaded page, keeping existing registration handles valid.
+  Future<void> _replayRegistrations() async {
+    for (final entry in List.of(_completionSources.entries)) {
+      // Skip registrations disposed while recovery was in flight.
+      if (!identical(_completionSources[entry.key], entry.value)) continue;
+      await _protocol.invoke('completions.register', entry.value.params);
+    }
+    for (final entry in List.of(_customActions.entries)) {
+      if (!identical(_customActions[entry.key], entry.value)) continue;
+      await _protocol.invoke('actions.register', entry.value.descriptor);
+    }
+  }
+
   Future<void> _handleRequest(ProtocolRequest request) async {
     try {
       switch (request.name) {
@@ -807,7 +941,7 @@ class MonacoController {
       return;
     }
 
-    final provider = _completionSources[completionRequest.providerId];
+    final provider = _completionSources[completionRequest.providerId]?.provider;
     if (provider == null) {
       await _protocol.respond(request.id, value: emptySuggestions);
       return;
@@ -825,7 +959,7 @@ class MonacoController {
 
   Future<void> _handleActionRequest(ProtocolRequest request) async {
     final actionId = request.data['actionId'];
-    final run = actionId is String ? _customActions[actionId] : null;
+    final run = actionId is String ? _customActions[actionId]?.run : null;
     if (run == null) {
       await _protocol.respond(request.id, error: 'Unknown action: $actionId');
       return;
@@ -1244,11 +1378,32 @@ class MonacoController {
     _lspManager.dispose();
     _eventSubscription?.cancel();
     _requestSubscription?.cancel();
+    _reloadSubscription?.cancel();
     _completionSources.clear();
     _customActions.clear();
     _events.close();
+    _pageReloaded.close();
     _liveStats.dispose();
     _protocol.dispose();
     _webViewController.dispose();
   }
+}
+
+/// Replay state for one live completion registration: the Dart [provider]
+/// answering requests, and the `completions.register` [params] re-sent when
+/// a page reload discards the page-side registration.
+class _CompletionRegistrationState {
+  _CompletionRegistrationState({required this.provider, required this.params});
+
+  final CompletionProvider provider;
+  final Map<String, Object?> params;
+}
+
+/// Replay state for one live Dart-defined action: the [run] callback, and
+/// the `actions.register` [descriptor] re-sent after a page reload.
+class _ActionRegistrationState {
+  _ActionRegistrationState({required this.run, required this.descriptor});
+
+  final Future<void> Function() run;
+  final Map<String, Object?> descriptor;
 }

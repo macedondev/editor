@@ -3,6 +3,18 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-07-11
+
+The editor now survives page reloads it never caused. On Flutter web the engine can detach and re-insert the editor's iframe during platform-view re-composition (closing/opening in-app tabs, route transitions), and re-inserting an iframe makes the browser reload it; native WebView processes can likewise recover from a crash. Both cases previously left a dead editor behind.
+
+### Fixed
+- **Web: the editor pane no longer turns into the browser's "It may have been moved, edited, or deleted." error page.** The Monaco page's blob URL was revoked as soon as the page first reported ready, so any later engine-driven iframe re-insertion reloaded a dead URL. The blob URL now lives exactly as long as the iframe and is released on `dispose()`.
+
+### Added
+- **Automatic page-reload recovery.** When the page document reloads under a live controller, `MonacoController` and `MonacoDiffController` detect it, re-boot the editor with their original boot payload (options, text, language, theme), and re-register every live `registerCompletions` provider and `addAction` action - existing registration handles stay valid. `MonacoEditor` additionally re-applies its widget-owned options, resolved theme, background color, and scroll-handoff sources.
+- **`onPageReloaded` stream on `MonacoController` and `MonacoDiffController`.** Fires after a recovery completes, once the editor accepts commands again. Listen to restore what the package cannot know: document content and models opened with `openDocument` (stale pinned handles throw), post-boot configuration (`updateOptions`, `setTheme`, `defineTheme`, markers, decorations, view states), and LSP connections (reconnect them). A failed recovery surfaces as an error event on the stream.
+- **`MonacoPageReloadedError`.** Commands in flight when the page reloads now fail immediately with this typed, retryable error instead of hanging until their timeout. Note for exhaustive `switch`es over the sealed `MonacoException`: this adds a new member.
+
 ## [3.3.0] - 2026-07-10
 
 Two independent improvements in one release. Correctness fixes driven by an external architecture audit of v3: two release-blocking fixes (dirty tracking, boot-error propagation), a set of lifecycle repairs, and small API additions; no public API is removed. And edge scroll handoff gains native nested-scroll boundary behavior: the gesture that reaches the editor's scroll edge stops there instead of jerking the surrounding page.
