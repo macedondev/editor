@@ -672,8 +672,56 @@ class _MonacoEditorState extends State<MonacoEditor> {
     );
     _streamSubscriptions.add(scrollHandoffSub);
 
+    // The controller re-boots a reloaded page with its BOOT-time state; the
+    // widget then re-applies what it owns on top (current options, theme,
+    // background, scroll handoff). Recovery failures route to onError.
+    final reloadSub = _controller!.onPageReloaded.listen(
+      (_) => _reapplyAfterPageReload(),
+      onError: _reportAsyncError,
+    );
+    _streamSubscriptions.add(reloadSub);
+
     _statsListener = () => widget.onLiveStats?.call(_controller!.stats.value);
     _controller!.stats.addListener(_statsListener!);
+  }
+
+  /// Re-applies widget-owned configuration after the controller recovered
+  /// from a page reload (see `MonacoController.onPageReloaded`).
+  ///
+  /// The re-booted page carries the controller's boot-time options, so this
+  /// pushes the widget's CURRENT options, resolved theme, language,
+  /// background color, and scroll handoff sources - the same convergence
+  /// `_reconcileAfterBoot` performs after a slow first boot. Content is
+  /// deliberately not touched: it belongs to the application.
+  void _reapplyAfterPageReload() {
+    final controller = _controller;
+    if (controller == null || !mounted) return;
+    _ignoreAsync(() async {
+      await controller.updateOptions(widget.options);
+      final resolvedTheme = _resolveTheme();
+      _appliedResolvedTheme = resolvedTheme;
+      await controller.setTheme(resolvedTheme);
+      final language = widget.options.language;
+      if (language != null) {
+        await controller.document.setLanguage(language);
+      }
+      final backgroundColor = widget.backgroundColor;
+      if (backgroundColor != null) {
+        try {
+          await controller.setBackgroundColor(backgroundColor);
+          await controller.setHostPageBackgroundColor(backgroundColor);
+        } catch (e) {
+          debugPrint('[MonacoEditor] reload background re-apply failed: $e');
+        }
+      }
+      // The reloaded page booted with handoff sources disabled again (the
+      // replayed boot payload sends wheel/touch false); reset the synced
+      // snapshot to that state so the next sync pushes a real delta.
+      _syncedWheelSource = false;
+      _syncedTouchSource = false;
+      _syncedPolicy = MonacoScrollBoundaryPolicy.newGestureOnly;
+      _syncScrollHandoffSources();
+    }());
   }
 
   void _ignoreAsync(Future<void> future) {

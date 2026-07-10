@@ -65,8 +65,15 @@ String _monacoBridgeAssetUrl() {
 /// ### HTML Loading
 ///
 /// Monaco HTML is generated as a blob URL to avoid CORS issues with
-/// `file://` or asset paths. The blob URL is revoked after Monaco
-/// reports ready to free memory.
+/// `file://` or asset paths. The blob URL stays alive for as long as the
+/// iframe exists (released on [dispose] or when a retry replaces it): the
+/// Flutter web engine can detach and re-insert the iframe's DOM node at any
+/// time after creation (platform-view re-composition around tab and route
+/// churn), and re-inserting an iframe reloads its `src` from scratch. A
+/// revoked blob would make that reload render Chromium's ERR_FILE_NOT_FOUND
+/// page inside the editor. The reload itself is recovered by
+/// `MonacoController` re-booting the fresh page shell (see
+/// `MonacoProtocol.pageReloads`).
 ///
 /// ### Focus Handling
 ///
@@ -107,6 +114,25 @@ class WebViewController implements PlatformWebViewController {
   JSFunction? _messageHandler;
   String? _viewId;
   late final String _messageToken;
+
+  /// The blob URL currently assigned to the iframe's `src`.
+  ///
+  /// Held (not revoked at ready) because the engine may re-insert the
+  /// iframe later and the browser then re-fetches this URL; see the class
+  /// docs. Released only through [_replaceActiveBlobUrl].
+  String? _activeBlobUrl;
+
+  /// Revokes the previous blob URL (if any) and records [next] as current.
+  ///
+  /// The single revoke site in this controller: a retry replaces the failed
+  /// attempt's URL, and [dispose] passes `null` after the iframe is gone.
+  void _replaceActiveBlobUrl(String? next) {
+    final previous = _activeBlobUrl;
+    if (previous != null) {
+      web.URL.revokeObjectURL(previous);
+    }
+    _activeBlobUrl = next;
+  }
 
   final _widgetKey = GlobalKey();
   Widget? _cachedWidget;
@@ -459,15 +485,17 @@ class WebViewController implements PlatformWebViewController {
       final blobUrl = web.URL.createObjectURL(
         web.Blob([html.toJS].toJS, web.BlobPropertyBag(type: 'text/html')),
       );
+      _replaceActiveBlobUrl(blobUrl);
 
       try {
         _iframe!.src = blobUrl;
         await _ensureReady();
-        web.URL.revokeObjectURL(blobUrl);
+        // The blob URL intentionally stays alive (see _activeBlobUrl): an
+        // engine-driven iframe re-insertion reloads `src`, which must still
+        // resolve.
         return;
       } catch (e) {
         lastError = e;
-        web.URL.revokeObjectURL(blobUrl);
         if (attempt == maxLoadAttempts) {
           rethrow;
         }
@@ -511,6 +539,7 @@ class WebViewController implements PlatformWebViewController {
     _detachParentBindings();
     _iframe?.remove();
     _iframe = null;
+    _replaceActiveBlobUrl(null);
   }
 
   /// Removing the iframe element discards its browsing context WITHOUT

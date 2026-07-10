@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
@@ -29,13 +29,23 @@ import 'package:flutter_monaco/src/protocol/protocol.dart';
 /// Prefer the `MonacoDiffEditor` widget, which renders loading/error chrome
 /// and manages this controller's lifecycle.
 class MonacoDiffController {
-  MonacoDiffController._(this._protocol, this._webViewController);
+  MonacoDiffController._(this._protocol, this._webViewController) {
+    _reloadSubscription = _protocol.pageReloads.listen((reload) {
+      unawaited(_recoverFromPageReload(reload));
+    });
+  }
 
   final MonacoProtocol _protocol;
   final PlatformWebViewController _webViewController;
   final Completer<void> _onReady = Completer<void>();
   bool _readyCompletedOk = false;
   bool _disposed = false;
+
+  /// The exact `page.boot` payload of the first boot, replayed verbatim
+  /// when the page document reloads (see [onPageReloaded]).
+  Map<String, Object?>? _bootPayload;
+  final _pageReloaded = StreamController<void>.broadcast();
+  StreamSubscription<MonacoPageReload>? _reloadSubscription;
 
   /// Completes when the diff editor is fully initialized and ready to
   /// accept commands. Completes with the boot error if initialization
@@ -44,6 +54,47 @@ class MonacoDiffController {
 
   /// Returns `true` if the diff editor finished initializing successfully.
   bool get isReady => _onReady.isCompleted && _readyCompletedOk;
+
+  /// Fires after the controller recovered from a page reload.
+  ///
+  /// Same contract as `MonacoController.onPageReloaded`: the page document
+  /// reloaded outside the app's control (Flutter web re-inserted the
+  /// iframe, a WebView process recovered, or the page was refreshed), the
+  /// controller re-booted the diff editor with its ORIGINAL boot payload
+  /// (original/modified text, language, options, theme), and the editor
+  /// accepts commands again. Content and configuration applied after
+  /// [create] must be restored by the app from this stream; commands that
+  /// were in flight failed with [MonacoPageReloadedError]. A failed
+  /// recovery surfaces as an error event on this stream.
+  Stream<void> get onPageReloaded => _pageReloaded.stream;
+
+  /// Converges a freshly reloaded diff page back to a booted editor. See
+  /// [onPageReloaded].
+  Future<void> _recoverFromPageReload(MonacoPageReload reload) async {
+    if (_disposed) return;
+    final bootPayload = _bootPayload;
+    if (bootPayload == null) {
+      debugPrint(
+        '[MonacoDiffController] Page reloaded before boot completed; '
+        'leaving recovery to the boot flow.',
+      );
+      return;
+    }
+    debugPrint('[MonacoDiffController] Page reloaded; re-booting the editor.');
+    try {
+      await _protocol.invoke('page.boot', bootPayload, timeout: null);
+      await reload.editorReady;
+      if (_disposed) return;
+      _pageReloaded.add(null);
+    } on MonacoPageReloadedError {
+      // Superseded by an even newer reload; its recovery takes over.
+    } on MonacoDisposedError {
+      // Disposed mid-recovery; nothing to announce.
+    } catch (e, st) {
+      debugPrint('[MonacoDiffController] Page reload recovery failed: $e');
+      if (!_disposed) _pageReloaded.addError(e, st);
+    }
+  }
 
   /// The platform-specific WebView widget hosting the diff editor.
   Widget get webViewWidget => _webViewController.widget;
@@ -124,7 +175,8 @@ class MonacoDiffController {
         await () async {
           await _webViewController.load(page: page);
           await _protocol.pageReady;
-          await _protocol.invoke('page.boot', {
+          // Kept for page-reload recovery (onPageReloaded).
+          final bootPayload = <String, Object?>{
             'mode': 'diff',
             'options': bootOptions.toMonacoOptions(),
             'diffOptions': diff.toMonacoOptions(),
@@ -132,7 +184,9 @@ class MonacoDiffController {
             'modified': modified,
             'language': language.id,
             'theme': bootTheme.id,
-          }, timeout: null);
+          };
+          _bootPayload = bootPayload;
+          await _protocol.invoke('page.boot', bootPayload, timeout: null);
           await _protocol.editorReady;
         }().timeout(
           readyTimeout,
@@ -361,6 +415,8 @@ class MonacoDiffController {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _reloadSubscription?.cancel();
+    _pageReloaded.close();
     _protocol.dispose();
     _webViewController.dispose();
   }

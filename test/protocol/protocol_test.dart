@@ -326,4 +326,135 @@ void main() {
       },
     );
   });
+
+  group('MonacoProtocol page reload', () {
+    late FakePlatformWebViewController webview;
+    late MonacoProtocol protocol;
+
+    String pageReadyEnvelope({int protocolVersion = kMonacoProtocolVersion}) {
+      return jsonEncode({
+        'v': kMonacoProtocolVersion,
+        'kind': 'lifecycle',
+        'name': 'pageReady',
+        'protocolVersion': protocolVersion,
+        'monacoVersion': 'test',
+        'capabilities': ['lsp', 'diff'],
+      });
+    }
+
+    String lifecycleEnvelope(String name, [Map<String, Object?>? extra]) {
+      return jsonEncode({
+        'v': kMonacoProtocolVersion,
+        'kind': 'lifecycle',
+        'name': name,
+        ...?extra,
+      });
+    }
+
+    setUp(() async {
+      webview = FakePlatformWebViewController()..autoRespond = false;
+      protocol = MonacoProtocol(webView: webview);
+      await webview.addJavaScriptChannel(
+        'flutterChannel',
+        protocol.handleChannelMessage,
+      );
+      // First boot: page shell reports in.
+      webview.emitToChannel('flutterChannel', pageReadyEnvelope());
+      await protocol.pageReady;
+    });
+
+    tearDown(() {
+      if (!protocol.isDisposed) protocol.dispose();
+    });
+
+    test('a second pageReady emits on pageReloads and fails in-flight invokes '
+        'with MonacoPageReloadedError', () async {
+      final reloads = <MonacoPageReload>[];
+      protocol.pageReloads.listen(reloads.add);
+
+      final inFlight = protocol.invoke('document.getText', {
+        'uri': null,
+      }, timeout: null);
+
+      webview.emitToChannel('flutterChannel', pageReadyEnvelope());
+
+      await expectLater(
+        inFlight,
+        throwsA(
+          isA<MonacoPageReloadedError>().having(
+            (e) => e.operation,
+            'operation',
+            'document.getText',
+          ),
+        ),
+      );
+      expect(reloads, hasLength(1));
+      expect(reloads.single.handshake.monacoVersion, 'test');
+    });
+
+    test(
+      'the reload editorReady completes at the next ready lifecycle',
+      () async {
+        final reloadFuture = protocol.pageReloads.first;
+        webview.emitToChannel('flutterChannel', pageReadyEnvelope());
+        final reload = await reloadFuture;
+
+        var ready = false;
+        unawaited(reload.editorReady.then((_) => ready = true));
+        await Future<void>.delayed(Duration.zero);
+        expect(ready, isFalse);
+
+        webview.emitToChannel('flutterChannel', lifecycleEnvelope('ready'));
+        await Future<void>.delayed(Duration.zero);
+        expect(ready, isTrue);
+      },
+    );
+
+    test('a fatal after reload fails the reload editorReady', () async {
+      final reloadFuture = protocol.pageReloads.first;
+      webview.emitToChannel('flutterChannel', pageReadyEnvelope());
+      final reload = await reloadFuture;
+
+      webview.emitToChannel(
+        'flutterChannel',
+        lifecycleEnvelope('fatal', {
+          'error': {'message': 'boot exploded'},
+        }),
+      );
+      await expectLater(
+        reload.editorReady,
+        throwsA(isA<MonacoJavaScriptError>()),
+      );
+    });
+
+    test('a version-skewed reload fails in-flight invokes but does not emit a '
+        'recoverable reload', () async {
+      final reloads = <MonacoPageReload>[];
+      protocol.pageReloads.listen(reloads.add);
+
+      final inFlight = protocol.invoke('document.getText', {
+        'uri': null,
+      }, timeout: null);
+
+      webview.emitToChannel(
+        'flutterChannel',
+        pageReadyEnvelope(protocolVersion: 999),
+      );
+
+      await expectLater(inFlight, throwsA(isA<MonacoPageReloadedError>()));
+      await Future<void>.delayed(Duration.zero);
+      expect(reloads, isEmpty);
+    });
+
+    test('invokes issued after the reload land on the new page', () async {
+      final reloadFuture = protocol.pageReloads.first;
+      webview.emitToChannel('flutterChannel', pageReadyEnvelope());
+      await reloadFuture;
+
+      webview.autoRespond = true;
+      webview.injectCommandSuccess('document.getText', value: 'post-reload');
+      final result = await protocol.invoke('document.getText', {'uri': null});
+      expect(result, 'post-reload');
+    });
+  });
 }

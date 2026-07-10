@@ -64,6 +64,7 @@ export 'src/common/exceptions.dart'
         MonacoDisposedError,
         MonacoException,
         MonacoJavaScriptError,
+        MonacoPageReloadedError,
         MonacoProtocolError,
         MonacoTimeoutError;
 export 'src/assets/asset_diagnostics.dart' show MonacoAssetDiagnostics;

@@ -177,4 +177,38 @@ void main() {
     );
     expect(tokenLine, contains(r'$_viewId'));
   });
+
+  test('the Monaco blob URL lives exactly as long as the iframe', () {
+    final source = webControllerSource();
+
+    // The Flutter web engine can detach and re-insert the iframe's DOM node
+    // at any time after creation (platform-view re-composition around tab
+    // and route churn). Re-inserting an iframe reloads its `src` from
+    // scratch, so the blob URL must stay resolvable for the controller's
+    // whole lifetime: a revoked blob reloads as Chromium's
+    // ERR_FILE_NOT_FOUND page ("It may have been moved, edited, or
+    // deleted.") inside the editor pane.
+    expect(source, contains('String? _activeBlobUrl'));
+    expect(source, contains('void _replaceActiveBlobUrl(String? next)'));
+
+    // Exactly one revoke site: replacement (which dispose() drives with
+    // null). Nothing may revoke at ready, on load success, or on a failed
+    // attempt while the iframe still points at the blob.
+    expect('web.URL.revokeObjectURL'.allMatches(source), hasLength(1));
+    expect(
+      source,
+      isNot(
+        matches(RegExp(r'await _ensureReady\(\);\s*web\.URL\.revokeObjectURL')),
+      ),
+    );
+
+    // dispose() releases the last blob URL through the same single site.
+    final disposeStart = source.indexOf('void dispose()');
+    expect(disposeStart, isNonNegative);
+    final disposeBlock = source.substring(
+      disposeStart,
+      source.indexOf('\n  }', disposeStart),
+    );
+    expect(disposeBlock, contains('_replaceActiveBlobUrl(null)'));
+  });
 }
