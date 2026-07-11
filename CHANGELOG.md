@@ -3,6 +3,11 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] - 2026-07-11
+
+### Fixed
+- **Web: a boot whose platform view was never mounted now fails fast with an actionable error instead of a silent 40-second timeout.** On web the editor iframe only loads while `webViewWidget` is mounted and painted; when an app awaited `whenReady` without putting the widget in the tree (or hid it with `Offstage`/`Visibility(visible: false)`, or inserted it only after readiness), the load silently burned two 20-second attempts and surfaced a bare `TimeoutException`. A ready timeout with the iframe still detached now throws a `StateError` immediately that names the requirement: keep `webViewWidget` painted underneath your loading UI (an opaque `Stack` overlay, as the `MonacoEditor` widget does). `MonacoController.create` and `webViewWidget` document the constraint.
+
 ## [3.4.0] - 2026-07-11
 
 The editor now survives page reloads it never caused. On Flutter web the engine can detach and re-insert the editor's iframe during platform-view re-composition (closing/opening in-app tabs, route transitions), and re-inserting an iframe makes the browser reload it; native WebView processes can likewise recover from a crash. Both cases previously left a dead editor behind.

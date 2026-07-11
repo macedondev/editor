@@ -210,6 +210,11 @@ class MonacoController {
   ///   [MonacoTimeoutError]. Defaults to [MonacoDefaults.readyTimeout]
   ///   (20s on native, 90s on web where the cold-cache first load must
   ///   download the editor bundle over the network).
+  ///
+  /// On web the boot can only complete while [webViewWidget] is mounted and
+  /// painted (the editor iframe loads only inside the document): keep the
+  /// widget in the tree underneath your loading UI rather than inserting it
+  /// once [whenReady] completes. See [webViewWidget].
   static Future<MonacoController> create({
     EditorOptions? options,
     String? initialText,
@@ -411,7 +416,16 @@ class MonacoController {
     }
   }
 
-  /// Get the platform-specific WebView widget
+  /// Get the platform-specific WebView widget.
+  ///
+  /// On web, the editor iframe only loads while this widget is mounted and
+  /// painted, so [whenReady] can only complete if the app keeps it in the
+  /// tree - painted underneath any loading chrome (an opaque Stack overlay,
+  /// as the `MonacoEditor` widget does) - from creation onward. Inserting
+  /// it only after readiness, or hiding it with `Offstage` /
+  /// `Visibility(visible: false)`, deadlocks the boot; the web load then
+  /// fails fast with a [StateError] naming this requirement. Native
+  /// WebViews load while detached, so this only constrains web.
   Widget get webViewWidget => _webViewController.widget;
 
   /// Ensure the editor is ready before executing commands.

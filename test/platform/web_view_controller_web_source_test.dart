@@ -178,6 +178,32 @@ void main() {
     expect(tokenLine, contains(r'$_viewId'));
   });
 
+  test('a ready timeout on a detached iframe fails fast with the mount '
+      'requirement instead of retrying', () {
+    final source = webControllerSource();
+
+    // A detached iframe never loads its src, so a ready timeout while the
+    // iframe is outside the DOM is not transient: retrying burns another
+    // silent 20s and the caller ends up with a bare TimeoutException and no
+    // idea the widget was simply never mounted (the deployed
+    // context_collector web regression). The load loop must recognize the
+    // detached case at timeout and throw the actionable usage error.
+    expect(source, contains('e is TimeoutException'));
+    expect(source, contains('_iframe?.isConnected ?? false'));
+    expect(source, contains('webViewWidget is mounted and painted'));
+
+    // The diagnosis must escape the retry loop (fail fast): it is thrown
+    // before the lastError/retry handling in the same catch block.
+    final loadStart = source.indexOf('Future<void> load(');
+    expect(loadStart, isNonNegative);
+    final catchStart = source.indexOf('} catch (e) {', loadStart);
+    expect(catchStart, isNonNegative);
+    final diagnosis = source.indexOf('not attached to the DOM', catchStart);
+    final retryPath = source.indexOf('lastError = e;', catchStart);
+    expect(diagnosis, isNonNegative);
+    expect(retryPath, greaterThan(diagnosis));
+  });
+
   test('the Monaco blob URL lives exactly as long as the iframe', () {
     final source = webControllerSource();
 
