@@ -75,6 +75,16 @@ String _monacoBridgeAssetUrl() {
 /// `MonacoController` re-booting the fresh page shell (see
 /// `MonacoProtocol.pageReloads`).
 ///
+/// ### Widget Attachment
+///
+/// The iframe only loads while it is attached to the parent document, and
+/// it is only attached while [widget] is mounted and painted (that is when
+/// the engine composites the platform view slot). Boot therefore requires
+/// the app to keep the widget in the tree - painted underneath any loading
+/// chrome - from `load()` onward. A ready timeout with the iframe still
+/// detached fails fast with a [StateError] naming this requirement instead
+/// of retrying.
+///
 /// ### Focus Handling
 ///
 /// Web focus is tricky because the iframe is a separate browsing context.
@@ -495,6 +505,22 @@ class WebViewController implements PlatformWebViewController {
         // resolve.
         return;
       } catch (e) {
+        // A ready timeout while the iframe is outside the DOM is not a
+        // transient load failure: a detached iframe never loads its src at
+        // all, so retrying would only burn another silent 20s. This is a
+        // usage error - readiness is being awaited while nothing put the
+        // platform view on screen - and must surface as one.
+        if (e is TimeoutException && !(_iframe?.isConnected ?? false)) {
+          throw StateError(
+            'Monaco iframe is not attached to the DOM, so the editor page '
+            'can never load. On web, whenReady only completes while the '
+            "controller's webViewWidget is mounted and painted: keep the "
+            'widget in the tree underneath your loading UI (an opaque Stack '
+            'overlay, as the MonacoEditor widget does) instead of inserting '
+            'it after readiness, and do not hide it with Offstage or '
+            'Visibility(visible: false).',
+          );
+        }
         lastError = e;
         if (attempt == maxLoadAttempts) {
           rethrow;
