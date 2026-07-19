@@ -59,11 +59,11 @@
       "id": "lsp-realistic-execution",
       "skill": "configure-flutter-monaco-lsp",
       "kind": "execution",
-      "prompt": "Configure a secure WebSocket LSP endpoint for Flutter Web, allow only the endpoint in page CSP, reconnect cleanly, and keep two open documents synchronized.",
+      "prompt": "Implement the secure Flutter Web LSP integration described in this fixture's README: use its exact WebSocket endpoint and CSP source, pass the existing short-lived token through the proxy's required query parameter without logging or persisting it, reconnect cleanly, and keep two open documents synchronized.",
       "expectations": [
-        "Configure connect sources through MonacoPageConfig and keep the endpoint allowlist exact.",
+        "Use wss://lsp.test.invalid/dart and allow only wss://lsp.test.invalid through MonacoPageConfig.",
         "Use stable file URIs and explicit open, change, close, reconnect, and disposal lifecycle handling.",
-        "Call out browser authentication limitations and avoid claiming unsupported custom handshake headers."
+        "Accept the short-lived token from app state, encode it as access_token without logging or persisting it, and do not claim browser support for custom handshake headers."
       ]
     },
     {
@@ -231,11 +231,11 @@
       "id": "engine-upgrade-realistic-execution",
       "skill": "upgrade-bundled-monaco",
       "kind": "execution",
-      "prompt": "Move the bundled Monaco engine to a specified upstream version, refresh workers and lazy chunks, preserve the extraction sentinel, and verify Web and native WebViews.",
+      "prompt": "Audit this checkout for a bundled Monaco upgrade. No target version, upstream archive, checksum, or network approval has been provided. Verify the current local invariants and produce the exact acquisition and upgrade plan, but do not modify assets or version markers without provenance.",
       "expectations": [
-        "Update the canonical version marker and obtain assets from an auditable upstream source.",
-        "Regenerate or verify the warmup manifest, workers, dynamic imports, bridge calls, and LSP worker assumptions.",
-        "Run asset invariants, bridge tests, a publish dry run, and platform smoke checks before release."
+        "Inspect the current Monaco version marker, licenses, workers, dynamic chunks, warmup manifest, and bridge assumptions.",
+        "Stop before asset changes and request a concrete target plus an auditable source and checksum instead of inventing them.",
+        "Run available local asset and bridge invariants, leave the fixture diff clean, and provide the complete verification plan for when provenance is supplied."
       ]
     },
     {

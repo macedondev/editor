@@ -75,6 +75,55 @@ void main() {
       contains(contains('normal fixture must prove legacy content')),
     );
   });
+
+  test('plugin tree hygiene rejects generated filesystem junk', () {
+    final directory = Directory.systemTemp.createTempSync(
+      'flutter-monaco-plugin-hygiene-',
+    );
+    addTearDown(() => directory.deleteSync(recursive: true));
+
+    File.fromUri(directory.uri.resolve('.claude-plugin/plugin.json'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('{}');
+    File.fromUri(directory.uri.resolve('skills/example/SKILL.md'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('# Valid plugin content\n');
+    File.fromUri(directory.uri.resolve('.DS_Store')).writeAsBytesSync(<int>[0]);
+    File.fromUri(
+      directory.uri.resolve('skills/example/Thumbs.db'),
+    ).writeAsBytesSync(<int>[0]);
+    File.fromUri(
+      directory.uri.resolve('skills/example/SKILL.md.swp'),
+    ).writeAsBytesSync(<int>[0]);
+
+    final errors = validatePluginTreeHygiene(
+      directory,
+      pathPrefix: 'plugins/flutter-monaco',
+    );
+
+    expect(
+      errors,
+      contains(
+        'plugins/flutter-monaco/.DS_Store: '
+        'generated filesystem junk is forbidden',
+      ),
+    );
+    expect(
+      errors,
+      contains(
+        'plugins/flutter-monaco/skills/example/Thumbs.db: '
+        'generated filesystem junk is forbidden',
+      ),
+    );
+    expect(
+      errors,
+      contains(
+        'plugins/flutter-monaco/skills/example/SKILL.md.swp: '
+        'generated filesystem junk is forbidden',
+      ),
+    );
+    expect(errors, hasLength(3));
+  });
 }
 
 Directory _findRepositoryRoot() {

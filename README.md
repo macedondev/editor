@@ -16,21 +16,27 @@ Check the [live demo here](https://omar-hanafy.github.io/flutter-monaco/) to try
 
 ## AI coding-assistant support
 
-This repository ships an optional, package-specific plugin for Claude Code and OpenAI Codex. It contains six skills for integrating, migrating, diagnosing, configuring LSP, maintaining the bridge, and upgrading the bundled Monaco engine. The plugin runs no background service, hook, executable, or MCP server, and it does not require credentials.
+This repository ships an optional, package-specific plugin for Claude Code and OpenAI Codex. It contains six skills for integrating, migrating, diagnosing, configuring LSP, maintaining the bridge, and upgrading the bundled Monaco engine. The plugin runs no background service, hook, executable, or MCP server, and it does not require credentials. `dart pub add flutter_monaco` installs only the runtime Flutter package, not this repository-hosted assistant plugin.
 
 ### Claude Code
 
 ```sh
 claude plugin marketplace add omar-hanafy/flutter_monaco --sparse .claude-plugin plugins
-claude plugin install flutter-monaco@flutter-monaco-plugins
+claude plugin install flutter-monaco@flutter-monaco-plugins --scope user
 ```
 
-Start a new Claude Code session, then invoke a skill explicitly when useful:
+Run `/reload-plugins` in an active Claude Code session or start a new session, then
+invoke a skill explicitly when useful:
 
 ```text
 /flutter-monaco:integrate-flutter-monaco
 /flutter-monaco:diagnose-flutter-monaco
 ```
+
+The commands above were validated with Claude Code CLI 2.1.215. Claude Code's VS
+Code extension and Desktop Code local or SSH sessions are documented plugin
+surfaces, but were not smoke-tested for this release. Local user plugins do not
+transfer automatically to Claude Code on the web.
 
 ### OpenAI Codex
 
@@ -39,14 +45,23 @@ codex plugin marketplace add omar-hanafy/flutter_monaco --sparse .agents --spars
 codex plugin add flutter-monaco@flutter-monaco
 ```
 
-Start a new Codex session, then invoke a skill explicitly when useful:
+Start a new Codex session, then invoke a skill explicitly when useful. In Codex
+CLI, you can also enter `/plugins` to browse the configured marketplace and manage
+the plugin interactively:
 
 ```text
 $integrate-flutter-monaco
 $diagnose-flutter-monaco
 ```
 
-The Codex plugin browser is supported in ChatGPT web Work mode, the Codex desktop app, and the Codex CLI. Codex project agents require a checkout of this repository. See [AI assistant support](doc/ai-assistant-support.md) for the full inventory, compatibility, updates, removal, security model, validation, and example prompts.
+These repository commands configure Claude Code and Codex CLI. A clone opened in
+the ChatGPT desktop app can expose its repo marketplace in Work mode or Codex after
+an app restart. ChatGPT web can install only plugins available through its curated
+or workspace-shared catalog; this repository release is not a public-directory
+submission. Plugins are not available in Chat mode, Codex IDE integrations, or
+mobile. Codex project agents require a checkout of this repository. See
+[AI assistant support](doc/ai-assistant-support.md) for the full inventory,
+compatibility, updates, removal, security model, validation, and example prompts.
 
 The consumer skills target `flutter_monaco` 3.x after inspecting the resolved dependency; the dedicated migration skill covers released 2.x applications and 1.7.1 applications after a toolchain/platform prerequisite audit. Useful natural-language requests include "Integrate flutter_monaco with three tabs and stable file URIs" and "Diagnose why this Web editor never becomes ready."
 
@@ -55,9 +70,11 @@ Update or remove the Claude Code installation:
 ```sh
 claude plugin marketplace update flutter-monaco-plugins
 claude plugin update flutter-monaco@flutter-monaco-plugins
-claude plugin uninstall flutter-monaco@flutter-monaco-plugins
+claude plugin uninstall flutter-monaco@flutter-monaco-plugins --scope user
 claude plugin marketplace remove flutter-monaco-plugins
 ```
+
+After an update, run `/reload-plugins` or start a new Claude Code session.
 
 Update or remove the Codex installation:
 
@@ -67,6 +84,8 @@ codex plugin add flutter-monaco@flutter-monaco
 codex plugin remove flutter-monaco@flutter-monaco
 codex plugin marketplace remove flutter-monaco
 ```
+
+Start a new Codex session after updating or reinstalling the plugin.
 
 ## Features
 
@@ -185,13 +204,29 @@ await controller.setTheme(MonacoTheme.vsDark);
 await controller.executeAction(MonacoAction.formatDocument);
 ```
 
-Display a self-created controller by passing it to the widget (`MonacoEditor(controller: controller)`); the widget renders it without creating its own.
+Display a self-created controller by passing it to the widget. You still own creation, disposal, and its boot-time `MonacoPageConfig`. On first readiness, `MonacoEditor` applies its current widget options, resolved theme/language, initial text, background, interaction, and scroll settings. After page recovery it reapplies configuration but deliberately leaves app-owned content alone. Keep the controller's boot options consistent with the widget, or deliberately make the widget the live configuration owner:
+
+```dart
+final options = const EditorOptions(
+  language: MonacoLanguage.python,
+  theme: MonacoTheme.vsDark,
+);
+final controller = await MonacoController.create(
+  initialText: source,
+  options: options,
+  page: const MonacoPageConfig(),
+);
+
+MonacoEditor(controller: controller, options: options);
+```
 
 > **Dot shorthands:** `MonacoTheme`, `MonacoLanguage`, and `MonacoAction` are extension types with const catalogs, so with Dart 3.10+ enum shorthands call sites like `executeAction(.formatDocument)` and `setTheme(.vsDark)` work out of the box.
 
 ## Documents and Multi-Document Editing
 
 The editor is a viewport; documents are Monaco models you open, switch, and edit independently. `controller.document` always tracks the active document, while `openDocument` returns handles pinned to a URI.
+
+If the underlying page reloads, only the boot document is recreated automatically. Other models disappear and their pinned `MonacoDocument` handles become stale. Listen to `onPageReloaded`, reopen each model with its stable URI, and replace the old handles before issuing more document commands.
 
 ```dart
 // Open each file once with a stable file:/// URI. Opening does not activate.

@@ -221,11 +221,10 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.code),
             tooltip: 'Language',
-            onSelected: (language) async {
+            onSelected: (language) {
               setState(() {
                 _currentLanguage = language;
               });
-              await _controller?.document.setLanguage(MonacoLanguage(language));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'dart', child: Text('Dart')),
@@ -242,11 +241,10 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.palette),
             tooltip: 'Theme',
-            onSelected: (theme) async {
+            onSelected: (theme) {
               setState(() {
                 _currentTheme = theme;
               });
-              await _controller?.setTheme(MonacoTheme(theme));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'vs-dark', child: Text('Dark')),
@@ -306,6 +304,10 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
                 : _controller != null
                 ? MonacoEditor(
                     controller: _controller!,
+                    options: EditorOptions(
+                      language: MonacoLanguage(_currentLanguage),
+                      theme: MonacoTheme(_currentTheme),
+                    ),
                     onReady: (controller) {
                       debugPrint('Monaco Editor is ready!');
                     },

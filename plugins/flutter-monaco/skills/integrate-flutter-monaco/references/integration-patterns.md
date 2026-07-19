@@ -21,10 +21,15 @@ MonacoEditor(
 Create the controller, publish it to widget state so the platform view can render, and only then await readiness. A minimal `State` owner follows this order:
 
 ```dart
+const appEditorOptions = EditorOptions(
+  language: MonacoLanguage.dart,
+  theme: MonacoTheme.vsDark,
+);
+
 Future<void> initializeEditor() async {
   final controller = await MonacoController.create(
     initialText: source,
-    options: const EditorOptions(language: MonacoLanguage.dart),
+    options: appEditorOptions,
   );
   if (!mounted) {
     controller.dispose();
@@ -37,11 +42,16 @@ Future<void> initializeEditor() async {
 Widget build(BuildContext context) {
   final controller = _controller;
   if (controller == null) return const CircularProgressIndicator();
-  return MonacoEditor(controller: controller);
+  return MonacoEditor(
+    controller: controller,
+    options: appEditorOptions,
+  );
 }
 ```
 
 An opaque loading child in a `Stack` may cover the editor while keeping the platform view painted. Do not use `Offstage` or hide the platform view until `whenReady` completes.
+
+An externally supplied controller owns creation, disposal, and boot-time page policy, but `MonacoEditor` still owns its current widget configuration. On first readiness it applies `options`, resolved theme/language, `initialText`, background, interaction, and scroll settings. After a page reload it reapplies configuration but deliberately leaves app-owned content alone. Pass matching controller/widget options or intentionally make the widget the live configuration owner. Set `MonacoPageConfig` in `MonacoController.create`; the widget's `page` is ignored when `controller` is supplied.
 
 Dispose the controller in the same owner that created it.
 

@@ -31,11 +31,12 @@ procedure for both reviewers.
 
 ```bash
 claude plugin marketplace add omar-hanafy/flutter_monaco --sparse .claude-plugin plugins
-claude plugin install flutter-monaco@flutter-monaco-plugins
+claude plugin install flutter-monaco@flutter-monaco-plugins --scope user
 ```
 
-Start a new Claude Code session. Skills normally activate from context. To select one
-explicitly, enter its namespaced slash command, for example:
+Run `/reload-plugins` in an active Claude Code session or start a new session.
+Skills normally activate from context. To select one explicitly, enter its
+namespaced slash command, for example:
 
 ```text
 /flutter-monaco:integrate-flutter-monaco
@@ -53,23 +54,31 @@ claude plugin marketplace update flutter-monaco-plugins
 claude plugin update flutter-monaco@flutter-monaco-plugins
 ```
 
+Run `/reload-plugins` or start a new session to use the updated plugin.
+
 Remove:
 
 ```bash
-claude plugin uninstall flutter-monaco@flutter-monaco-plugins
+claude plugin uninstall flutter-monaco@flutter-monaco-plugins --scope user
 claude plugin marketplace remove flutter-monaco-plugins
 ```
 
-## Install for OpenAI Codex
+The commands above target Claude Code CLI and its user-scoped plugin state. The
+Claude Code VS Code extension and Desktop Code local or SSH sessions are documented
+plugin surfaces, but this release smoke-tested the CLI only. Local user plugin state
+does not transfer automatically to Claude Code on the web.
+
+## Install for OpenAI Codex CLI
 
 ```bash
 codex plugin marketplace add omar-hanafy/flutter_monaco --sparse .agents --sparse plugins
 codex plugin add flutter-monaco@flutter-monaco
 ```
 
-Start a new Codex session so it loads the installed skills. In plugin-capable
-interactive clients, `/plugins` provides the browser. To select a skill explicitly,
-mention it with `$`, for example:
+Start a new Codex session so it loads the installed skills. In Codex CLI, enter
+`/plugins` to browse the configured marketplace, inspect the plugin, and install or
+enable it interactively. To select a skill explicitly, mention it with `$`, for
+example:
 
 ```text
 $integrate-flutter-monaco
@@ -84,6 +93,8 @@ codex plugin marketplace upgrade flutter-monaco
 codex plugin add flutter-monaco@flutter-monaco
 ```
 
+Start a new Codex session after refreshing and reinstalling the plugin.
+
 Remove:
 
 ```bash
@@ -91,19 +102,37 @@ codex plugin remove flutter-monaco@flutter-monaco
 codex plugin marketplace remove flutter-monaco
 ```
 
+### ChatGPT desktop and web
+
+The ChatGPT desktop app can read `.agents/plugins/marketplace.json` from the
+repository root. Clone this repository, open that checkout in the desktop app,
+restart the app, select Work mode or Codex, open
+Plugins, choose **Flutter Monaco Plugins**, and install **Flutter Monaco**. Start a
+new chat after installation. This repo-local flow requires the checkout because the
+marketplace source is relative to the repository root.
+
+To update the desktop copy, update the checkout and restart the app before opening
+Plugins again. Remove or disable it from the Installed row in the Plugins directory.
+
+ChatGPT web Work mode installs curated or workspace-shared plugins through its
+Plugins directory. The GitHub and CLI commands above do not register this
+repository there, and this release is not claimed as an OpenAI public-directory
+submission.
+
 ## Supported clients and versions
 
 | Client | Support in this release |
 |---|---|
-| Claude Code 2.1.214 (validated) | Marketplace plugin, six skills, and the bundled read-only reviewer |
-| Codex CLI 0.144.6 (validated) | Marketplace plugin and six skills; the source checkout also exposes the project reviewer |
-| Codex desktop Work and Codex modes | The same Codex plugin skill surface |
-| ChatGPT web Work mode | The shared plugin skill surface through the web product's plugin catalog flow |
-| Codex IDE integrations and mobile | No plugin browser for this installation flow |
+| Claude Code CLI 2.1.215 (validated) | GitHub marketplace plugin, six skills, and the bundled read-only reviewer |
+| Claude Code VS Code extension and Desktop Code local or SSH sessions | Documented plugin surfaces; graphical installation was not smoke-tested for this release |
+| Claude Code on the web | Local user plugin installations do not transfer automatically; this repository does not auto-enable the plugin there |
+| Codex CLI 0.144.6 (validated) | GitHub marketplace plugin and six skills; this checkout also exposes the project reviewer |
+| ChatGPT desktop Work mode and Codex | Documented repo-marketplace browser support when this checkout is open; graphical installation was not smoke-tested for this release |
+| ChatGPT web Work mode | Curated and workspace-shared plugin browser only; this repository release has not been submitted to the public directory |
+| Chat mode, Codex IDE integrations, and mobile | Plugins are not available on these surfaces |
 
-The local Codex commands above configure local Codex, not ChatGPT web. The package
-skills target Flutter Monaco 3.x after inspecting the app's resolved dependency. The
-migration skill covers the breaking 2.x to 3.x transition.
+The package skills target Flutter Monaco 3.x after inspecting the app's resolved
+dependency. The migration skill covers the breaking 2.x to 3.x transition.
 
 Start a new assistant session after install or update. Existing sessions can keep a
 cached plugin snapshot.
@@ -115,6 +144,11 @@ definitions. It contains no hooks, MCP server, app, connector, executable, runti
 service, authentication flow, or credential configuration. Installing it does not
 contact a Flutter Monaco service. As with any coding assistant, the host can read or
 change only what its own user-approved tools and sandbox permit.
+
+The plugin is installed from the GitHub repository, not from pub.dev. Dart package
+publishing excludes hidden manifest directories, so `.pubignore` excludes the whole
+`plugins/` tree rather than publishing visible skills without their hidden Claude
+and Codex manifests. `dart pub add flutter_monaco` installs only the Flutter package.
 
 ## Validation and eval scope
 
@@ -137,6 +171,68 @@ The installed Claude Code CLI currently labels `claude plugin eval` as early acc
 and does not expose it as a stable release gate. This project does not claim a native
 Claude eval pass until that command is available and actually runs.
 
+Authenticated behavior checks are opt-in and never run in CI. Claude requires a
+separate config directory containing a local marketplace installation of this plugin.
+The runner fails closed unless the plugin is enabled at version `3.4.2`, its cache is a
+byte-for-byte copy of this checkout, and its marketplace points to this checkout. It
+then loads only that isolated user configuration, the verified plugin, a fixed empty
+MCP set, nonpersistent sessions, disabled auto-memory, and disposable fixtures.
+Execution sessions preapprove only the focused format, analysis, test, and archive
+commands listed by the runner; other shell commands remain subject to Claude Code's
+noninteractive permission denial. The default `sonnet` model, per-case USD cap, and
+600-second per-case timeout can be overridden, so review expected model cost and
+duration before running all 24 cases:
+
+```bash
+eval_claude_config="$(mktemp -d)"
+trap 'rm -rf "$eval_claude_config"' EXIT
+CLAUDE_CONFIG_DIR="$eval_claude_config" claude auth login
+CLAUDE_CONFIG_DIR="$eval_claude_config" claude plugin marketplace add "$PWD"
+CLAUDE_CONFIG_DIR="$eval_claude_config" claude plugin install \
+  flutter-monaco@flutter-monaco-plugins --scope user
+dart run tool/ai_extension_behavior_runner.dart \
+  --client claude \
+  --claude-config-dir "$eval_claude_config" \
+  --all \
+  --case-timeout-seconds 600 \
+  --output /tmp/flutter-monaco-claude-evals.json
+```
+
+Codex requires a separate authenticated home so the runner cannot use or modify a
+maintainer's normal plugins. The runner fails closed unless the installed local
+plugin is enabled, is version `3.4.2`, and is a byte-for-byte copy of this checkout:
+
+```bash
+eval_codex_home="$(mktemp -d)"
+trap 'rm -rf "$eval_codex_home"' EXIT
+CODEX_HOME="$eval_codex_home" codex login
+CODEX_HOME="$eval_codex_home" codex plugin marketplace add "$PWD"
+CODEX_HOME="$eval_codex_home" codex plugin add flutter-monaco@flutter-monaco
+dart run tool/ai_extension_behavior_runner.dart \
+  --client codex \
+  --codex-home "$eval_codex_home" \
+  --all \
+  --case-timeout-seconds 600 \
+  --output /tmp/flutter-monaco-codex-evals.json
+```
+
+Natural positive prompts do not name a skill. Execution prompts use each client's
+explicit invocation and may edit only their temporary fixture. Negative and
+missing-input cases are read-only. Review every report's raw response, selected
+skills, fixture status, tracked diff, and bounded untracked text artifacts against its
+`expectations`; binary and oversized artifacts are reported without dumping unsafe or
+unbounded content. A client exit code alone does not establish semantic success.
+
+## Adding capabilities and migrations
+
+Keep shared skill content under `plugins/flutter-monaco/skills/`. For every new or
+changed skill, add positive-selection, realistic-execution, adjacent-negative, and
+missing-input cases to the canonical 24-case-style matrix and rerun static plus
+authenticated validation. A future nontrivial breaking release gets a dedicated
+versioned `migrate-flutter-monaco-vX-to-vY` skill with representative normal, edge,
+already-migrated, unsupported-version, and recovery fixtures. Do not fold distinct
+major-version transitions into the existing 2.x-to-3.x procedure.
+
 ## Specification references
 
 The release metadata and commands follow the current primary documentation:
@@ -149,8 +245,10 @@ The release metadata and commands follow the current primary documentation:
 
 ## Troubleshooting assistant installation
 
-- If a skill is missing, verify the marketplace and plugin with the client's list or
-  plugin browser, then start a new session.
+- If a Claude skill is missing, verify the marketplace and plugin, run
+  `/reload-plugins`, or start a new session.
+- If a Codex skill is missing, verify it with `codex plugin list` or `/plugins`, then
+  start a new session.
 - If guidance is stale, update the marketplace and reinstall or update the plugin,
   then start a new session.
 - If two marketplaces use the same name, remove the stale registration before adding

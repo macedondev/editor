@@ -3,7 +3,7 @@
   "name": "flutter-monaco",
   "displayName": "Flutter Monaco",
   "version": "3.4.2",
-  "description": "Package-specific Claude Code skills for developing with flutter_monaco.",
+  "description": "Package-specific Claude Code skills and a read-only bridge reviewer for flutter_monaco.",
   "author": {
     "name": "Omar Hanafy",
     "url": "https://github.com/omar-hanafy"

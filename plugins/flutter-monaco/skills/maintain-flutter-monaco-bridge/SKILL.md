@@ -9,6 +9,12 @@ Preserve one cross-platform contract from the typed Dart API to real JavaScript 
 
 Read [references/bridge-contract.md](references/bridge-contract.md) before changing code.
 
+## Operating contract
+
+- **Audience:** `flutter_monaco` package maintainers and contributors changing the package's internal bridge contract.
+- **Expected inputs:** The requested public behavior, affected platforms, request/event payload and result shapes, failure and lifecycle semantics, current bridge registration, and relevant fixtures/tests.
+- **Realistic scenario:** Add a typed document command that must use the existing correlated envelope, decode failures loudly, work after readiness, and remain covered by Dart fakes plus the real Node bridge harness.
+
 ## Workflow
 
 1. State the public behavior, payload, result, error, and lifecycle semantics before choosing files.
@@ -18,7 +24,7 @@ Read [references/bridge-contract.md](references/bridge-contract.md) before chang
 5. Test failure, disposal, readiness, and page reload behavior, not only the happy command result.
 6. Run Dart contract tests and the real bridge JavaScript Node harness.
 
-## Contract rules
+## Decision and safety rules
 
 - All commands and events use the versioned request-correlated envelope channel.
 - Bridge JavaScript lives in `assets/monaco/bridge/*.js`; do not embed it as Dart strings.
@@ -30,10 +36,11 @@ Read [references/bridge-contract.md](references/bridge-contract.md) before chang
 - Unknown forward-compatible events stay observable as `MonacoUnknownEvent`.
 - Bump `kMonacoProtocolVersion` only for an incompatible wire contract. A new optional command/capability normally does not require a bump.
 
-## Stop conditions
+## Failure handling and stop conditions
 
 - If the intended public behavior, request payload, response shape, or failure semantics cannot be established from source and the request, stop and ask for that contract before editing.
 - If a change depends on unavailable generated assets or platform infrastructure, report the verified boundary and do not claim cross-platform completion.
+- If contract tests disagree, preserve the first mismatch and trace both sides before changing a fixture. Do not bump the protocol version, weaken decoding, or update golden data merely to make the suite pass.
 
 ## Verification
 

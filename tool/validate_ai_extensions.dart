@@ -34,6 +34,48 @@ final class AiExtensionValidationReport {
   bool get isValid => errors.isEmpty;
 }
 
+List<String> validatePluginTreeHygiene(
+  Directory pluginDirectory, {
+  String pathPrefix = '',
+}) {
+  if (!pluginDirectory.existsSync()) return const <String>[];
+
+  const forbiddenNames = <String>{
+    '.ds_store',
+    '.spotlight-v100',
+    '.trashes',
+    '__macosx',
+    'desktop.ini',
+    'thumbs.db',
+  };
+  const forbiddenSuffixes = <String>{'.bak', '.orig', '.swo', '.swp', '.tmp'};
+  final errors = <String>[];
+  final normalizedPrefix = pathPrefix
+      .replaceAll('\\', '/')
+      .replaceAll(RegExp(r'/+$'), '');
+
+  for (final entity in pluginDirectory.listSync(
+    recursive: true,
+    followLinks: false,
+  )) {
+    final name = _basename(entity.path);
+    final lowerName = name.toLowerCase();
+    final isJunk =
+        forbiddenNames.contains(lowerName) ||
+        name.startsWith('._') ||
+        name.endsWith('~') ||
+        forbiddenSuffixes.any(lowerName.endsWith);
+    if (!isJunk) continue;
+
+    final relativePath = _relativeToDirectory(pluginDirectory, entity.path);
+    final displayPath = normalizedPrefix.isEmpty
+        ? relativePath
+        : '$normalizedPrefix/$relativePath';
+    errors.add('$displayPath: generated filesystem junk is forbidden');
+  }
+  return errors;
+}
+
 AiExtensionValidationReport validateAiExtensions(Directory repositoryRoot) {
   final validator = _AiExtensionValidator(repositoryRoot.absolute);
   validator.validate();
@@ -290,6 +332,7 @@ final class _AiExtensionValidator {
 
   void validate() {
     final packageVersion = _readPackageVersion();
+    _validateNativeMetadata(packageVersion);
     for (final marketplacePath in _marketplaceFiles) {
       _validateMarketplace(marketplacePath, packageVersion);
     }
@@ -303,6 +346,7 @@ final class _AiExtensionValidator {
     _validateRequiredFiles();
     _validateReviewerAgents();
     _validateRootGuidance();
+    _validatePluginTreeHygiene();
     _validatePluginTextFiles();
   }
 
@@ -373,9 +417,9 @@ final class _AiExtensionValidator {
     }
 
     final marketplaceVersion = _nonEmptyString(plugin['version']);
-    if (marketplaceVersion != null &&
-        packageVersion != null &&
-        marketplaceVersion != packageVersion) {
+    if (marketplaceVersion == null) {
+      errors.add('$path: plugin version must be a non-empty string');
+    } else if (packageVersion != null && marketplaceVersion != packageVersion) {
       errors.add(
         '$path: plugin version $marketplaceVersion does not match '
         'pubspec version $packageVersion',
@@ -409,6 +453,47 @@ final class _AiExtensionValidator {
       if (skillsPath != './skills/' && skillsPath != 'skills/') {
         errors.add('$path: skills must point to ./skills/');
       }
+    }
+
+    final allowedFields = path.contains('.codex-plugin')
+        ? const <String>{
+            r'$schema',
+            'name',
+            'version',
+            'description',
+            'author',
+            'homepage',
+            'repository',
+            'license',
+            'keywords',
+            'skills',
+            'interface',
+          }
+        : const <String>{
+            r'$schema',
+            'name',
+            'displayName',
+            'version',
+            'description',
+            'author',
+            'homepage',
+            'repository',
+            'license',
+            'keywords',
+            'commands',
+            'agents',
+            'skills',
+            'hooks',
+            'mcpServers',
+            'lspServers',
+            'outputStyles',
+          };
+    final unsupportedFields =
+        manifest.keys.toSet().difference(allowedFields).toList()..sort();
+    if (unsupportedFields.isNotEmpty) {
+      errors.add(
+        '$path: unsupported manifest fields: ${unsupportedFields.join(', ')}',
+      );
     }
 
     for (final forbiddenComponent in ['hooks', 'mcpServers', 'apps']) {
@@ -546,6 +631,45 @@ final class _AiExtensionValidator {
         errors.add('$skillPath: linked reference $reference is missing');
       }
     }
+
+    for (final marker in [
+      '**Audience:**',
+      '**Expected inputs:**',
+      '**Realistic scenario:**',
+    ]) {
+      if (!normalized.contains(marker)) {
+        errors.add(
+          '$skillPath: must include $marker in its operating contract',
+        );
+      }
+    }
+    final requiredSectionPatterns = <MapEntry<String, RegExp>>[
+      MapEntry(
+        'workflow or method',
+        RegExp(r'^## (?:Workflow|Method)\b', multiLine: true),
+      ),
+      MapEntry(
+        'safety',
+        RegExp(r'^## .*safety', multiLine: true, caseSensitive: false),
+      ),
+      MapEntry(
+        'verification',
+        RegExp(r'^## (?:Verification|.*Verification)', multiLine: true),
+      ),
+      MapEntry(
+        'failure handling or stop conditions',
+        RegExp(
+          r'^## .*(?:failure|stop)',
+          multiLine: true,
+          caseSensitive: false,
+        ),
+      ),
+    ];
+    for (final requirement in requiredSectionPatterns) {
+      if (!requirement.value.hasMatch(normalized)) {
+        errors.add('$skillPath: must include a ${requirement.key} section');
+      }
+    }
   }
 
   void _validateEvaluations() {
@@ -622,6 +746,7 @@ final class _AiExtensionValidator {
     for (final repositoryOnlyPath in [
       'test/ai_extensions/',
       'tool/validate_ai_extensions.dart',
+      'tool/ai_extension_behavior_runner.dart',
     ]) {
       if (!patterns.contains(repositoryOnlyPath)) {
         errors.add(
@@ -647,6 +772,8 @@ final class _AiExtensionValidator {
       'doc/ai-assistant-support.md',
       'AGENTS.md',
       'CLAUDE.md',
+      'tool/ai_extension_behavior_runner.dart',
+      'test/ai_extensions/behavior_runner_test.dart',
     ];
     for (final path in requiredFiles) {
       if (!_file(path).existsSync()) errors.add('$path is missing');
@@ -700,11 +827,42 @@ final class _AiExtensionValidator {
   void _validateRootGuidance() {
     final agents = _file('AGENTS.md');
     final claude = _file('CLAUDE.md');
-    if (agents.existsSync() &&
-        claude.existsSync() &&
-        agents.readAsStringSync() != claude.readAsStringSync()) {
-      errors.add('AGENTS.md and CLAUDE.md must remain byte-identical');
+    if (agents.existsSync() && agents.readAsStringSync().trim().isEmpty) {
+      errors.add('AGENTS.md must contain repository guidance');
     }
+    if (claude.existsSync() && claude.readAsStringSync() != '@AGENTS.md\n') {
+      errors.add('CLAUDE.md must contain only the native @AGENTS.md import');
+    }
+  }
+
+  void _validateNativeMetadata(String? packageVersion) {
+    const path = 'macos/flutter_monaco.podspec';
+    final file = _file(path);
+    if (!file.existsSync()) {
+      errors.add('$path is missing');
+      return;
+    }
+    final match = RegExp(
+      r'''^\s*s\.version\s*=\s*['"]([^'"]+)['"]\s*$''',
+      multiLine: true,
+    ).firstMatch(file.readAsStringSync());
+    if (match == null) {
+      errors.add('$path does not declare s.version');
+    } else if (packageVersion != null && match.group(1) != packageVersion) {
+      errors.add(
+        '$path version ${match.group(1)} does not match pubspec version '
+        '$packageVersion',
+      );
+    }
+  }
+
+  void _validatePluginTreeHygiene() {
+    errors.addAll(
+      validatePluginTreeHygiene(
+        _directory(_pluginRoot),
+        pathPrefix: _pluginRoot,
+      ),
+    );
   }
 
   void _validatePluginTextFiles() {
@@ -872,4 +1030,15 @@ String _extension(String path) {
   final basename = _basename(path);
   final dot = basename.lastIndexOf('.');
   return dot == -1 ? '' : basename.substring(dot);
+}
+
+String _relativeToDirectory(Directory root, String absolutePath) {
+  final normalizedRoot = root.absolute.path.replaceAll('\\', '/');
+  final normalizedPath = File(absolutePath).absolute.path.replaceAll('\\', '/');
+  final prefix = normalizedRoot.endsWith('/')
+      ? normalizedRoot
+      : '$normalizedRoot/';
+  return normalizedPath.startsWith(prefix)
+      ? normalizedPath.substring(prefix.length)
+      : normalizedPath;
 }

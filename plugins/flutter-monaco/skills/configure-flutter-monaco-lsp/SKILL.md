@@ -9,6 +9,12 @@ Match the transport to where the real language server runs. Inspect the app's pl
 
 Read [references/transport-guide.md](references/transport-guide.md) before implementation.
 
+## Operating contract
+
+- **Audience:** Engineers adding or repairing LSP in a consuming Flutter app that already uses `flutter_monaco` 3.x.
+- **Expected inputs:** The resolved package version, target platforms, server command or URL, protocol/framing, authentication model, workspace and document URI policy, and the owning app lifecycle.
+- **Realistic scenario:** A desktop build should spawn Pyright over stdio while the Web build reaches a WebSocket proxy, with both paths restoring stable documents after an editor-page reload.
+
 ## Workflow
 
 1. Identify the server executable/protocol and target platforms. Most language servers speak stdio, not WebSocket.
@@ -22,7 +28,7 @@ Read [references/transport-guide.md](references/transport-guide.md) before imple
 6. Define page-reload recovery. Listen to `controller.onPageReloaded`, disconnect the stale registered connection, recreate app-owned documents from durable state, and reconnect; the controller cannot infer either layer and duplicate live ids are rejected.
 7. Test an actual language feature and failure path. A successful socket alone does not prove initialization or document synchronization.
 
-## Required checks
+## Safety and decision points
 
 - `connectLanguageServer` resolves only after the LSP `initialize` handshake succeeds.
 - Browser WebSockets cannot send custom headers. Use an appropriate authenticated proxy or a carefully handled short-lived query credential; do not hard-code secrets.
@@ -33,10 +39,11 @@ Read [references/transport-guide.md](references/transport-guide.md) before imple
 - Automatic transport reconnect does not restore a connection discarded by a full editor-page reload. Recreate the connection after documents are restored.
 - Raw `sendRequest`, `sendNotification`, and Monaco LSP internals are experimental and must be rechecked on engine upgrades.
 
-## Stop conditions
+## Failure handling and stop conditions
 
 - If the server endpoint or executable, target platforms, transport ownership, URI/workspace model, or authentication constraints cannot be discovered, stop before editing and request the missing contract.
 - If the server or required platform cannot be exercised, report the validated configuration boundary and do not claim reliable language features.
+- Preserve the first connection/initialize error and sanitized server diagnostics. Do not switch transports, weaken CSP, disable sandboxing, or expose credentials merely to make the connection open.
 
 ## Verification
 

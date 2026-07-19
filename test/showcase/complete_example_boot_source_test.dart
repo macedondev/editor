@@ -33,5 +33,10 @@ void main() {
     expect(showEditor, greaterThan(mountController));
     expect(registerCompletions, greaterThan(showEditor));
     expect(registerAction, greaterThan(registerCompletions));
+
+    expect(source, contains('language: MonacoLanguage(_currentLanguage)'));
+    expect(source, contains('theme: MonacoTheme(_currentTheme)'));
+    expect(source, isNot(contains('_controller?.document.setLanguage(')));
+    expect(source, isNot(contains('_controller?.setTheme(')));
   });
 }

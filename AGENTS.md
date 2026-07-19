@@ -14,11 +14,15 @@
 - For bridge changes, trace the Dart API through `MonacoProtocol`, bridge JavaScript,
   platform hosting, the fake bridge, Dart tests, and JavaScript tests. Keep commands,
   events, envelopes, errors, protocol versions, and packaged assets synchronized.
+- Delegate an independent read-only pass to the repo-scoped
+  `bridge-contract-reviewer` when a change crosses that bridge boundary. Keep the
+  main agent responsible for fixes and do not delegate ordinary consumer setup or
+  unrelated Flutter review to this specialist.
 - After Dart edits, format the touched code and run appropriately scoped analysis and
   tests. Run the full package gates for releases or broad protocol and asset changes.
-- Keep plugin manifests, eval coverage, `pubspec.yaml`, documentation, and release
-  validation synchronized. The assistant plugin must remain excluded from the
-  pub.dev archive.
+- Keep both marketplace entries, both plugin manifests, eval coverage,
+  `pubspec.yaml`, documentation, and release validation synchronized. The
+  assistant plugin must remain excluded from the pub.dev archive.
 - Release only by merging a version change through the protected branch. The
   auto-release workflow owns `flutter_monaco-v*` tags; those tags trigger the
   trusted pub.dev publisher and are protected by the repository tag ruleset.

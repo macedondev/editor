@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'flutter_monaco'
-  s.version          = '2.2.0'
+  s.version          = '3.4.2'
   s.summary          = 'Native macOS focus integration for flutter_monaco.'
   s.description      = <<-DESC
 Performs the NSWindow first-responder handoff between the Flutter view and the

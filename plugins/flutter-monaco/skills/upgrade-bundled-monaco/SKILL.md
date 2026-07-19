@@ -9,6 +9,12 @@ An engine upgrade changes a large generated asset tree and can break private Mon
 
 Read [references/engine-upgrade-checklist.md](references/engine-upgrade-checklist.md) completely before replacing assets.
 
+## Operating contract
+
+- **Audience:** `flutter_monaco` maintainers upgrading the Monaco Editor engine bundled in the package archive.
+- **Expected inputs:** Exact current and target Monaco versions, official release notes/artifact provenance, current asset and archive inventories, supported runtime platforms, and available LSP/runtime smoke infrastructure.
+- **Realistic scenario:** Replace bundled Monaco 0.55.1 with an exact newer npm release while preserving workers, dynamic chunks, cache invalidation, bridge commands, LSP behavior, licenses, and package size discipline.
+
 ## Workflow
 
 1. Record the current `MonacoAssets.monacoVersion`, asset file count/size, current tests, and public package archive size.
@@ -20,14 +26,15 @@ Read [references/engine-upgrade-checklist.md](references/engine-upgrade-checklis
 7. Run source invariants, protocol/asset tests, real JavaScript bridge tests, analyzer, full Flutter tests, docs, dry-run publication, and representative runtime smoke tests.
 8. Inspect the final archive for missing workers/languages, accidental source maps, duplicate trees, or unexplained size growth.
 
-## Do not automate past uncertainty
+## Safety, decisions, and failure handling
 
 - If the exact target version or official artifact provenance is missing and cannot be discovered from the task or repository, stop before downloading or replacing assets. Never substitute an arbitrary latest release.
 - If upstream packaging/layout changed, stop and inspect the loader and worker resolution before deleting or renaming files.
 - If Monaco LSP client internals changed, prove initialize, diagnostics, and one request-driven feature with a real server before release.
 - If browser or native platform smoke is unavailable, name that platform as unverified.
 - Do not bump the Dart-JS protocol version merely because the Monaco engine version changed.
+- If any asset, bridge, worker, LSP, or archive check fails, stop publication and preserve the earliest failure evidence. Do not patch generated minified files or delete the prior asset tree outside the project's reviewed version-control workflow.
 
-## Verification report
+## Verification and report
 
-Include old/new engine versions, artifact source, license result, file count/size delta, dynamic chunks/workers found, LSP internal assumptions reviewed, Dart/Node/runtime tests, archive delta, and any untested platform.
+Do not call the upgrade complete until source/asset invariants, the full Flutter suite, Node bridge tests, docs, Pana, publish dry-run, archive inspection, and every available runtime smoke pass. Include old/new engine versions, artifact source, license result, file count/size delta, dynamic chunks/workers found, LSP internal assumptions reviewed, Dart/Node/runtime tests, archive delta, and any untested platform.

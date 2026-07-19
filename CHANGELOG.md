@@ -3,21 +3,22 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.4.2] - 2026-07-18
+## [3.4.2] - 2026-07-19
 
 ### Added
 - **Optional package-specific AI assistant support for Claude Code and OpenAI Codex.** A repository-hosted plugin provides six focused skills for integration, 2.x-to-3.x migration, diagnostics, LSP configuration, Dart-to-JavaScript bridge maintenance, and bundled Monaco upgrades. A narrow read-only bridge contract reviewer, deterministic extension validator, and selection/execution/negative/failure eval cases keep the guidance maintainable without adding hooks, services, runtime dependencies, credentials, or published package bulk.
 
 ### Fixed
-- **The complete example no longer waits on editor commands before mounting its controller.** The controller is mounted first so Web can attach and boot its iframe, while initialization continues after readiness; a regression test protects this lifecycle order.
+- **The complete example no longer waits on editor commands before mounting its controller.** The controller is mounted first so Web can attach and boot its iframe, while initialization continues after readiness. The widget now remains the single live owner of its language and theme instead of reconciling the external controller back to ambient defaults; a regression test protects both contracts.
 - **`MonacoOverlayBoundary` no longer reads its render-box size before first layout on Web.** Its startup ticker now treats an attached but unlaid-out boundary as empty instead of throwing a scheduler assertion; a mutation-proven Chrome regression runs in CI.
+- **The macOS CocoaPods metadata now reports the package's current version** instead of the stale `2.2.0` value.
 - **Public platform requirements now match the effective WebView dependencies:** Android 7/API 24+, iOS 13+, and macOS 10.15+.
 - **Focus and LSP documentation now uses the 3.x API:** `requestFocus`, `releaseNativeFocus`, `onFocusChanged`, `MonacoPageConfig`, and `controller.document.setLanguage`.
 - **The 2.x-to-3.x migration map now covers the complete released API and behavioral boundary:** lifecycle and readiness, documents and models, sparse option shapes and changed defaults, strict persisted-value parsers, typed state and statistics, open identifiers, JavaScript conversion failures, scroll policy, asset diagnostics, registrations, focus and events, and surviving signatures. Executable fixtures cover normal migration, persisted data, prerequisite audits, already-migrated input, unsupported future versions, and Web-readiness recovery.
 
 ### Changed
-- **Release automation is stricter.** Auto-release verifies a real version delta, safely reuses a same-commit tag on retry, scopes the tag PAT to one ref-creation step, pins release and trusted-publish workflow revisions, keeps publication tag-driven, protects publish-triggering tags for owner automation, requires the bridge harness on protected branches, validates AI extension metadata/evals in CI, and enforces a pinned Pana score.
-- The development-only `platform` floor is constrained to 3.1.6 so the lowest-compatible dependency graph remains buildable on Dart 3.12; 3.0.0 still references the removed `dart:io Platform.packageRoot` API.
+- **Release automation is stricter.** Auto-release verifies a real version delta, safely reuses a same-commit tag on retry, scopes the tag PAT to one ref-creation step, pins release and trusted-publish workflow revisions, and keeps publication tag-driven. Stable CI now self-tests tag retry behavior, validates AI extension metadata and evals, runs the Web pre-layout regression, and enforces a pinned full Pana score.
+- The root and example development-only `platform` floors are constrained to 3.1.6 so both lowest-compatible dependency graphs remain buildable on Dart 3.12; 3.0.0 still references the removed `dart:io Platform.packageRoot` API.
 - The example README and issue template now describe the real cross-platform package, including Web.
 
 ## [3.4.1] - 2026-07-11
