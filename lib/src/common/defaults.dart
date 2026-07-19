@@ -9,11 +9,15 @@ import 'package:flutter_monaco/src/options/theme.dart';
 abstract final class MonacoDefaults {
   /// Base options merged UNDER user options at boot (user fields win).
   ///
-  /// Mirrors the 2.3.0 out-of-the-box experience: word wrap on, minimap
-  /// off, line numbers on, automatic layout on, tab size 4, spaces for
-  /// tabs, 14px coding font stack, bracket-pair colorization, smooth
-  /// scrolling, mouse-wheel zoom, scroll beyond last line, selection
-  /// whitespace rendering, blinking line cursor, 10px top padding.
+  /// Defines the 3.x out-of-the-box experience: word wrap on, minimap off,
+  /// line numbers on, automatic layout on, tab size 4, spaces for tabs, a
+  /// 14px coding font stack, bracket-pair colorization, smooth scrolling,
+  /// mouse-wheel zoom, scroll beyond the last line, selection whitespace
+  /// rendering, a blinking line cursor, and 10px top padding.
+  ///
+  /// These are not an exact copy of either 2.3.0 `EditorOptions()` or
+  /// `MonacoConstants.defaultOptions`. Apps migrating behavior-sensitive
+  /// settings should specify those values explicitly.
   static const EditorOptions editorOptions = EditorOptions(
     fontSize: 14,
     fontFamily: MonacoFontStacks.cascadiaCodePrimary,

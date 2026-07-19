@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flutter Monaco LSP"
+  short_description: "Connect language servers with the right transport"
+  default_prompt: "Use $configure-flutter-monaco-lsp to connect this editor to its language server safely."

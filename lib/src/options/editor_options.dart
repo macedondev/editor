@@ -22,7 +22,7 @@ sealed class EditorOptions with _$EditorOptions {
   /// Creates a sparse editor configuration; `null` fields are unset.
   const factory EditorOptions({
     /// Initial document language. Only consumed at boot (the `page.boot`
-    /// command); use `MonacoController.setLanguage` on a live editor.
+    /// command); use `controller.document.setLanguage` on a live editor.
     MonacoLanguage? language,
 
     /// Editor theme. When `null`, the `MonacoEditor` widget resolves a

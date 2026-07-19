@@ -1,0 +1,263 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "integrate-positive-selection",
+      "skill": "integrate-flutter-monaco",
+      "kind": "positive-selection",
+      "prompt": "Add flutter_monaco 3.x to our existing Flutter app so Android, iOS, macOS, Windows, and Web share one code editor screen.",
+      "expectations": [
+        "Select the integration skill and inspect the app's supported platforms and installed package version.",
+        "Plan controller ownership, document ownership, mount timing, and disposal before writing widget code.",
+        "Use current flutter_monaco 3.x APIs rather than inventing a wrapper around the WebView."
+      ]
+    },
+    {
+      "id": "integrate-realistic-execution",
+      "skill": "integrate-flutter-monaco",
+      "kind": "execution",
+      "prompt": "Implement an IDE pane with three switchable documents, stable file URIs, a loading state, typed save errors, and a Flutter overlay toolbar above Monaco.",
+      "expectations": [
+        "Use one mounted controller with explicit MonacoDocument instances and stable URIs for the tabs.",
+        "Wait for controller readiness only after the widget can mount, and avoid a Web readiness deadlock.",
+        "Use the package overlay and typed event or error surfaces, then add focused lifecycle tests."
+      ]
+    },
+    {
+      "id": "integrate-negative-trigger",
+      "skill": "integrate-flutter-monaco",
+      "kind": "negative-trigger",
+      "prompt": "Replace a basic TextField with a multiline form field that has a character counter and ordinary Flutter validation.",
+      "expectations": [
+        "Do not select the flutter_monaco integration skill for an ordinary form field.",
+        "Recommend native Flutter text input unless editor-grade language features are actually required."
+      ]
+    },
+    {
+      "id": "integrate-missing-input",
+      "skill": "integrate-flutter-monaco",
+      "kind": "missing-input",
+      "prompt": "Put Monaco in my Flutter app and make the integration production ready.",
+      "expectations": [
+        "Inspect or ask for the target platforms, package version, existing state ownership, and desired editor behavior.",
+        "Do not assume that a controller is already mounted or that every platform has identical constraints.",
+        "Pause implementation if the repository does not reveal the required integration context."
+      ]
+    },
+    {
+      "id": "lsp-positive-selection",
+      "skill": "configure-flutter-monaco-lsp",
+      "kind": "positive-selection",
+      "prompt": "Connect Monaco to the Dart language server on desktop and provide diagnostics, completion, hover, and document synchronization.",
+      "expectations": [
+        "Select the LSP configuration skill and identify a supported transport for each target platform.",
+        "Define stable document URIs and server lifecycle ownership before enabling language features.",
+        "Check desktop process and sandbox constraints instead of assuming browser networking behavior."
+      ]
+    },
+    {
+      "id": "lsp-realistic-execution",
+      "skill": "configure-flutter-monaco-lsp",
+      "kind": "execution",
+      "prompt": "Configure a secure WebSocket LSP endpoint for Flutter Web, allow only the endpoint in page CSP, reconnect cleanly, and keep two open documents synchronized.",
+      "expectations": [
+        "Configure connect sources through MonacoPageConfig and keep the endpoint allowlist exact.",
+        "Use stable file URIs and explicit open, change, close, reconnect, and disposal lifecycle handling.",
+        "Call out browser authentication limitations and avoid claiming unsupported custom handshake headers."
+      ]
+    },
+    {
+      "id": "lsp-negative-trigger",
+      "skill": "configure-flutter-monaco-lsp",
+      "kind": "negative-trigger",
+      "prompt": "Enable JSON syntax highlighting and a dark Monaco theme without diagnostics, completion, hover, or an external language server.",
+      "expectations": [
+        "Do not select the LSP skill when only built-in highlighting and theming are requested.",
+        "Use regular editor configuration and language selection without introducing a server transport."
+      ]
+    },
+    {
+      "id": "lsp-missing-input",
+      "skill": "configure-flutter-monaco-lsp",
+      "kind": "missing-input",
+      "prompt": "Connect the editor to our language server and make all language features reliable.",
+      "expectations": [
+        "Inspect or ask for target platforms, server process or endpoint, transport, URI scheme, and authentication constraints.",
+        "Do not choose WebSocket, bridged stdio, or a custom transport without repository evidence.",
+        "Stop before editing when the server ownership and lifecycle cannot be determined."
+      ]
+    },
+    {
+      "id": "diagnose-positive-selection",
+      "skill": "diagnose-flutter-monaco",
+      "kind": "positive-selection",
+      "prompt": "The Monaco surface is blank only in Flutter Web release builds after a package upgrade, while debug mode still works.",
+      "expectations": [
+        "Select the diagnostic skill and capture the exact package version, platform, build mode, console errors, and reproduction path.",
+        "Triage asset resolution and boot failures before changing editor behavior.",
+        "Use the package's typed errors and existing invariant tests as evidence."
+      ]
+    },
+    {
+      "id": "diagnose-realistic-execution",
+      "skill": "diagnose-flutter-monaco",
+      "kind": "execution",
+      "prompt": "After closing a dialog, typing goes nowhere until Monaco is clicked twice, and route back navigation sometimes steals focus from a Flutter text field.",
+      "expectations": [
+        "Separate Flutter focus, native WebView focus, and Monaco DOM focus during diagnosis.",
+        "Trace requestFocus, releaseNativeFocus, and onFocusChanged at ownership boundaries with a minimal reproduction.",
+        "Avoid unconditional focus replay and add a regression test for route and dialog recovery."
+      ]
+    },
+    {
+      "id": "diagnose-negative-trigger",
+      "skill": "diagnose-flutter-monaco",
+      "kind": "negative-trigger",
+      "prompt": "A standard Flutter TextField loses focus inside a settings form that does not render or import flutter_monaco.",
+      "expectations": [
+        "Do not select the flutter_monaco diagnostic skill when the package is not on the failing path.",
+        "Investigate the app's Flutter focus tree and form lifecycle directly."
+      ]
+    },
+    {
+      "id": "diagnose-missing-input",
+      "skill": "diagnose-flutter-monaco",
+      "kind": "missing-input",
+      "prompt": "Monaco is broken in our app. Find the cause and tell me how to fix it.",
+      "expectations": [
+        "Ask for or inspect the platform, package version, symptom, reproduction sequence, and captured error before diagnosing.",
+        "Do not guess between boot, protocol, focus, overlay, LSP, or scroll-handoff failures.",
+        "Keep the first investigation read-only until the failure layer is identified."
+      ]
+    },
+    {
+      "id": "migration-positive-selection",
+      "skill": "migrate-flutter-monaco-v2-to-v3",
+      "kind": "positive-selection",
+      "prompt": "Upgrade an app from flutter_monaco 2.1 to 3.x and resolve its removed constructor arguments, controller calls, and event callbacks.",
+      "expectations": [
+        "Select the v2-to-v3 migration skill and inventory every old API use before editing.",
+        "Use the complete migration map and preserve the app's behavior rather than applying name-only substitutions.",
+        "Validate persisted option data and all supported platforms after the compile migration."
+      ]
+    },
+    {
+      "id": "migration-realistic-execution",
+      "skill": "migrate-flutter-monaco-v2-to-v3",
+      "kind": "execution",
+      "prompt": "Migrate a v2 editor with direct MonacoEditor options, controller.setValue calls, controller.onFocus and controller.onBlur streams, and persisted JSON editor settings to the current 3.x document model.",
+      "expectations": [
+        "Map widget options into current configuration objects and move content operations to MonacoDocument where required.",
+        "Replace legacy controller focus streams with current focus state handling while preserving the widget callbacks and input ownership.",
+        "Audit persisted JSON keys, run analyzer and tests, and report any behavior that cannot be migrated automatically."
+      ]
+    },
+    {
+      "id": "migration-negative-trigger",
+      "skill": "migrate-flutter-monaco-v2-to-v3",
+      "kind": "negative-trigger",
+      "prompt": "Our app already uses flutter_monaco 3.4 and we only want to add a second document tab with no legacy API usage.",
+      "expectations": [
+        "Do not select the v2-to-v3 migration skill for an app already on the current major version.",
+        "Use the integration skill for the new document behavior instead."
+      ]
+    },
+    {
+      "id": "migration-missing-input",
+      "skill": "migrate-flutter-monaco-v2-to-v3",
+      "kind": "missing-input",
+      "prompt": "Migrate our Monaco integration to the latest package without changing how the app behaves.",
+      "expectations": [
+        "Determine the installed source version, intended target version, supported platforms, and actual API usage before selecting this migration.",
+        "Do not assume the app is on v2 or that a major migration is required.",
+        "Pause and explain when the dependency files or integration source are unavailable."
+      ]
+    },
+    {
+      "id": "bridge-positive-selection",
+      "skill": "maintain-flutter-monaco-bridge",
+      "kind": "positive-selection",
+      "prompt": "Add a public controller action that must cross the Dart protocol and execute in the bundled Monaco JavaScript bridge on every platform.",
+      "expectations": [
+        "Select the bridge maintenance skill and trace the contract through public API, protocol, bridge assets, and platform host.",
+        "Update the fake bridge and contract tests alongside production code.",
+        "Preserve protocol compatibility unless an incompatible wire change is explicitly justified."
+      ]
+    },
+    {
+      "id": "bridge-realistic-execution",
+      "skill": "maintain-flutter-monaco-bridge",
+      "kind": "execution",
+      "prompt": "Fix an unknown-method protocol failure after a Dart controller method was added but its JavaScript handler and the test harness were not updated.",
+      "expectations": [
+        "Confirm the repository has one canonical set of real bridge assets instead of inventing or synchronizing duplicate copies.",
+        "Align method names, payload shape, result shape, errors, and protocol version across both sides.",
+        "Run Dart contract tests and the real JavaScript bridge harness, not only mock-based tests."
+      ]
+    },
+    {
+      "id": "bridge-negative-trigger",
+      "skill": "maintain-flutter-monaco-bridge",
+      "kind": "negative-trigger",
+      "prompt": "Configure an application screen with an existing MonacoController method and no package source or wire protocol changes.",
+      "expectations": [
+        "Do not select the bridge maintenance skill for ordinary consumer configuration.",
+        "Use the integration or diagnostic workflow based on the app-level request."
+      ]
+    },
+    {
+      "id": "bridge-missing-input",
+      "skill": "maintain-flutter-monaco-bridge",
+      "kind": "missing-input",
+      "prompt": "Change the Monaco bridge so our new feature works everywhere and remains compatible.",
+      "expectations": [
+        "Ask for or inspect the public API intent, current wire method, payload contract, affected platforms, and compatibility requirement.",
+        "Do not edit protocol versions or bundled assets before tracing the existing contract.",
+        "Stop if the expected request and response behavior cannot be established."
+      ]
+    },
+    {
+      "id": "engine-upgrade-positive-selection",
+      "skill": "upgrade-bundled-monaco",
+      "kind": "positive-selection",
+      "prompt": "Upgrade the Monaco Editor distribution bundled inside flutter_monaco to a newer upstream release without breaking offline assets or LSP support.",
+      "expectations": [
+        "Select the bundled-engine upgrade skill and establish current and target upstream versions.",
+        "Inventory editor assets, workers, dynamic chunks, bridge compatibility, and LSP internals before replacement.",
+        "Treat package archive size and offline loading as release requirements."
+      ]
+    },
+    {
+      "id": "engine-upgrade-realistic-execution",
+      "skill": "upgrade-bundled-monaco",
+      "kind": "execution",
+      "prompt": "Move the bundled Monaco engine to a specified upstream version, refresh workers and lazy chunks, preserve the extraction sentinel, and verify Web and native WebViews.",
+      "expectations": [
+        "Update the canonical version marker and obtain assets from an auditable upstream source.",
+        "Regenerate or verify the warmup manifest, workers, dynamic imports, bridge calls, and LSP worker assumptions.",
+        "Run asset invariants, bridge tests, a publish dry run, and platform smoke checks before release."
+      ]
+    },
+    {
+      "id": "engine-upgrade-negative-trigger",
+      "skill": "upgrade-bundled-monaco",
+      "kind": "negative-trigger",
+      "prompt": "Update a consumer application's flutter_monaco dependency constraint to the latest published package without modifying package assets.",
+      "expectations": [
+        "Do not select the bundled-engine upgrade skill for a consumer dependency bump.",
+        "Use dependency upgrade and package migration guidance appropriate to the app's current major version."
+      ]
+    },
+    {
+      "id": "engine-upgrade-missing-input",
+      "skill": "upgrade-bundled-monaco",
+      "kind": "missing-input",
+      "prompt": "Upgrade the Monaco engine in this package and publish the result when it is ready.",
+      "expectations": [
+        "Determine the current engine version, exact target version, upstream artifact source, and licensing expectations before changing assets.",
+        "Do not choose an arbitrary latest version or download unverified bundles.",
+        "Pause the asset mutation if the target and provenance are not explicit or discoverable."
+      ]
+    }
+  ]
+}

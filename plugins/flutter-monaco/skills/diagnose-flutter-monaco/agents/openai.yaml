@@ -1,0 +1,4 @@
+interface:
+  display_name: "Diagnose Flutter Monaco"
+  short_description: "Trace focus, boot, asset, bridge, and overlay faults"
+  default_prompt: "Use $diagnose-flutter-monaco to identify the root cause of this editor failure."

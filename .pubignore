@@ -5,3 +5,9 @@ upcoming/
 review/
 docs/
 .code/
+plugins/
+AGENTS.md
+CLAUDE.md
+test/ai_extensions/
+tool/validate_ai_extensions.dart
+doc/api/

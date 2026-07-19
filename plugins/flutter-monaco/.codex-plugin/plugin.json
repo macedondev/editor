@@ -1,0 +1,34 @@
+{
+  "name": "flutter-monaco",
+  "version": "3.4.2",
+  "description": "Package-specific skills for integrating, diagnosing, migrating, and maintaining flutter_monaco.",
+  "author": {
+    "name": "Omar Hanafy",
+    "url": "https://github.com/omar-hanafy"
+  },
+  "homepage": "https://github.com/omar-hanafy/flutter_monaco#readme",
+  "repository": "https://github.com/omar-hanafy/flutter_monaco",
+  "license": "MIT",
+  "keywords": [
+    "flutter",
+    "dart",
+    "monaco-editor",
+    "webview",
+    "editor",
+    "language-server"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Flutter Monaco",
+    "shortDescription": "Build and maintain flutter_monaco integrations.",
+    "longDescription": "Package-specific guidance for flutter_monaco integration, LSP setup, diagnosis, v2 migration, bridge maintenance, and bundled Monaco upgrades.",
+    "developerName": "Omar Hanafy",
+    "category": "Developer Tools",
+    "capabilities": [],
+    "defaultPrompt": [
+      "Integrate flutter_monaco into this Flutter app.",
+      "Diagnose this flutter_monaco editor failure.",
+      "Review this Flutter Monaco bridge change."
+    ]
+  }
+}

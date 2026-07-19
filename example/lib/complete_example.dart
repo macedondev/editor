@@ -103,25 +103,37 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
   }
 
   Future<void> _initializeEditor() async {
+    MonacoController? controller;
     try {
-      final controller = await MonacoController.create(
+      controller = await MonacoController.create(
+        initialText: _sampleCode,
         options: const EditorOptions(
           language: MonacoLanguage.dart,
           theme: MonacoTheme.vsDark,
         ),
       );
 
-      await controller.document.setText(_sampleCode);
-      await _registerCompletionSources(controller);
-      await _registerSaveAction(controller);
-
+      if (!mounted) {
+        controller.dispose();
+        return;
+      }
       setState(() {
         _controller = controller;
         _isLoading = false;
       });
+
+      // On web the iframe must be mounted before readiness-dependent commands
+      // can complete. These registrations wait for readiness internally.
+      await _registerCompletionSources(controller);
+      await _registerSaveAction(controller);
     } catch (e) {
       debugPrint('Error initializing Monaco: $e');
+      controller?.dispose();
+      if (!mounted) return;
       setState(() {
+        if (identical(_controller, controller)) {
+          _controller = null;
+        }
         _isLoading = false;
       });
     }

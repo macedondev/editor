@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "normal-v2-widget",
+      "kind": "normal",
+      "sourceVersion": "2.3.0",
+      "targetVersion": "3.4.2",
+      "input": "MonacoEditor(\n  initialValue: source,\n  allowedConnectSources: const ['wss://lsp.example.com'],\n  scrollHandoff: const MonacoScrollHandoff.edge(),\n  onLiveStats: (stats) => showLineCount(\n    stats.lineCount.value,\n    stats.lineCount.label,\n  ),\n  onReady: (controller) async {\n    await controller.setValue(source);\n    await controller.setLanguage(MonacoLanguage.dart);\n    controller.onFocus.listen(handleFocus);\n    controller.onBlur.listen(handleBlur);\n  },\n)",
+      "expectedDisposition": "migrate",
+      "expectedOutput": "import 'dart:async';\n\nMonacoEditor(\n  initialText: source,\n  options: const EditorOptions(\n    language: MonacoLanguage.dart,\n    theme: MonacoTheme.vsDark,\n    fontFamily: 'Consolas, \"Courier New\", monospace',\n    lineHeight: 1.4,\n    smoothScrolling: false,\n    mouseWheelZoom: false,\n    padding: MonacoPadding(top: 0, bottom: 0),\n  ),\n  page: const MonacoPageConfig(\n    allowedConnectSources: ['wss://lsp.example.com'],\n  ),\n  scrollHandoff: const MonacoScrollHandoff.edge(\n    policy: MonacoScrollBoundaryPolicy.continuous,\n  ),\n  onLiveStats: (stats) => showLineCount(stats.lineCount, 'Ln'),\n  onReady: (controller) {\n    unawaited(configureMigratedEditor(controller));\n  },\n)\n\nFuture<void> configureMigratedEditor(MonacoController controller) async {\n  try {\n    await controller.document.setText(source);\n    await controller.document.setLanguage(MonacoLanguage.dart);\n    controller.onFocusChanged.listen((focused) {\n      if (focused) {\n        handleFocus();\n      } else {\n        handleBlur();\n      }\n    });\n  } catch (error, stackTrace) {\n    FlutterError.reportError(FlutterErrorDetails(\n      exception: error,\n      stack: stackTrace,\n      context: ErrorDescription('while configuring the migrated editor'),\n    ));\n  }\n}",
+      "expectedEvidence": [
+        "Moves boot text and page policy to their 3.x widget fields.",
+        "Moves content methods to MonacoDocument and combines focus streams.",
+        "Keeps the widget onReady callback synchronous and makes its asynchronous migration work report failures explicitly.",
+        "Pins the v2 language, theme, font, line height, scrolling, zoom, and padding defaults that current boot defaults changed.",
+        "Chooses the continuous boundary policy explicitly to preserve v2 scroll chaining.",
+        "Moves LiveStats labels into the UI and consumes MonacoLiveStats integer fields."
+      ]
+    },
+    {
+      "id": "persisted-options-edge",
+      "kind": "edge-persisted-options",
+      "sourceVersion": "2.3.0",
+      "targetVersion": "3.4.2",
+      "input": "final optionsJson = <String, Object?>{\n  'themeId': 'app-dark',\n  'wordWrap': true,\n  'minimap': false,\n};\nfinal positionJson = <String, Object?>{'line': 4, 'col': 2};\nfinal schemaJson = <String, Object?>{'schemaUri': 'app:///schema.json'};",
+      "expectedDisposition": "human-review",
+      "expectedOutput": "Keep a recoverable copy, rebuild typed 3.x EditorOptions from the app-owned settings, canonicalize Position to lineNumber/column and JsonDiagnosticsSchema to uri, then persist only verified 3.x toJson() shapes. Do not pass the v2 maps directly to current fromJson factories.",
+      "expectedEvidence": [
+        "3.x parsing is strict and does not accept themeId or boolean structured options.",
+        "The app must choose the corresponding MonacoTheme and structured option values.",
+        "Strict public parsers no longer accept Position line/col or JsonDiagnosticsSchema schemaUri aliases.",
+        "The original persisted value must remain recoverable until the new value is verified."
+      ]
+    },
+    {
+      "id": "already-v3-document-api",
+      "kind": "already-migrated",
+      "sourceVersion": "3.4.1",
+      "targetVersion": "3.4.2",
+      "input": "await controller.document.setText(source);\nawait controller.requestFocus();\ncontroller.onFocusChanged.listen(handleFocusState);",
+      "expectedDisposition": "no-op",
+      "expectedOutput": "Keep the 3.x API. Use the integration or diagnostic skill if a new behavior or failure still needs work.",
+      "expectedEvidence": [
+        "The dependency and source are already on the 3.x document and focus APIs.",
+        "A v2-to-v3 rewrite would add risk without a migration target."
+      ]
+    },
+    {
+      "id": "v1-prerequisite-audit",
+      "kind": "prerequisite-audit",
+      "sourceVersion": "1.7.1",
+      "targetVersion": "3.4.2",
+      "input": "await controller.setValue(source);\nawait controller.ensureEditorFocus();",
+      "expectedDisposition": "migrate-after-prerequisite-audit",
+      "expectedOutput": "Verify Dart 3.12, Flutter 3.44, and the Windows WebView backend change, then apply the same verified source map directly. A normal 1.7.1 barrel consumer does not need an invented intermediate 1.x-to-2.x symbol rewrite; only src imports or PlatformWebViewController test doubles need the internal 2.x focus/load additions.",
+      "expectedEvidence": [
+        "The 1.7.1 and 2.3.0 public barrels are source compatible for normal consumers.",
+        "Version 2.0 raised Dart and Flutter floors and changed the Windows WebView implementation.",
+        "Internal PlatformWebViewController implementers are outside the supported barrel and require the added focus and load contract members."
+      ]
+    },
+    {
+      "id": "future-version-stop",
+      "kind": "unsupported-version",
+      "sourceVersion": "4.0.0",
+      "targetVersion": "3.4.2",
+      "input": "dependencies:\n  flutter_monaco: ^4.0.0\n\nawait controller.workspace.openDocument(uri);",
+      "expectedDisposition": "stop",
+      "expectedOutput": "Stop before editing. The v2-to-v3 map cannot safely downgrade or interpret a future 4.x API. Inspect the exact installed 4.x package and its release documentation, then choose a supported target and migration path with the maintainer.",
+      "expectedEvidence": [
+        "The source major is newer than both this migration skill and its 3.4.2 target.",
+        "Applying a historical v2-to-v3 symbol map to an unknown future API could destroy valid source or persisted state."
+      ]
+    },
+    {
+      "id": "web-readiness-recovery",
+      "kind": "validation-failure-recovery",
+      "sourceVersion": "2.3.0",
+      "targetVersion": "3.4.2",
+      "input": "final controller = await MonacoController.create(initialText: source);\nawait controller.whenReady;\nsetState(() => this.controller = controller);",
+      "expectedDisposition": "recover",
+      "expectedOutput": "final controller = await MonacoController.create(initialText: source);\nsetState(() => this.controller = controller);\nawait controller.whenReady;",
+      "expectedEvidence": [
+        "The mechanically migrated input compiles but deadlocks readiness on Web because the iframe is not mounted.",
+        "Mounting the controller before awaiting whenReady lets Web attach and boot the platform view.",
+        "Re-run analyzer, the lifecycle regression test, and a Web smoke test after recovery."
+      ]
+    }
+  ]
+}

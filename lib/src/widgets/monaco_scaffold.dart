@@ -1,20 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_monaco/src/widgets/monaco_overlay_boundary.dart';
 
-/// Drop-in [`Scaffold`] replacement that automatically protects common
+/// Drop-in [Scaffold] replacement that automatically protects common
 /// static overlay slots from iframe-backed Monaco editors on Web.
 ///
 /// On web, each of the `floatingActionButton`, `drawer`, `endDrawer`,
 /// `bottomSheet`, `bottomNavigationBar`, and `persistentFooterButtons`
-/// slots is wrapped in [`MonacoOverlayBoundary`] so pointer events land on
+/// slots is wrapped in [MonacoOverlayBoundary] so pointer events land on
 /// Flutter widgets instead of the editor iframe underneath. The `appBar`
 /// is left alone by default (AppBars typically sit above the editor in the
-/// layout, not over it); enable [`shieldAppBar`] for translucent /
+/// layout, not over it); enable [shieldAppBar] for translucent /
 /// `extendBodyBehindAppBar` layouts.
 ///
-/// `MonacoScaffold` does NOT replace [`MonacoFocusGuard`]. Route overlays
+/// `MonacoScaffold` does NOT replace `MonacoFocusGuard`. Route overlays
 /// (dialogs, popup menus, dropdown menus, modal bottom sheets) should still
-/// be handled by [`MonacoFocusGuard`] + [`MonacoRouteObserver`].
+/// be handled by `MonacoFocusGuard` + `MonacoRouteObserver`.
 ///
 /// On native platforms, all overlay boundaries are no-op pass-throughs.
 class MonacoScaffold extends StatelessWidget {

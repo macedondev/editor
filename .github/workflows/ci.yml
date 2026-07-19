@@ -42,12 +42,20 @@ jobs:
           fi
       - name: Install dependencies
         run: dart pub get
+      - name: Test release tag retry logic
+        run: bash .github/scripts/check-release-tag.sh --self-test
+      - name: Validate AI extensions
+        run: dart run tool/validate_ai_extensions.dart
       - name: Check formatting
         run: dart format --output=none --set-exit-if-changed .
       - name: Analyze
         run: flutter analyze
       - name: Test
         run: flutter test
+      - name: Test Web overlay pre-layout safety
+        run: >-
+          flutter test --platform chrome
+          test/widgets/monaco_overlay_boundary_web_test.dart
 
   test-beta:
     name: Test on beta
@@ -95,18 +103,6 @@ jobs:
       - name: Add pub cache to PATH
         run: echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
       - name: Install pana
-        run: dart pub global activate pana
+        run: dart pub global activate pana 0.23.14
       - name: Run pana
-        run: |
-          pana --json . 2>/dev/null | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          scores = data.get('scores', {})
-          granted = scores.get('grantedPoints', 0)
-          max_points = scores.get('maxPoints', 0)
-          if max_points == 0:
-            raise SystemExit('pana did not report scores; failing.')
-          if granted != max_points:
-            raise SystemExit(f'pana score {granted}/{max_points} (full score required).')
-          print(f'pana score {granted}/{max_points}')
-          "
+        run: pana --exit-code-threshold 0 .

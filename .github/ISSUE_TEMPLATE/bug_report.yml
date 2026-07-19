@@ -39,6 +39,7 @@ body:
         - iOS
         - macOS
         - Windows
+        - Web
     validations:
       required: true
   - type: textarea

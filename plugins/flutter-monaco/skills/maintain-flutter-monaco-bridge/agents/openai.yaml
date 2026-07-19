@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Flutter Monaco Bridge"
+  short_description: "Change Dart and JavaScript bridge contracts safely"
+  default_prompt: "Use $maintain-flutter-monaco-bridge to implement this bridge change without protocol drift."

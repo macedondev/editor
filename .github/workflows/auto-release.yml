@@ -12,23 +12,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.TAG_PUSH_PAT }}
-      - name: Verify tag push PAT
-        run: |
-          if [ -z "${{ secrets.TAG_PUSH_PAT }}" ]; then
-            echo "TAG_PUSH_PAT is required to push tags that trigger publishing."
-            exit 1
-          fi
-      - name: Check pubspec change
+          persist-credentials: false
+      - name: Check package version change
         id: changes
         run: |
-          if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -q '^pubspec.yaml$'; then
+          old_version=$(git show "${{ github.event.before }}:pubspec.yaml" | awk '/^version:/ {print $2; exit}')
+          new_version=$(awk '/^version:/ {print $2; exit}' pubspec.yaml)
+          if [ -z "$old_version" ] || [ -z "$new_version" ]; then
+            echo "Failed to read the old or new package version."
+            exit 1
+          fi
+          if [ "$old_version" != "$new_version" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Package version changed from $old_version to $new_version."
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Package version remains $new_version; skipping release."
           fi
       - name: Compute tag
         id: tag
@@ -50,25 +52,29 @@ jobs:
           fi
           echo "tag=${package}-v${version}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-      - name: Fail if tag exists
+      - name: Check release tag
+        id: tag_state
         if: steps.changes.outputs.changed == 'true'
+        run: >-
+          bash .github/scripts/check-release-tag.sh
+          "${{ steps.tag.outputs.tag }}" "$GITHUB_SHA" "$GITHUB_OUTPUT"
+      - name: Create release tag
+        if: >-
+          steps.changes.outputs.changed == 'true' &&
+          steps.tag_state.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TAG_PUSH_PAT }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          tag="${{ steps.tag.outputs.tag }}"
-          if git rev-parse "$tag" >/dev/null 2>&1; then
-            echo "Tag $tag already exists. Bump version and re-run."
+          if [ -z "$GH_TOKEN" ]; then
+            echo "TAG_PUSH_PAT is required to create release tags."
             exit 1
           fi
-      - name: Create and push tag
-        if: steps.changes.outputs.changed == 'true'
-        run: |
-          tag="${{ steps.tag.outputs.tag }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$tag"
-          git push origin "$tag"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${RELEASE_TAG}" -f sha="$GITHUB_SHA"
       - name: Create GitHub release
         if: steps.changes.outputs.changed == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
