@@ -15,7 +15,7 @@ When typing into Monaco inside a platform view, three layers of focus must align
 3) DOM focus (Monaco)
     - Inside the web page, Monaco's hidden `textarea.inputarea` (or `.native-edit-context`) must be `document.activeElement`; otherwise typing does not enter the editor.
 
-Layer 2 is the layer Flutter cannot see or drive by itself on desktop, and it is where almost every historical "editor looks focused but typing does nothing" bug lived. Monaco's `onFocus`/`onBlur` streams report layer 3 only; they are NOT a native input-readiness guarantee.
+Layer 2 is the layer Flutter cannot see or drive by itself on desktop, and it is where almost every historical "editor looks focused but typing does nothing" bug lived. `MonacoController.onFocusChanged` reports layer 3 only; it is NOT a native input-readiness guarantee.
 
 ## What the package does per platform
 
@@ -25,7 +25,7 @@ Layer 2 is the layer Flutter cannot see or drive by itself on desktop, and it is
 
 - On a user focus intent (see `MonacoFocusIntent` below), the package makes the editor's WKWebView the window's first responder (`window.makeFirstResponder`), the same mechanism that historically made right-click "wake the editor up".
 - `MonacoController.hasNativeInputFocus()` reports whether the WKWebView currently is the first responder - the authoritative layer-2 readiness signal.
-- `MonacoController.releaseNativeInputFocus()` hands the first responder back to the Flutter view.
+- `MonacoController.releaseNativeFocus()` hands the first responder back to the Flutter view.
 - If the native plugin is unavailable (custom embeddings, tests), the package falls back to the pre-2.2.0 behavior: a full in-page focus replay on user intent. The replay recovers typing but costs a caret double-blink; the native handoff does not.
 
 Background for the curious: neither the Flutter macOS embedder nor `webview_flutter_wkwebview` performs any first-responder management for platform views (verified against `webview_flutter_wkwebview` 3.26.0 - the package contains no responder code at all). A normal left click therefore may not promote the WKWebView to first responder, while AppKit's context-menu machinery does, which is why right-click used to fix typing.
@@ -35,15 +35,15 @@ Background for the curious: neither the Flutter macOS embedder nor `webview_flut
 Windows focus is solved at the correct layer by the `webview_flutter_windows` package (a maintained WebView2 integration):
 
 - The WebView2 input windows are reparented into the Flutter window tree, so clicking the editor no longer deactivates the host window.
-- `requestNativeFocus()` moves real Win32 keyboard focus to WebView2; a pointer-route coordinator returns focus to Flutter when you click Flutter UI, and enforces that a focused Flutter text input takes native focus back.
+- `MonacoController.requestFocus()` moves real Win32 keyboard focus to WebView2 before focusing Monaco; a pointer-route coordinator returns focus to Flutter when you click Flutter UI, and enforces that a focused Flutter text input takes native focus back.
 - Note a WebView2 platform reality: there is no keyboard-injection API, so the browser HWND must genuinely hold Win32 focus for typing to work. "Keyboard belongs to the page after clicking it" is by design and the coordinator manages the round trip.
 
 ### Web
 
-The iframe participates in the browser's focus system; `requestNativeFocus()` is a no-op. Web has TWO platform-specific problems, and both exist because the browser arbitrates input BEFORE Flutter ever sees it:
+The iframe participates in the browser's focus system; the native handoff inside `MonacoController.requestFocus()` is a no-op. Web has TWO platform-specific problems, and both exist because the browser arbitrates input BEFORE Flutter ever sees it:
 
 - Pointer: the browser's DOM hit test picks the target first. Flutter paints into `pointer-events: none` canvases, so over the editor's rect the topmost interactive DOM element is the iframe, and events dispatched inside an iframe never bubble to the parent document. A Flutter widget painted above the editor (a dialog, a menu) is visible but unreachable - Flutter's hit testing never runs. This is handled by the first-party DOM overlay shield (`MonacoScaffold`, `MonacoOverlayBoundary`, `MonacoWebInteractionCoordinator`, `runWithInteractionDisabled`) and by `setInteractionEnabled(false)` for route overlays. See the README section "Web: Handling Overlays".
-- Keyboard: web's layer-2 "native focus" is the parent document's focus. While the iframe element is the parent `document.activeElement`, every key event dispatches inside the iframe's document and Flutter receives nothing. `setInteractionEnabled(false)` and `releaseNativeInputFocus()` therefore perform a two-sided handoff: blur Monaco inside the iframe AND move the parent document's focus onto the editor's `<flutter-view>` host, so overlays get Escape/Tab/typing without needing a first click.
+- Keyboard: web's layer-2 "native focus" is the parent document's focus. While the iframe element is the parent `document.activeElement`, every key event dispatches inside the iframe's document and Flutter receives nothing. `setInteractionEnabled(false)` and `releaseNativeFocus()` therefore perform a two-sided handoff: blur Monaco inside the iframe AND move the parent document's focus onto the editor's `<flutter-view>` host, so overlays get Escape/Tab/typing without needing a first click.
 
 Nested navigators caveat: `MonacoFocusGuard` observes route pushes only within the `Navigator` its route belongs to. `showDialog` defaults to `useRootNavigator: true`, so an app that hosts the editor inside a nested navigator MUST either observe the root navigator too and drive `setInteractionEnabled` itself, or pass `useRootNavigator: false` consistently. An observer attached to one navigator never notifies a guard subscribed to a route of another navigator.
 
@@ -62,10 +62,10 @@ Every focus entry point takes or implies a `MonacoFocusIntent`:
 
 ```dart
 // A primary click inside the editor area:
-controller.ensureEditorFocus(attempts: 1, intent: MonacoFocusIntent.user);
+await controller.requestFocus(attempts: 1, intent: MonacoFocusIntent.user);
 
 // Background recovery after a route pop or window focus change:
-controller.ensureEditorFocus(); // maintenance by default, cooperative
+await controller.requestFocus(); // maintenance by default, cooperative
 ```
 
 `MonacoEditor` already routes pointer-downs this way with the correct button guards (primary button only; right-clicks never nudge focus, so Monaco's context menu is not torn down).
@@ -84,11 +84,11 @@ MonacoFocusGuard(
 
 Additional hooks that keep focus solid:
 
-1) Reassert focus on window/app activation (desktop): call `ensureEditorFocus(attempts: 3)` from your window-focus and `AppLifecycleState.resumed` handlers. Maintenance intent keeps this safe next to dialogs.
+1) Reassert focus on window/app activation (desktop): call `requestFocus(attempts: 3)` from your window-focus and `AppLifecycleState.resumed` handlers. Maintenance intent keeps this safe next to dialogs.
 2) Reassert focus after route re-entry (`RouteAware.didPopNext`, post-frame).
-3) Re-layout after resizes or reveals: `await controller.layout(); await controller.ensureEditorFocus();`
+3) Re-layout after resizes or reveals: `await controller.layout(); await controller.requestFocus();`
 4) Multiple editors / tabs: only the visible editor should be allowed to claim the keyboard. Gate your calls, or use `setInteractionEnabled(false)` on hidden editors - all focus paths respect it.
-5) Verifying readiness instead of guessing: on desktop, `await controller.hasNativeInputFocus()` tells you whether the editor truly owns native input (null means the platform cannot answer). Prefer it over inferring readiness from `onFocus`/`onBlur`.
+5) Verifying readiness instead of guessing: on desktop, `await controller.hasNativeInputFocus()` tells you whether the editor truly owns native input (null means the platform cannot answer). Prefer it over inferring readiness from `onFocusChanged`.
 
 ## Reference wrapper for the raw WebView
 
@@ -96,7 +96,7 @@ If you render `controller.webViewWidget` directly instead of `MonacoEditor`, rep
 
 ```dart
 final focusNode = FocusNode(debugLabel: 'MonacoPlatformView');
-var monacoReportsFocused = false; // wire from controller.onFocus/onBlur
+var monacoReportsFocused = false; // mirror controller.onFocusChanged
 
 bool pointerMayClaimKeyboard(PointerDownEvent event) {
   if (event.kind == PointerDeviceKind.mouse ||
@@ -125,7 +125,7 @@ Widget build(BuildContext context) {
         // Windows/Linux: skip when both signals are fresh (no replay).
         if (!isMacOS && focusNode.hasFocus && monacoReportsFocused) return;
         focusNode.requestFocus();
-        unawaited(controller.ensureEditorFocus(
+        unawaited(controller.requestFocus(
           attempts: 1,
           intent: MonacoFocusIntent.user,
         ));
@@ -154,7 +154,7 @@ Widget build(BuildContext context) {
 - Windows WebView2 requires real Win32 focus to type (no keyboard-injection or off-screen input API: WebView2Feedback #20/#526/#547). The focus round trip is managed; the requirement itself cannot be removed.
 - Flutter Web: pointer and key events inside the iframe's DOM subtree never surface to Flutter's hit testing. A Flutter-painted overlay can never intercept them; only the DOM shield approach works.
 - Native mobile soft keyboards must be tied to a real user gesture; programmatic focus cannot conjure the IME reliably. The package's tap-detection heuristics are the available shape.
-- Monaco DOM focus signals (`onFocus`/`onBlur`) can lag or lie about native readiness on desktop. That is why `hasNativeInputFocus()` exists; do not build recovery on DOM signals alone.
+- Monaco DOM focus signals from `onFocusChanged` can lag or lie about native readiness on desktop. That is why `hasNativeInputFocus()` exists; do not build recovery on DOM signals alone.
 
 ## FAQ
 
@@ -170,4 +170,4 @@ Widget build(BuildContext context) {
 - Use `MonacoEditor`, or replicate its wrapper exactly (primary-button guard included).
 - Route real clicks as `MonacoFocusIntent.user`; leave background recovery as maintenance.
 - Trust `hasNativeInputFocus()` over DOM focus signals for desktop readiness.
-- Call `ensureEditorFocus()` after window/app focus changes and route re-entry; `layout()` + `ensureEditorFocus()` after size/visibility changes.
+- Call `requestFocus()` after window/app focus changes and route re-entry; `layout()` + `requestFocus()` after size/visibility changes.

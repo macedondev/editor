@@ -108,7 +108,15 @@ class MonacoEditor extends StatefulWidget {
 
   /// The controller that manages the editor instance.
   ///
-  /// If provided, you are responsible for disposing of it.
+  /// If provided, you are responsible for disposing of it and for choosing its
+  /// boot-time [MonacoPageConfig]. After readiness this widget still applies
+  /// its current [options], resolved theme and language, background,
+  /// interaction, and scroll configuration. It applies [initialText] once on
+  /// first readiness. After a page reload it re-applies configuration but never
+  /// app-owned content. Keep those values consistent with the controller's
+  /// boot configuration, or intentionally use this widget as the live
+  /// configuration owner.
+  ///
   /// If `null`, a controller is created and managed internally by this widget.
   final MonacoController? controller;
 

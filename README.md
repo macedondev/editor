@@ -14,6 +14,79 @@ Check the [live demo here](https://omar-hanafy.github.io/flutter-monaco/) to try
   </a>
 </p>
 
+## AI coding-assistant support
+
+This repository ships an optional, package-specific plugin for Claude Code and OpenAI Codex. It contains six skills for integrating, migrating, diagnosing, configuring LSP, maintaining the bridge, and upgrading the bundled Monaco engine. The plugin runs no background service, hook, executable, or MCP server, and it does not require credentials. `dart pub add flutter_monaco` installs only the runtime Flutter package, not this repository-hosted assistant plugin.
+
+### Claude Code
+
+```sh
+claude plugin marketplace add omar-hanafy/flutter_monaco --sparse .claude-plugin plugins
+claude plugin install flutter-monaco@flutter-monaco-plugins --scope user
+```
+
+Run `/reload-plugins` in an active Claude Code session or start a new session, then
+invoke a skill explicitly when useful:
+
+```text
+/flutter-monaco:integrate-flutter-monaco
+/flutter-monaco:diagnose-flutter-monaco
+```
+
+The commands above were validated with Claude Code CLI 2.1.215. Claude Code's VS
+Code extension and Desktop Code local or SSH sessions are documented plugin
+surfaces, but were not smoke-tested for this release. Local user plugins do not
+transfer automatically to Claude Code on the web.
+
+### OpenAI Codex
+
+```sh
+codex plugin marketplace add omar-hanafy/flutter_monaco --sparse .agents --sparse plugins
+codex plugin add flutter-monaco@flutter-monaco
+```
+
+Start a new Codex session, then invoke a skill explicitly when useful. In Codex
+CLI, you can also enter `/plugins` to browse the configured marketplace and manage
+the plugin interactively:
+
+```text
+$integrate-flutter-monaco
+$diagnose-flutter-monaco
+```
+
+These repository commands configure Claude Code and Codex CLI. A clone opened in
+the ChatGPT desktop app can expose its repo marketplace in Work mode or Codex after
+an app restart. ChatGPT web can install only plugins available through its curated
+or workspace-shared catalog; this repository release is not a public-directory
+submission. Plugins are not available in Chat mode, Codex IDE integrations, or
+mobile. Codex project agents require a checkout of this repository. See
+[AI assistant support](doc/ai-assistant-support.md) for the full inventory,
+compatibility, updates, removal, security model, validation, and example prompts.
+
+The consumer skills target `flutter_monaco` 3.x after inspecting the resolved dependency; the dedicated migration skill covers released 2.x applications and 1.7.1 applications after a toolchain/platform prerequisite audit. Useful natural-language requests include "Integrate flutter_monaco with three tabs and stable file URIs" and "Diagnose why this Web editor never becomes ready."
+
+Update or remove the Claude Code installation:
+
+```sh
+claude plugin marketplace update flutter-monaco-plugins
+claude plugin update flutter-monaco@flutter-monaco-plugins
+claude plugin uninstall flutter-monaco@flutter-monaco-plugins --scope user
+claude plugin marketplace remove flutter-monaco-plugins
+```
+
+After an update, run `/reload-plugins` or start a new Claude Code session.
+
+Update or remove the Codex installation:
+
+```sh
+codex plugin marketplace upgrade flutter-monaco
+codex plugin add flutter-monaco@flutter-monaco
+codex plugin remove flutter-monaco@flutter-monaco
+codex plugin marketplace remove flutter-monaco
+```
+
+Start a new Codex session after updating or reinstalling the plugin.
+
 ## Features
 
 - 🎨 **Full Monaco Editor** - The same editor that powers VS Code
@@ -131,13 +204,29 @@ await controller.setTheme(MonacoTheme.vsDark);
 await controller.executeAction(MonacoAction.formatDocument);
 ```
 
-Display a self-created controller by passing it to the widget (`MonacoEditor(controller: controller)`); the widget renders it without creating its own.
+Display a self-created controller by passing it to the widget. You still own creation, disposal, and its boot-time `MonacoPageConfig`. On first readiness, `MonacoEditor` applies its current widget options, resolved theme/language, initial text, background, interaction, and scroll settings. After page recovery it reapplies configuration but deliberately leaves app-owned content alone. Keep the controller's boot options consistent with the widget, or deliberately make the widget the live configuration owner:
+
+```dart
+final options = const EditorOptions(
+  language: MonacoLanguage.python,
+  theme: MonacoTheme.vsDark,
+);
+final controller = await MonacoController.create(
+  initialText: source,
+  options: options,
+  page: const MonacoPageConfig(),
+);
+
+MonacoEditor(controller: controller, options: options);
+```
 
 > **Dot shorthands:** `MonacoTheme`, `MonacoLanguage`, and `MonacoAction` are extension types with const catalogs, so with Dart 3.10+ enum shorthands call sites like `executeAction(.formatDocument)` and `setTheme(.vsDark)` work out of the box.
 
 ## Documents and Multi-Document Editing
 
 The editor is a viewport; documents are Monaco models you open, switch, and edit independently. `controller.document` always tracks the active document, while `openDocument` returns handles pinned to a URI.
+
+If the underlying page reloads, only the boot document is recreated automatically. Other models disappear and their pinned `MonacoDocument` handles become stale. Listen to `onPageReloaded`, reopen each model with its stable URI, and replace the old handles before issuing more document commands.
 
 ```dart
 // Open each file once with a stable file:/// URI. Opening does not activate.
@@ -538,68 +627,94 @@ Touch forwarding is a separate, **experimental** opt-in (`mobileTouch: true`). I
 
 See `example/lib/scroll_handoff_example.dart` for a full page with short, long, and handoff-disabled editors.
 
-## Migrating from 2.x to 3.0
+## Migrating from 2.x to 3.x
 
-3.0 is a ground-up rebuild of the package's spine: one wire protocol, a document/editor split, sparse options, typed errors, and typed events. The LSP API, the scroll handoff feature, the focus engineering, and the web overlay widgets are unchanged. The table below is complete against the 2.3.0 public API; the `(Dxx)` tags reference the numbered design decisions recorded in the v3 blueprint (`upcoming/v3.md` in the repository).
+3.x is a ground-up rebuild of the package's spine: one wire protocol, a document/editor split, sparse options, typed errors, and typed events. The LSP signatures and supporting overlay widgets remain source compatible. Scroll handoff keeps its source shape but changes its default boundary policy, and focus controller methods were renamed. The table below is complete against the 2.3.0 public barrel; the `(Dxx)` tags reference the numbered design decisions recorded in the v3 blueprint (`upcoming/v3.md` in the repository).
 
 ### Symbol-level changes
 
-| 2.3.0 | 3.0 | Migration |
+| 2.3.0 | 3.x | Migration |
 |---|---|---|
 | `MonacoAction.foldAll` (a `String`) | `MonacoAction.foldAll` (a `MonacoAction`) | append `.id` where a raw String is required; call sites into `executeAction` unchanged textually |
 | `controller.executeAction(String, [dynamic args])` | `executeAction(MonacoAction, {Object? args})` | wrap raw ids: `MonacoAction(id)`; args becomes named |
-| `MonacoTheme` enum | `MonacoTheme` extension type | `MonacoTheme.vsDark` unchanged textually; `MonacoTheme.values` -> `MonacoTheme.builtIn`; `MonacoTheme.fromId(s)` -> `MonacoTheme(s)` |
-| `MonacoLanguage` enum | `MonacoLanguage` extension type | same pattern; `fromId(s)` -> `MonacoLanguage(s)` |
+| `MonacoTheme` enum | open `MonacoTheme` extension type | `MonacoTheme.vsDark` is unchanged textually and `.values` -> `.builtIn`; a constructor preserves unknown custom ids, so replace tolerant `fromId` with explicit null/unknown fallback logic where that behavior matters |
+| `MonacoLanguage` enum | open `MonacoLanguage` extension type | same pattern; v2 `fromId` accepted null/unknown and fell back to Markdown, while `MonacoLanguage(s)` requires a non-null string and preserves unknown ids |
 | `EditorOptions.themeId`, `effectiveThemeId` | deleted | `EditorOptions(theme: MonacoTheme('app-dark'))` |
 | `controller.setThemeById(String)` | deleted | `setTheme(MonacoTheme(id))` |
+| `controller.getThemeId()` | `getTheme(): Future<MonacoTheme?>` | use `.id` when a raw string is required; `getEditorState().theme` is available when reading the full state |
 | `controller.defineThemeFromJson(id, map)` | deleted | `defineTheme(MonacoThemeDefinition.fromMonacoThemeData(id, map))` |
-| `EditorOptions` full-state semantics | sparse semantics (D09) | initial options: unchanged construction; `updateOptions` now changes only provided fields (the old reset behavior was almost never intended; to force a full reset, pass a fully-populated options object, e.g. `MonacoDefaults.editorOptions.merge(...)`) |
+| `EditorOptions` full-state, non-null fields | sparse, nullable fields (D09) | construction often still compiles, but field reads now need null handling; `updateOptions` changes only provided fields; use `MonacoDefaults.editorOptions.merge(...)` only when the current curated defaults are intended |
 | `EditorOptions.padding: Map<String,int>?` | `MonacoPadding` | `MonacoPadding(top: 10)` |
 | `EditorOptions.minimap/wordWrap/lineNumbers: bool` | `MonacoMinimapOptions` / `MonacoWordWrap` / `MonacoLineNumbers` | `minimap: MonacoMinimapOptions(enabled: true)`, `wordWrap: .on`, `lineNumbers: .on` |
-| `MonacoConstants` | deleted | `MonacoDefaults.editorOptions` etc. |
+| `MonacoConstants` | deleted | only `defaultTheme`, `defaultLanguage`, and `defaultFontSize` have close `MonacoDefaults` mappings; the min/max values, rulers, file-size limits, and v2 tab-size/default-options policy must remain app-owned |
 | `MonacoFont` | `MonacoFontStacks` statics | `MonacoFont.jetBrainsMono.value` -> `MonacoFontStacks.jetBrainsMono` |
 | `MonacoJavaScriptException` | `MonacoJavaScriptError` (extends sealed `MonacoException`) | rename in catches |
-| `getValue({defaultValue})` / `getLineCount({defaultValue})` / `getLineContent(...)` / `getLinesContent(...)` | `controller.document.getText()` / `lineCount()` / `lineAt()` / `getLines(start, end)`; all throw on failure (D06) | wrap in try/catch where fallback behavior is desired |
+| `getValue({defaultValue})` / `getLineCount({defaultValue})` / `getLineContent(...)` | `controller.document.getText()` / `lineCount()` / `lineAt()`; all throw on failure (D06) | wrap in `MonacoException` handling where fallback behavior is intentional |
+| `getLinesContent(List<int>, {lineDefaultValue})` | no one-call equivalent | preserve arbitrary/repeated line ordering with an explicit `lineAt` loop and per-line `MonacoException`/`RangeError` fallback; `getLines(start, end)` is only for a contiguous range |
 | `setValue(v)` | `controller.document.setText(v)` | |
 | `setLanguage(lang)` | `controller.document.setLanguage(lang)` | |
 | `applyEdits/insertText/deleteRange/replaceRange` | same names on `controller.document` (`insertText` -> `insert`) | |
 | `deleteLine(n)` | `document.deleteRange(Range.lines(n, n))` | |
-| `findMatches/replaceMatches` | same names on `controller.document` | |
+| `findMatches/replaceMatches` | same names on `controller.document` | `findMatches` keeps `limit`; `replaceMatches.defaultCount` is removed and failures throw |
 | `hasUnsavedChanges()/markSaved()` | `document.isDirty()/markSaved()` | |
 | `setMarkers/setErrorMarkers/setWarningMarkers/clearMarkers/clearAllMarkers` | `document.setMarkers(markers, owner:)/clearMarkers(owner:)` (severity conveniences and the 3-owner clearAll are deleted) | build `MarkerData.error(...)` lists; clear owners explicitly |
 | `setDecorations/addInlineDecorations/addLineDecorations/clearDecorations` | `createDecorationSet()` + `set/clear/dispose` | one set per concern; `DecorationOptions.inlineClass/line` factories unchanged |
-| `createModel/setModel/disposeModel/listModels` | `openDocument/activateDocument/document.close()/listDocuments` | |
-| `format()/find()/replace()/toggleWordWrap()/selectAll()/undo()/redo()/cut()/copy()/paste()/foldAll()/unfoldAll()/toggleLineComment()/indentLines()/outdentLines()` | deleted (D19) | `executeAction(.formatDocument)`, `.find` -> `MonacoAction.find`, replace -> `.startFindReplaceAction`, toggleLineComment -> `.commentLine`, others map to the same-named `MonacoAction` constants |
+| `createModel(value, language: String, uri:, defaultUri:)` | `openDocument(text:, language: MonacoLanguage, uri:) -> MonacoDocument` | `defaultUri` fallback is gone; opening does not activate the document |
+| `setModel(Uri)` / `disposeModel(Uri)` / `listModels(): List<Uri>` | `activateDocument(MonacoDocument)` / `document.close()` / `listDocuments(): List<MonacoDocument>` | retain pinned handles or use `documentByUri(uri)`; read handle `.uri` when a raw URI is needed |
+| `revealLines(start, end, {center})` | `revealRange(Range.lines(start, end), center: center)` | construct the range explicitly |
+| `setCursorPositionZeroBased(line, column)` | `setCursorPosition(Position.fromZeroBased(line, column))` | keep the coordinate conversion explicit |
+| `getWordAtPosition(position)` | `document.getWordAt(position)` | content queries live on the document |
+| `executeBatch(operations)` | deleted | await the operations in an explicit sequential loop; the old helper did not combine them into one bridge round trip |
+| `revealLine(line)` with Dart-side clamp | same source signature, no v2 clamp | validate or clamp against `await document.lineCount()` if the input can be out of range |
+| `format()/find()/replace()/toggleWordWrap()/selectAll()/undo()/redo()/cut()/copy()/paste()/foldAll()/unfoldAll()/toggleLineComment()/indentLines()/outdentLines()` | deleted (D19) | use `executeAction`: format -> `.formatDocument`, find -> `.find`, replace -> `.startFindReplaceAction`, cut/copy/paste -> `.clipboardCutAction`/`.clipboardCopyAction`/`.clipboardPasteAction`, toggleLineComment -> `.commentLine`, and the remaining helpers map to same-named constants |
 | `focus()` / `ensureEditorFocus({attempts, interval, intent})` | `requestFocus({intent})` (D20) | retry tuning stays available as optional parameters (same defaults) |
 | `releaseNativeInputFocus()` | `releaseNativeFocus()` | rename |
-| `liveStats` (`ValueNotifier<LiveStats>`) | `stats` (`ValueListenable<MonacoLiveStats>`) | labels moved to UI; `.value.lineCount` is now an `int` |
+| `liveStats` (`ValueNotifier<LiveStats>`) | `stats` (`ValueListenable<MonacoLiveStats>`) | labeled records become ints, cursor becomes `Position?`, language becomes `MonacoLanguage?`, and labels move to UI |
 | `getStatistics()` | `stats.value` | |
-| `onContentChanged: Stream<bool>` | `Stream<MonacoContentChanged>` | `isFlush` is a field |
-| `onFocus`/`onBlur` streams | `onFocusChanged: Stream<bool>` | `.where((f) => f)` / `.where((f) => !f)` |
-| `getEditorState()` | same name, one round trip, `theme` populated, `hasUnsavedChanges` -> `isDirty` | |
+| `LiveStats.defaults()` / `allStats` / `toJson()` | `const MonacoLiveStats()` / deleted / deleted | build UI rows and persistence maps in the app; `hasSelection` and `hasMultipleCursors` remain |
+| `MonacoEditor.onLiveStats` / `statusBarBuilder` using `LiveStats` | callbacks using `MonacoLiveStats` | update callback parameter types and remove record `.value`/`.label` reads |
+| controller `onContentChanged: Stream<bool>` | `Stream<MonacoContentChanged>` | `isFlush` is a field; the widget's text `onContentChanged` and bool `onRawContentChanged` callbacks remain supported |
+| controller `onFocus`/`onBlur` streams | `onFocusChanged: Stream<bool>` | `.where((f) => f)` / `.where((f) => !f)`; `MonacoEditor.onFocus`/`onBlur` widget callbacks remain supported |
+| `getEditorState()` / `EditorState` | same controller name, one round trip | `hasUnsavedChanges` -> `isDirty`; language/theme become typed ids; stats is non-null; `isEmpty` -> `content.isEmpty`; `wordCount` and `toJson` become app-owned |
 | `saveViewState(): Map` / `restoreViewState(Map)` | `captureViewState(): MonacoViewState` / `restoreViewState(MonacoViewState)` | persist via `toJson()` |
-| `evaluateJavaScript` / `runJavaScript` / `runJavaScriptReturningResultRaw` | unchanged | |
+| `evaluateJavaScript<T>(..., defaultValue:)` | same source signature, stricter conversion | default applies only to JavaScript `undefined`/`null`; an incompatible non-null value now throws `MonacoProtocolError` instead of returning the default |
+| `runJavaScript` / `runJavaScriptReturningResultRaw` | unchanged signatures | |
 | `registerCompletionSource(...): Future<String>` / `unregisterCompletionSource(id)` | `registerCompletions(...): Future<MonacoCompletionRegistration>` / `registration.dispose()`; `languages` is now `List<MonacoLanguage>` | |
+| `registerStaticCompletions(...): Future<String>` | same method name returning `Future<MonacoCompletionRegistration>` | `languages` is `List<MonacoLanguage>`; retain and dispose the registration |
 | `create({options, customCss, allowCdnFonts, allowedConnectSources, readyTimeout})` | `create({options, initialText, page, readyTimeout})`; returns before readiness, use `whenReady` (D05) | native callers relying on blocking create: `final c = await MonacoController.create(...); await c.whenReady;` |
 | `onReady` future getter | `whenReady` | rename |
+| `isReady` completed even after a failed Web boot | true only after successful boot | await `whenReady` in `try/catch` when completion including failure matters |
+| nullable `readyTimeout` | non-null `Duration`, defaulting to `MonacoDefaults.readyTimeout` | resolve nullable app configuration before passing it |
+| `createForTesting(..., bridge:)` | no bridge injection; optional `runBoot`, `bootOptions`, `bootInitialText` | update test harnesses to use the protocol fake |
 | `MonacoEditor.initialValue` | `MonacoEditor.initialText` | rename |
 | `MonacoEditor.customCss/allowCdnFonts/allowedConnectSources` | `MonacoEditor.page: MonacoPageConfig` | wrap |
-| `MonacoAssets.htmlGenerationVersion` / `generateIndexHtml` | deleted (D03/D25) | none needed; regeneration is automatic |
+| `MonacoAssets.htmlGenerationVersion` / `generateIndexHtml` | deleted (D03/D25) | package-owned regeneration is automatic; there is no public custom-host generator replacement |
 | `MonacoAssets.indexHtmlPath` / `MonacoAssets.assetBaseDir` | internal | apps needing paths use `assetInfo().path` |
-| `MonacoAssets.assetInfo(): Map` | `Future<MonacoAssetDiagnostics>` | typed fields |
-| `LiveStats` | `MonacoLiveStats` | see stats row above |
-| LSP exports (all) | unchanged | none |
-| `MonacoScrollHandoff` family, `MonacoEditorTheme(Data)`, `MonacoFocusGuard`, `MonacoOverlayBoundary`, `MonacoRouteObserver`, `MonacoScaffold`, `Position`, `Range`, `MarkerData`, `DecorationOptions`, `EditOperation`, `CompletionItem/List/Request/Kind`, `FindMatch`, `FindOptions`, `InsertTextRule`, `JsonDiagnostics*`, `MonacoThemeDefinition/Rule` (except `base` type) | unchanged | none |
+| `MonacoAssets.assetInfo(): Map` | `Future<MonacoAssetDiagnostics>` | map keys become typed fields; `version` -> `monacoVersion`, `totalSize` -> `totalSizeBytes`, and formatted String `totalSizeMB` -> double `totalSizeMB` |
+| `LiveStats` | `MonacoLiveStats` | see stats rows above |
+| v2 tolerant public `fromJson` factories | strict current-shape parsers | audit persisted/adapted `Position`, `Range`, markers, decorations, edits, completions, find models, JSON diagnostics, theme definitions/rules, stats, and editor state |
+| `MonacoScrollHandoff.edge()` continuous chaining | defaults to `newGestureOnly` | pass `policy: MonacoScrollBoundaryPolicy.continuous` to preserve v2 behavior; details add `phase`, `gestureId`, and `momentum` |
+| LSP exports | source-compatible signatures | `disconnect()` now awaits bridged `onClose`; `LspStdioMessageDecoder` adds optional size limits |
+| `MonacoEditorTheme(Data)`, `MonacoFocusGuard`, `MonacoOverlayBoundary`, `MonacoRouteObserver`, `MonacoScaffold` | source-compatible public surface | no source rewrite |
 
 ### Behavioral changes
 
-1. Reads throw typed exceptions instead of returning defaults.
+1. Reads throw typed exceptions instead of returning defaults. `evaluateJavaScript` is also stricter for non-null conversion failures.
 2. `create` never blocks on readiness; commands issued before ready are ordered FIFO after ready (this preserves the old queue's last-write-wins outcome for consecutive `setText` calls).
-3. `updateOptions` is sparse: only the fields you set are sent to Monaco.
-4. No markdown/vs-dark boot flash; the first painted frame uses the requested options.
-5. Unknown JS events no longer `debugPrint` as unhandled; they surface as `MonacoUnknownEvent`.
-6. `MonacoThemeDefinition.base` is `MonacoBaseTheme` (was the `MonacoTheme` enum); `fromJson` maps the same four id strings.
-7. `EditorOptions.fromJson` parses only the 3.0 `toJson` shape (strict keys, typed sub-options). It does not read 2.x-era `theme`/`themeId` string blobs; apps that persisted hand-built 2.x option JSON re-serialize once with 3.0 `toJson`.
+3. `updateOptions` is sparse: only the fields you set are sent to Monaco, and reads of sparse option fields are nullable.
+4. Empty editor options no longer reproduce v2 defaults. V2 used Dart, fixed `vs-dark`, a Consolas-first font, line height 1.4, no padding, smooth scrolling off, and wheel zoom off. Current defaults use Markdown, ambient widget theme, a Cascadia-first font, Monaco-managed line height, 10px top padding, smooth scrolling on, and wheel zoom on. Pass explicit values when preserving v2 behavior.
+5. No boot-theme flash; initial text, language, theme, and options paint in the first frame.
+6. Unknown JS events no longer `debugPrint` as unhandled; they surface as `MonacoUnknownEvent`.
+7. `MonacoThemeDefinition.base` is `MonacoBaseTheme` and its parser now rejects missing or unknown base ids.
+8. `EditorOptions.fromJson` parses only the 3.x `toJson` shape (strict keys, typed sub-options). Other public model parsers also dropped v2 aliases and forgiving defaults. Re-create typed values, keep the old stored data recoverable until verified, and serialize the new shape once.
+9. `MonacoTheme` and `MonacoLanguage` are open string-backed types. Audit enum switches, `.name`, `.index`, `Enum` constraints, runtime type tests, and nullable labels in addition to `.values`/`.fromId` calls.
+10. `MonacoScrollHandoff.edge()` defaults to gesture containment. Choose `.continuous` explicitly when v2 mid-gesture chaining is required.
+
+### Starting from 1.x
+
+The supported barrel did not require a separate source-symbol rewrite from 1.7.1 to 2.3.0. A direct 1.7.1-to-3.x source migration can use this same map after verifying the 2.0 prerequisites: Dart 3.12, Flutter 3.44, and the Windows WebView backend replacement. Local forks or tests implementing internal `PlatformWebViewController` are outside the supported barrel and must also adopt the 2.x focus and load-contract additions.
+
+The separate 0.1.0-to-1.0.0 hop is additive and does not warrant a dedicated migration skill: `MonacoFocusGuard`, `ensureEditorFocus`, and `layout` were added without removing or changing a supported root-exported signature. Verify the new Flutter 3.16 floor. `focus()` and autofocus now preserve the cursor and initial selection instead of forcing line 1, column 1. The `wordWrap: true` and `minimap: false` defaults are identical at both release commits despite the 1.0.0 changelog wording.
 
 ## API Reference
 
@@ -1133,7 +1248,7 @@ The plugin uses a versioned cache system:
 
 ### macOS
 
-- macOS 10.13 or later
+- macOS 10.15 or later
 - Xcode (for development)
 
 ### Windows
@@ -1143,12 +1258,12 @@ The plugin uses a versioned cache system:
 
 ### Android
 
-- Android 5.0 (API level 21) or later
+- Android 7.0 (API level 24) or later
 - WebView support (included by default)
 
 ### iOS
 
-- iOS 11.0 or later
+- iOS 13.0 or later
 - Info.plist must allow local file access
 
 ### Web

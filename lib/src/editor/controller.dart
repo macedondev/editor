@@ -576,8 +576,8 @@ class MonacoController {
   /// previous state in a `finally` block.
   ///
   /// Useful for transient Flutter overlays that are NOT pushed as routes (so
-  /// [`MonacoFocusGuard`] cannot detect them) and that are NOT static enough
-  /// to wrap in a [`MonacoOverlayBoundary`] - typically `ScaffoldMessenger`
+  /// `MonacoFocusGuard` cannot detect them) and that are NOT static enough
+  /// to wrap in a `MonacoOverlayBoundary` - typically `ScaffoldMessenger`
   /// snackbars with action buttons, toasts, or imperative `Overlay.insert`
   /// entries shown for a known duration.
   ///
@@ -1211,7 +1211,9 @@ class MonacoController {
   ///
   /// ```dart
   /// final controller = await MonacoController.create(
-  ///   allowedConnectSources: ['ws://127.0.0.1:3000'],
+  ///   page: const MonacoPageConfig(
+  ///     allowedConnectSources: ['ws://127.0.0.1:3000'],
+  ///   ),
   /// );
   /// final connection = await controller.connectLanguageServer(
   ///   id: 'pyright',

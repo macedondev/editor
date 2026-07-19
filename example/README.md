@@ -1,16 +1,22 @@
-# flutter_monaco_example
+# flutter_monaco example
 
-A new Flutter project.
+Run the minimal editor from the repository root:
 
-## Getting Started
+```sh
+cd example
+flutter pub get
+flutter run
+```
 
-This project is a starting point for a Flutter application.
+Other focused entrypoints:
 
-A few resources to get you started if this is your first Flutter project:
+```sh
+flutter run -t lib/complete_example.dart
+flutter run -t lib/showcase/main.dart
+flutter run -d chrome -t lib/web_demo.dart
+flutter run -d macos -t lib/diff_example.dart
+flutter run -t lib/lsp_example.dart
+```
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+The LSP demo needs either a WebSocket-fronted language server or a local stdio
+language-server executable. Its on-screen controls describe both transports.

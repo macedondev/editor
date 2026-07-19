@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flutter Monaco Integration"
+  short_description: "Integrate Monaco safely across Flutter platforms"
+  default_prompt: "Use $integrate-flutter-monaco to add a production Monaco editor to this Flutter app."

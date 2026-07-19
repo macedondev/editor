@@ -20,7 +20,10 @@ typedef MonacoDocumentInvoke =
 /// or not it is visible).
 ///
 /// All methods throw a [MonacoException] on bridge failure; a pinned
-/// handle whose model was closed throws [MonacoJavaScriptError].
+/// handle whose model was closed throws [MonacoJavaScriptError]. A page reload
+/// recreates only the boot document, so handles pinned to other models become
+/// stale. Listen to `MonacoController.onPageReloaded`, reopen those documents
+/// with their stable URIs, and replace the old handles before using them again.
 final class MonacoDocument {
   /// Internal: construct via MonacoController.
   MonacoDocument.internal(this._invoke, this.uri);

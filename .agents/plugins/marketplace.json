@@ -1,0 +1,21 @@
+{
+  "name": "flutter-monaco",
+  "interface": {
+    "displayName": "Flutter Monaco Plugins"
+  },
+  "plugins": [
+    {
+      "name": "flutter-monaco",
+      "version": "3.4.2",
+      "source": {
+        "source": "local",
+        "path": "./plugins/flutter-monaco"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "DeveloperTools"
+    }
+  ]
+}

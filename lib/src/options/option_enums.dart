@@ -300,7 +300,7 @@ enum AutoClosingBehavior {
 /// are surfaced in the editor.
 ///
 /// This is separate from [MarkerSeverity], which controls inline markers
-/// set programmatically via [MonacoController.setMarkers].
+/// set programmatically via `MonacoDocument.setMarkers`.
 enum DiagnosticsSeverity {
   /// Shown as a red squiggly underline. Blocks "no errors" status.
   error('error'),

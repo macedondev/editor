@@ -9,18 +9,18 @@ import 'package:flutter_monaco/src/platform/overlay_shield/overlay_shield.dart';
 /// before Flutter sees them, so static overlays (FABs, in-tree stacked
 /// widgets, custom panels) appear visible but are unclickable.
 ///
-/// Wrap such overlays with [`MonacoOverlayBoundary`]. On web, this creates
+/// Wrap such overlays with [MonacoOverlayBoundary]. On web, this creates
 /// a transparent DOM shield over the widget's global bounds and disables
 /// pointer events on any intersecting Monaco iframe while the user is
 /// hovering or pressing the overlay. On native platforms this is a no-op
 /// wrapper.
 ///
 /// For route-based overlays (dialogs, popup menus, dropdown menus, modal
-/// bottom sheets), keep using [`MonacoFocusGuard`] with a
-/// [`MonacoRouteObserver`] - that path was already correct and remains
+/// bottom sheets), keep using `MonacoFocusGuard` with a
+/// `MonacoRouteObserver` - that path was already correct and remains
 /// the recommended fix for `ModalRoute`s.
 ///
-/// Most apps will not construct this directly. [`MonacoScaffold`] wraps
+/// Most apps will not construct this directly. `MonacoScaffold` wraps
 /// the common Scaffold overlay slots automatically.
 class MonacoOverlayBoundary extends StatefulWidget {
   /// Create an overlay boundary that protects [child] from being swallowed by
@@ -137,6 +137,7 @@ class _MonacoOverlayBoundaryState extends State<MonacoOverlayBoundary>
     final renderObject = context.findRenderObject();
     if (renderObject is! RenderBox ||
         !renderObject.attached ||
+        !renderObject.hasSize ||
         renderObject.size.width <= 0 ||
         renderObject.size.height <= 0) {
       shield.update(Rect.zero);

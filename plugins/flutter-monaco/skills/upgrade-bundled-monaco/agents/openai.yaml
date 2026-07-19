@@ -1,0 +1,4 @@
+interface:
+  display_name: "Upgrade Bundled Monaco"
+  short_description: "Upgrade the embedded Monaco engine and assets safely"
+  default_prompt: "Use $upgrade-bundled-monaco to upgrade this package to a newer Monaco Editor release."

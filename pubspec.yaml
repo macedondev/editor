@@ -1,6 +1,6 @@
 name: flutter_monaco
 description: Integrate Monaco Editor (VS Code's editor) in Flutter apps. Features 100+ languages, syntax highlighting, themes, and full API.
-version: 3.4.1
+version: 3.4.2
 homepage: https://github.com/omar-hanafy/flutter_monaco
 repository: https://github.com/omar-hanafy/flutter_monaco
 issue_tracker: https://github.com/omar-hanafy/flutter_monaco/issues
@@ -43,6 +43,9 @@ dev_dependencies:
     sdk: flutter
   freezed: ^3.2.4
   path_provider_platform_interface: ^2.1.2
+  # platform 3.0.0 uses the removed dart:io Platform.packageRoot API.
+  # Keep the lowest-dependency test graph buildable on the supported SDK.
+  platform: ^3.1.6
 
 flutter:
   # Native macOS helper for the WKWebView first-responder handoff

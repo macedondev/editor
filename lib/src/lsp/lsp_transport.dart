@@ -63,7 +63,9 @@ sealed class LspTransport {
 ///
 /// ```dart
 /// final controller = await MonacoController.create(
-///   allowedConnectSources: ['ws://127.0.0.1:3000'],
+///   page: const MonacoPageConfig(
+///     allowedConnectSources: ['ws://127.0.0.1:3000'],
+///   ),
 /// );
 /// ```
 ///

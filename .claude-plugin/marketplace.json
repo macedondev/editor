@@ -1,0 +1,15 @@
+{
+  "name": "flutter-monaco-plugins",
+  "owner": {
+    "name": "omar-hanafy"
+  },
+  "description": "Claude Code plugins for flutter_monaco development.",
+  "plugins": [
+    {
+      "name": "flutter-monaco",
+      "version": "3.4.2",
+      "source": "./plugins/flutter-monaco",
+      "description": "Package-specific skills and a read-only bridge reviewer for flutter_monaco."
+    }
+  ]
+}

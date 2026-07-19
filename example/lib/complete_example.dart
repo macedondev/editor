@@ -103,25 +103,37 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
   }
 
   Future<void> _initializeEditor() async {
+    MonacoController? controller;
     try {
-      final controller = await MonacoController.create(
+      controller = await MonacoController.create(
+        initialText: _sampleCode,
         options: const EditorOptions(
           language: MonacoLanguage.dart,
           theme: MonacoTheme.vsDark,
         ),
       );
 
-      await controller.document.setText(_sampleCode);
-      await _registerCompletionSources(controller);
-      await _registerSaveAction(controller);
-
+      if (!mounted) {
+        controller.dispose();
+        return;
+      }
       setState(() {
         _controller = controller;
         _isLoading = false;
       });
+
+      // On web the iframe must be mounted before readiness-dependent commands
+      // can complete. These registrations wait for readiness internally.
+      await _registerCompletionSources(controller);
+      await _registerSaveAction(controller);
     } catch (e) {
       debugPrint('Error initializing Monaco: $e');
+      controller?.dispose();
+      if (!mounted) return;
       setState(() {
+        if (identical(_controller, controller)) {
+          _controller = null;
+        }
         _isLoading = false;
       });
     }
@@ -209,11 +221,10 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.code),
             tooltip: 'Language',
-            onSelected: (language) async {
+            onSelected: (language) {
               setState(() {
                 _currentLanguage = language;
               });
-              await _controller?.document.setLanguage(MonacoLanguage(language));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'dart', child: Text('Dart')),
@@ -230,11 +241,10 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.palette),
             tooltip: 'Theme',
-            onSelected: (theme) async {
+            onSelected: (theme) {
               setState(() {
                 _currentTheme = theme;
               });
-              await _controller?.setTheme(MonacoTheme(theme));
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'vs-dark', child: Text('Dark')),
@@ -294,6 +304,10 @@ class _MonacoExamplePageState extends State<MonacoExamplePage> {
                 : _controller != null
                 ? MonacoEditor(
                     controller: _controller!,
+                    options: EditorOptions(
+                      language: MonacoLanguage(_currentLanguage),
+                      theme: MonacoTheme(_currentTheme),
+                    ),
                     onReady: (controller) {
                       debugPrint('Monaco Editor is ready!');
                     },

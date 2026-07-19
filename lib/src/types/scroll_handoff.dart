@@ -118,8 +118,9 @@ class MonacoScrollHandoffDetails {
 
   /// The page-unique id of the host-owned gesture this message belongs to.
   ///
-  /// `0` marks an unsessionized message ([MonacoScrollBoundaryPolicy
-  /// .continuous]); sessionized gestures count up from `1`. The built-in
+  /// `0` marks an unsessionized message
+  /// ([MonacoScrollBoundaryPolicy.continuous]); sessionized gestures count up
+  /// from `1`. The built-in
   /// handoff applies an [MonacoScrollHandoffPhase.update] only while its
   /// gesture is the active one, so a stale delta can never move the host.
   final int gestureId;

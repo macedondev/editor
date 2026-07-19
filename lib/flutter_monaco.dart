@@ -42,9 +42,9 @@
 ///
 /// ## Platform Support
 ///
-/// - ✅ Android (5.0+)
-/// - ✅ iOS (11.0+)
-/// - ✅ macOS (10.13+)
+/// - ✅ Android (7.0+, API 24)
+/// - ✅ iOS (13.0+)
+/// - ✅ macOS (10.15+)
 /// - ✅ Windows (10 version 1809+)
 /// - ✅ Web (supported)
 /// - ❌ Linux (not supported)
