@@ -1,15 +1,15 @@
 # Flutter Monaco
 
-[![pub package](https://img.shields.io/pub/v/flutter_monaco.svg?label=pub)](https://omar-hanafy.github.io/flutter-monaco/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-success.svg)](https://omar-hanafy.github.io/flutter-monaco/)
-[![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS%20%7C%20macOS%20%7C%20Windows%20%7C%20Web-blue)](https://omar-hanafy.github.io/flutter-monaco/)
+[![pub package](https://img.shields.io/pub/v/flutter_monaco.svg?label=pub)](https://omar-hanafy.github.io/flutter_monaco/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-success.svg)](https://omar-hanafy.github.io/flutter_monaco/)
+[![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS%20%7C%20macOS%20%7C%20Windows%20%7C%20Web-blue)](https://omar-hanafy.github.io/flutter_monaco/)
 
 A Flutter plugin for integrating the Monaco Editor (VS Code's editor) into Flutter applications via WebView.
 
-Check the [live demo here](https://omar-hanafy.github.io/flutter-monaco/) to try Flutter Monaco in your browser.
+Check the [live demo here](https://omar-hanafy.github.io/flutter_monaco/) to try Flutter Monaco in your browser.
 
 <p align="center">
-  <a href="https://omar-hanafy.github.io/flutter-monaco/">
+  <a href="https://omar-hanafy.github.io/flutter_monaco/">
     <img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/macos.png?raw=true" alt="Flutter Monaco Editor on macOS" width="90%">
   </a>
 </p>
@@ -120,20 +120,20 @@ Start a new Codex session after updating or reinstalling the plugin.
     <td align="center" width="50%"><b>Android</b></td>
   </tr>
   <tr>
-    <td><a href="https://omar-hanafy.github.io/flutter-monaco/"><img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/ios.jpg?raw=true" alt="iOS Screenshot" width="100%"></a></td>
-    <td><a href="https://omar-hanafy.github.io/flutter-monaco/"><img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/android.jpg?raw=true" alt="Android Screenshot" width="100%"></a></td>
+    <td><a href="https://omar-hanafy.github.io/flutter_monaco/"><img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/ios.jpg?raw=true" alt="iOS Screenshot" width="100%"></a></td>
+    <td><a href="https://omar-hanafy.github.io/flutter_monaco/"><img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/android.jpg?raw=true" alt="Android Screenshot" width="100%"></a></td>
   </tr>
   <tr>
     <td align="center" colspan="2"><b>Windows</b></td>
   </tr>
   <tr>
-    <td colspan="2"><a href="https://omar-hanafy.github.io/flutter-monaco/"><img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/windows.png?raw=true" alt="Windows Screenshot" width="100%"></a></td>
+    <td colspan="2"><a href="https://omar-hanafy.github.io/flutter_monaco/"><img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/windows.png?raw=true" alt="Windows Screenshot" width="100%"></a></td>
   </tr>
   <tr>
     <td align="center" colspan="2"><b>Web</b></td>
   </tr>
   <tr>
-    <td colspan="2"><a href="https://omar-hanafy.github.io/flutter-monaco/"><img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/web.png?raw=true" alt="Web Screenshot" width="100%"></a></td>
+    <td colspan="2"><a href="https://omar-hanafy.github.io/flutter_monaco/"><img src="https://github.com/omar-hanafy/flutter_monaco/blob/main/screenshots/web.png?raw=true" alt="Web Screenshot" width="100%"></a></td>
   </tr>
 </table>
 
@@ -1051,7 +1051,7 @@ files itself exactly as before.
 
 To start the warmup even earlier - in parallel with the Flutter engine
 download itself - add this snippet to your `web/index.html` (this is what
-the [live demo](https://omar-hanafy.github.io/flutter-monaco/) ships):
+the [live demo](https://omar-hanafy.github.io/flutter_monaco/) ships):
 
 ```html
 <script>
@@ -1331,7 +1331,7 @@ No configuration is needed; the package handles both of these automatically:
 
 ### Live Web Demo
 
-You can try the [live web demo here](https://omar-hanafy.github.io/flutter-monaco/).
+You can try the [live web demo here](https://omar-hanafy.github.io/flutter_monaco/).
 
 The [example](example/) directory contains a full demonstration app with:
 
