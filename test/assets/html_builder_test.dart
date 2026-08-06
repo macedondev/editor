@@ -3,9 +3,14 @@ import 'dart:convert';
 import 'package:flutter_monaco/src/assets/html_builder.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-String _build({String? customCss, String? messageToken, bool isWeb = false}) {
+String _build({
+  String? customCss,
+  String? messageToken,
+  bool isWeb = false,
+  String vsPath = 'monaco/min/vs',
+}) {
   return buildMonacoIndexHtml(
-    vsPath: 'monaco/min/vs',
+    vsPath: vsPath,
     bridgeBase: 'bridge',
     monacoVersion: '0.55.1',
     isWeb: isWeb,
@@ -32,6 +37,26 @@ void main() {
     test('ordinary customCss passes through', () {
       final html = _build(customCss: '.margin { color: rgb(1, 2, 3); }');
       expect(html, contains('.margin { color: rgb(1, 2, 3); }'));
+    });
+
+    test('absolute http(s) vsPath puts the asset origin into the CSP', () {
+      // Firefox does not resolve CSP 'self' to the creating origin inside
+      // blob: documents, so the origin must be named explicitly or every
+      // same-origin asset load (loader.js, bridge, CSS, fonts) is blocked.
+      final html = _build(
+        isWeb: true,
+        vsPath: 'http://localhost:9000/assets/monaco/min/vs',
+      );
+      expect(html, contains("script-src 'self' http://localhost:9000 "));
+      expect(html, contains("style-src 'self' http://localhost:9000 "));
+      expect(html, contains("font-src 'self' http://localhost:9000 "));
+      expect(html, contains("connect-src 'self' http://localhost:9000 "));
+    });
+
+    test('relative vsPath leaves the CSP without an extra origin', () {
+      final html = _build(vsPath: 'monaco/min/vs');
+      expect(html, contains("script-src 'self' file: "));
+      expect(html, isNot(contains("'self' http")));
     });
 
     test('the web message token is JSON-encoded in every interpolation', () {

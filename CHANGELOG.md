@@ -3,6 +3,11 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Firefox can now load the editor on web.** Firefox does not treat the creating document's origin as CSP `'self'` inside `blob:` documents, so the blob-hosted Monaco page blocked its own loader, bridge scripts, CSS, and fonts ("Failed to load Monaco loader.js"). The generated page CSP now names the resolved asset origin explicitly; native platforms and browsers where `'self'` already matches are unaffected.
+
 ## [3.4.2] - 2026-07-19
 
 ### Added

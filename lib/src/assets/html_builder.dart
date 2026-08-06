@@ -78,6 +78,20 @@ String buildMonacoIndexHtml({
 }) {
   final extraConnectSources = sanitizeConnectSources(allowedConnectSources);
 
+  // Firefox does not treat the creating document's origin as CSP 'self'
+  // inside blob: documents, so on web every asset load from the host origin
+  // (loader.js, the bridge scripts, editor CSS, fonts) is blocked there
+  // while Chrome allows it — the editor dies with "Failed to load Monaco
+  // loader.js". Naming the asset origin explicitly unblocks Firefox and is
+  // redundant-but-harmless in browsers where 'self' already matches. Only
+  // absolute http(s) asset URLs (the web case) produce an origin; native
+  // platforms keep the policy unchanged.
+  var assetOrigin = '';
+  final vsUri = Uri.tryParse(vsPath);
+  if (vsUri != null && (vsUri.scheme == 'http' || vsUri.scheme == 'https')) {
+    assetOrigin = ' ${vsUri.scheme}://${vsUri.authority}';
+  }
+
   final platform = isWeb
       ? 'web'
       : isWindows
@@ -230,7 +244,7 @@ String buildMonacoIndexHtml({
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' file: 'unsafe-inline' 'unsafe-eval'; script-src 'self' file: 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'${allowCdnFonts ? ' https:' : ''}; font-src 'self' file: data:${allowCdnFonts ? ' https:' : ''}; img-src 'self' data: blob: file:; worker-src 'self' blob:; connect-src 'self' blob:$extraConnectSources;"
+      content="default-src 'self'$assetOrigin file: 'unsafe-inline' 'unsafe-eval'; script-src 'self'$assetOrigin file: 'unsafe-inline' 'unsafe-eval'; style-src 'self'$assetOrigin 'unsafe-inline'${allowCdnFonts ? ' https:' : ''}; font-src 'self'$assetOrigin file: data:${allowCdnFonts ? ' https:' : ''}; img-src 'self'$assetOrigin data: blob: file:; worker-src 'self'$assetOrigin blob:; connect-src 'self'$assetOrigin blob:$extraConnectSources;"
     />
     <!-- NOTE: connect-src intentionally limits in-page requests to self/blob.
          Opt into remote endpoints (e.g. WebSocket language servers) via the
