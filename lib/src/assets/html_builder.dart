@@ -1,19 +1,29 @@
 import 'dart:convert';
 
-/// Validates and joins extra CSP `connect-src` source expressions.
+/// Characters that would let a source expression escape the policy attribute
+/// or smuggle in an additional directive.
+final RegExp _unsafeCspSourceChars = RegExp(r'''[\s;'"<>]''');
+
+/// Whether [source] may be spliced into the page's CSP.
 ///
-/// Returns either an empty string or a leading-space-joined list ready to
-/// splice after `connect-src 'self' blob:`. Throws [ArgumentError] for
-/// entries that could break out of the policy attribute or smuggle in
-/// additional directives (whitespace, quotes, `;`, `<`, `>`).
-String sanitizeConnectSources(List<String> sources) {
-  if (sources.isEmpty) return '';
-  final forbidden = RegExp(r'''[\s;'"<>]''');
+/// The single definition of what is admissible, applied to every source
+/// expression that reaches the policy - both caller-supplied
+/// ([sanitizeConnectSources]) and derived from asset URLs ([_cspAssetOrigins]).
+bool _isSafeCspSource(String source) =>
+    source.isNotEmpty && !_unsafeCspSourceChars.hasMatch(source);
+
+/// Validates extra CSP `connect-src` source expressions.
+///
+/// Returns the non-empty entries, ready to append to the `connect-src`
+/// directive. Throws [ArgumentError] for entries that could break out of the
+/// policy attribute or smuggle in additional directives (whitespace, quotes,
+/// `;`, `<`, `>`).
+List<String> sanitizeConnectSources(List<String> sources) {
   final cleaned = <String>[];
   for (final raw in sources) {
     final source = raw.trim();
     if (source.isEmpty) continue;
-    if (forbidden.hasMatch(source)) {
+    if (!_isSafeCspSource(source)) {
       throw ArgumentError.value(
         raw,
         'allowedConnectSources',
@@ -23,7 +33,38 @@ String sanitizeConnectSources(List<String> sources) {
     }
     cleaned.add(source);
   }
-  return cleaned.isEmpty ? '' : ' ${cleaned.join(' ')}';
+  return cleaned;
+}
+
+/// CSP host-sources for every origin the generated page fetches from.
+///
+/// The policy must never depend on `'self'`. This document is always
+/// delivered over a local scheme - a `blob:` URL on web (see
+/// `webview_web.dart`) and a `file:` URL on native (see
+/// `webview_native.dart`) - and `'self'` is not dependable there: Firefox
+/// does not resolve it to the creating document's origin inside a `blob:`
+/// document, so every same-origin fetch the page makes (`loader.js`, the
+/// bridge scripts, `editor.main.css`, the workers) is blocked while Chrome
+/// allows it. Native has always handled this by naming `file:` in every
+/// directive; web names the origins it actually references.
+///
+/// Only absolute http(s) URLs carry an origin, so native's relative and
+/// `file:` asset paths contribute nothing and leave the policy unchanged.
+/// [Uri.origin] rather than `authority` is deliberate: it is
+/// `scheme://host[:port]` with no userinfo, which is the only form valid as a
+/// CSP host-source - `authority` would emit `https://user:pass@host`, an
+/// expression browsers discard, silently restoring the failure.
+List<String> _cspAssetOrigins(List<String> assetUrls) {
+  final origins = <String>{};
+  for (final url in assetUrls) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) continue;
+    if (uri.scheme != 'http' && uri.scheme != 'https') continue;
+    if (uri.host.isEmpty) continue;
+    final origin = uri.origin;
+    if (_isSafeCspSource(origin)) origins.add(origin);
+  }
+  return origins.toList()..sort();
 }
 
 /// Neutralizes `</` sequences so injected CSS can never terminate its
@@ -77,6 +118,33 @@ String buildMonacoIndexHtml({
   List<String> allowedConnectSources = const [],
 }) {
   final extraConnectSources = sanitizeConnectSources(allowedConnectSources);
+
+  // The page's whole fetch surface, named explicitly so nothing load-bearing
+  // depends on 'self' (see _cspAssetOrigins). Both asset roots contribute:
+  // the Monaco bundle and the bridge scripts are resolved by separate
+  // functions on web and are same-origin only by convention, so deriving the
+  // policy from one of them would leave the other unadmitted.
+  final selfSources = <String>[
+    "'self'",
+    ..._cspAssetOrigins([vsPath, bridgeBase]),
+  ];
+
+  // Every directive is emitted through here, so one added later cannot
+  // silently omit the asset origins. `default-src` is no safety net for
+  // that: it only backstops directives that are NOT declared.
+  String directive(String name, List<String> extra) =>
+      '$name ${[...selfSources, ...extra].join(' ')}';
+
+  final contentSecurityPolicy =
+      '${[
+        directive('default-src', ['file:', "'unsafe-inline'", "'unsafe-eval'"]),
+        directive('script-src', ['file:', "'unsafe-inline'", "'unsafe-eval'"]),
+        directive('style-src', ["'unsafe-inline'", if (allowCdnFonts) 'https:']),
+        directive('font-src', ['file:', 'data:', if (allowCdnFonts) 'https:']),
+        directive('img-src', ['data:', 'blob:', 'file:']),
+        directive('worker-src', ['blob:']),
+        directive('connect-src', ['blob:', ...extraConnectSources]),
+      ].join('; ')};';
 
   final platform = isWeb
       ? 'web'
@@ -230,11 +298,31 @@ String buildMonacoIndexHtml({
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' file: 'unsafe-inline' 'unsafe-eval'; script-src 'self' file: 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'${allowCdnFonts ? ' https:' : ''}; font-src 'self' file: data:${allowCdnFonts ? ' https:' : ''}; img-src 'self' data: blob: file:; worker-src 'self' blob:; connect-src 'self' blob:$extraConnectSources;"
+      content="$contentSecurityPolicy"
     />
-    <!-- NOTE: connect-src intentionally limits in-page requests to self/blob.
-         Opt into remote endpoints (e.g. WebSocket language servers) via the
-         allowedConnectSources parameter instead of editing this policy. -->
+    <!-- NOTE: connect-src intentionally limits in-page requests to this
+         page's own asset origins and blob:. Opt into remote endpoints (e.g.
+         WebSocket language servers) via the allowedConnectSources parameter
+         instead of editing this policy. -->
+    <script>
+      // A CSP block is this page's most likely load failure: it is served
+      // over a local scheme and fetches everything else from the app origin.
+      // Unrecorded, it surfaces only as "Failed to load Monaco loader.js",
+      // which names neither the directive that refused nor the URL it
+      // refused - the difference between a one-line report and a
+      // cross-browser hunt. Must precede every governed load.
+      window.__FM_CSP_VIOLATIONS = [];
+      document.addEventListener('securitypolicyviolation', function (e) {
+        if (window.__FM_CSP_VIOLATIONS.length >= 5) return;
+        window.__FM_CSP_VIOLATIONS.push(
+          (e.effectiveDirective || e.violatedDirective) + ' blocked ' + e.blockedURI
+        );
+      });
+      window.__fmCspDetail = function () {
+        var v = window.__FM_CSP_VIOLATIONS;
+        return v && v.length ? ' (CSP: ' + v.join('; ') + ')' : '';
+      };
+    </script>
     <style>
       html, body, #editor-container {
         width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
@@ -276,19 +364,27 @@ String buildMonacoIndexHtml({
         if (window._initMonacoWhenReady) window._initMonacoWhenReady();
       };
       loaderScript.onerror = function() {
-        console.error('[Monaco HTML] FATAL: loader.js FAILED TO LOAD.');
-        if (window.flutterMonacoPostMessage) {
-          window.flutterMonacoPostMessage({ event: 'error', message: 'Failed to load Monaco loader.js' });
-        } else if (window.flutterChannel) {
-          window.flutterChannel.postMessage(JSON.stringify({ event: 'error', message: 'Failed to load Monaco loader.js' }));
-        }
+        // This error event and securitypolicyviolation are dispatched
+        // independently, so yield once: a CSP block is then already recorded
+        // when the report is built. The host is waiting on a 20s readiness
+        // timeout, so one task is free.
+        setTimeout(function () {
+          var detail = window.__fmCspDetail ? window.__fmCspDetail() : '';
+          console.error('[Monaco HTML] FATAL: loader.js FAILED TO LOAD.' + detail);
+          var payload = { event: 'error', message: 'Failed to load Monaco loader.js' + detail };
+          if (window.flutterMonacoPostMessage) {
+            window.flutterMonacoPostMessage(payload);
+          } else if (window.flutterChannel) {
+            window.flutterChannel.postMessage(JSON.stringify(payload));
+          }
+        }, 0);
       };
       document.head.appendChild(loaderScript);
     </script>
     ''' : '''
     <script src="$vsPath/loader.js"
             onload="console.log('[Monaco HTML] loader.js successfully loaded.')"
-            onerror="console.error('[Monaco HTML] FATAL: loader.js FAILED TO LOAD.')"
+            onerror="console.error('[Monaco HTML] FATAL: loader.js FAILED TO LOAD.' + (window.__fmCspDetail ? window.__fmCspDetail() : ''))"
     ></script>
     '''}
 

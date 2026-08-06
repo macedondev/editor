@@ -12,11 +12,13 @@
 /// reference, so an absolute [assetUrl] is returned unchanged and a relative
 /// one is anchored at the app root.
 ///
-/// **Cross-origin `assetBase` is not supported.** The generated editor page
-/// ships a CSP whose `script-src` allows only `'self'` (and `file:`), so a
-/// Monaco bundle resolved to a different origin is blocked by the page's own
-/// policy. Serve the Monaco assets from the app's origin; a CDN `assetBase`
-/// for the REST of the app is fine as long as the flutter_monaco assets stay
-/// same-origin.
+/// **Cross-origin `assetBase` is not supported.** The page's own CSP is no
+/// longer the obstacle - it names the origin of each resolved asset root
+/// explicitly (see `_cspAssetOrigins` in `html_builder.dart`) - but the asset
+/// host must then serve the Monaco bundle and bridge with CORS headers
+/// permitting the app's origin, including for the module workers, and that is
+/// not something this package can arrange. Serve the Monaco assets from the
+/// app's origin; a CDN `assetBase` for the REST of the app is fine as long as
+/// the flutter_monaco assets stay same-origin.
 String resolveWebAssetUrl(String documentBaseUri, String assetUrl) =>
     Uri.parse(documentBaseUri).resolve(assetUrl).toString();
