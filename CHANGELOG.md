@@ -6,7 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Firefox can now load the editor on web.** Firefox does not treat the creating document's origin as CSP `'self'` inside `blob:` documents, so the blob-hosted Monaco page blocked its own loader, bridge scripts, CSS, and fonts ("Failed to load Monaco loader.js"). The generated page CSP now names the resolved asset origin explicitly; native platforms and browsers where `'self'` already matches are unaffected.
+- **Firefox can now load the editor on web.** Firefox does not treat the creating document's origin as CSP `'self'` inside `blob:` documents, so the blob-hosted Monaco page blocked its own loader, bridge scripts, stylesheet, and workers ("Failed to load Monaco loader.js"). The generated page no longer relies on `'self'` for anything it fetches: it names the origin of every resolved asset root, and each directive is built from one shared source list so a directive added later cannot omit them. Native platforms keep a byte-identical policy, and browsers where `'self'` already matches are unaffected.
+- **A CSP-blocked page load now says which directive refused which URL** instead of only "Failed to load Monaco loader.js", turning a cross-browser hunt into a single line in the reported error.
 
 ## [3.4.2] - 2026-07-19
 
