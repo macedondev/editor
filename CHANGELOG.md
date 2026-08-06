@@ -3,11 +3,11 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.4.3] - 2026-08-06
 
 ### Fixed
-- **Firefox can now load the editor on web.** Firefox does not treat the creating document's origin as CSP `'self'` inside `blob:` documents, so the blob-hosted Monaco page blocked its own loader, bridge scripts, stylesheet, and workers ("Failed to load Monaco loader.js"). The generated page no longer relies on `'self'` for anything it fetches: it names the origin of every resolved asset root, and each directive is built from one shared source list so a directive added later cannot omit them. Native platforms keep a byte-identical policy, and browsers where `'self'` already matches are unaffected.
-- **A CSP-blocked page load now says which directive refused which URL** instead of only "Failed to load Monaco loader.js", turning a cross-browser hunt into a single line in the reported error.
+- **Firefox can now load the editor on Web.** Firefox does not resolve CSP `'self'` to the creating document's origin inside `blob:` documents, so the blob-hosted editor page blocked its own loader, bridge scripts, stylesheet, and workers, failing with "Failed to load Monaco loader.js" while Chrome worked. The page no longer relies on `'self'` for anything it fetches: it names the origin of every resolved asset root explicitly. Native platforms keep a byte-identical policy, and browsers where `'self'` already matches are unaffected.
+- **A load blocked by the page's Content-Security-Policy now names the directive that refused it and the URL it refused**, instead of reporting only "Failed to load Monaco loader.js".
 
 ## [3.4.2] - 2026-07-19
 

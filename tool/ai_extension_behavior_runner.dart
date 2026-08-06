@@ -932,7 +932,7 @@ Future<void> prepareEvaluationFixture(
       ? '^3.4.1'
       : legacy
       ? '^2.3.0'
-      : '^3.4.2';
+      : '^3.4.3';
   _writeFixtureFile(
     fixture,
     'pubspec.yaml',
@@ -966,8 +966,8 @@ Future<void> prepareEvaluationFixture(
         '${kind != 'execution'
             ? ''
             : legacy
-            ? 'The dependency starts on the 2.3.0 API stub at vendor/flutter_monaco_legacy. After rewriting the app, change the dependency override to vendor/flutter_monaco_current for 3.4.2 validation. Do not edit either vendor tree.\n'
-            : 'The 3.4.2 package at vendor/flutter_monaco_current is a read-only fixture dependency. Do not edit it.\n'}',
+            ? 'The dependency starts on the 2.3.0 API stub at vendor/flutter_monaco_legacy. After rewriting the app, change the dependency override to vendor/flutter_monaco_current for 3.4.3 validation. Do not edit either vendor tree.\n'
+            : 'The 3.4.3 package at vendor/flutter_monaco_current is a read-only fixture dependency. Do not edit it.\n'}',
   );
   if (kind == 'execution') {
     _writeFixtureFile(fixture, 'analysis_options.yaml', '''analyzer:

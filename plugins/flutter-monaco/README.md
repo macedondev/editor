@@ -122,7 +122,7 @@ public-directory submission.
 
 - Consumer skills target `flutter_monaco` 3.x and inspect the resolved package APIs
   before proposing code. The migration skill covers 2.x to 3.x.
-- Both plugin manifests use version `3.4.2`, matching the package release that ships
+- Both plugin manifests use version `3.4.3`, matching the package release that ships
   this support. Both marketplace entries carry the same version.
 - The manifests and commands were validated with Claude Code 2.1.215 and Codex CLI
   0.144.6. The shared SKILL.md frontmatter deliberately uses the fields accepted by

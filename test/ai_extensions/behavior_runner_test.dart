@@ -282,7 +282,7 @@ Future<void> main() async {
         'installed': <Object?>[
           <String, Object?>{
             'pluginId': 'flutter-monaco@flutter-monaco',
-            'version': '3.4.2',
+            'version': '3.4.3',
             'installed': true,
             'enabled': true,
           },
@@ -307,7 +307,7 @@ Future<void> main() async {
         <Object?>[
           <String, Object?>{
             'id': 'flutter-monaco@flutter-monaco-plugins',
-            'version': '3.4.2',
+            'version': '3.4.3',
             'enabled': true,
             'installPath': repositoryRoot.path,
           },
@@ -402,7 +402,7 @@ Future<void> main() async {
     final integrationPubspec = File.fromUri(
       integrationFixture.uri.resolve('pubspec.yaml'),
     ).readAsStringSync();
-    expect(integrationPubspec, contains('flutter_monaco: ^3.4.2'));
+    expect(integrationPubspec, contains('flutter_monaco: ^3.4.3'));
     expect(integrationPubspec, contains('path: vendor/flutter_monaco_current'));
     expect(integrationPubspec, isNot(contains('../')));
     expect(integrationPubspec, isNot(contains('path: /')));
@@ -411,7 +411,7 @@ Future<void> main() async {
         'vendor/flutter_monaco_current/pubspec.yaml',
       ),
     ).readAsStringSync();
-    expect(vendoredPubspec, contains('version: 3.4.2'));
+    expect(vendoredPubspec, contains('version: 3.4.3'));
     expect(
       File.fromUri(
         integrationFixture.uri.resolve(

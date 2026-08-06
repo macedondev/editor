@@ -173,7 +173,7 @@ Claude eval pass until that command is available and actually runs.
 
 Authenticated behavior checks are opt-in and never run in CI. Claude requires a
 separate config directory containing a local marketplace installation of this plugin.
-The runner fails closed unless the plugin is enabled at version `3.4.2`, its cache is a
+The runner fails closed unless the plugin is enabled at version `3.4.3`, its cache is a
 byte-for-byte copy of this checkout, and its marketplace points to this checkout. It
 then loads only that isolated user configuration, the verified plugin, a fixed empty
 MCP set, nonpersistent sessions, disabled auto-memory, and disposable fixtures.
@@ -200,7 +200,7 @@ dart run tool/ai_extension_behavior_runner.dart \
 
 Codex requires a separate authenticated home so the runner cannot use or modify a
 maintainer's normal plugins. The runner fails closed unless the installed local
-plugin is enabled, is version `3.4.2`, and is a byte-for-byte copy of this checkout:
+plugin is enabled, is version `3.4.3`, and is a byte-for-byte copy of this checkout:
 
 ```bash
 eval_codex_home="$(mktemp -d)"
