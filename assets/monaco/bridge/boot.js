@@ -142,6 +142,8 @@ window.__FMB = window.__FMB || {};
               FMB.focusMobile(ctx);
               if (FMB.viewportFit) FMB.viewportFit(ctx);
               FMB.completions(ctx);
+              FMB.inlineCompletions(ctx);
+              FMB.inlineEdit(ctx);
               FMB.actions(ctx);
               FMB.scrollHandoff(ctx);
               FMB.lsp(ctx);

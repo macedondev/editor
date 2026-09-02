@@ -1,162 +1,187 @@
+// ignore_for_file: public_member_api_docs
+
 part of 'webview_native.dart';
 
-/// WebView implementation for Windows using Microsoft Edge WebView2.
+// dart:convert is available via parent import; ensure jsonEncode visible
+
+/// WebView implementation for Windows using `flutter_inappwebview` (WebView2).
 ///
-/// This controller wraps the `webview_flutter_windows` package to provide Monaco editor
-/// hosting on Windows. It requires the WebView2 runtime, which is pre-installed
-/// on Windows 11 and available as a separate download for Windows 10.
-///
-/// ### JavaScript Communication
-///
-/// Unlike `webview_flutter`, WebView2 uses `chrome.webview.postMessage` for
-/// native communication. However, the Monaco HTML defines a `window.flutterChannel`
-/// shim that forwards to this API, providing a consistent interface.
-///
-/// Messages are received via the [webMessage] stream and dispatched to all
-/// registered channel handlers in [_channels].
-///
-/// ### Result Parsing
-///
-/// WebView2's `ExecuteScript` returns JSON-encoded results, which may need
-/// unwrapping. Use [parseWindowsScriptResult] to normalize return values.
-///
-/// ### Initialization
-///
-/// The first call to [initialize] may take longer if WebView2 needs to
-/// install its runtime. Subsequent initializations are fast.
-///
-/// See also:
-/// - [FlutterWebViewController] for Android/iOS/macOS implementation.
-/// - [ww.WebviewController] for the underlying Windows WebView controller.
-/// - [parseWindowsScriptResult] for result normalization.
+/// Previously used `webview_flutter_windows` (`WebviewController`/`Webview`).
+/// Now uses `InAppWebView` which on Windows also wraps WebView2 via
+/// `flutter_inappwebview_windows`. The Monaco HTML defines a `window.flutterChannel`
+/// shim that now forwards to `window.flutter_inappwebview.callHandler`.
 class WindowsWebViewController extends WebViewController {
-  /// Creates a new controller backed by `webview_flutter_windows` (WebView2).
-  WindowsWebViewController() : super._() {
-    _controller = ww.WebviewController();
-  }
+  WindowsWebViewController() : super._();
 
-  @override
-  Widget get widget => ww.Webview(_controller);
-
-  late final ww.WebviewController _controller;
+  InAppWebViewController? _controller;
+  final Completer<InAppWebViewController> _controllerCompleter =
+      Completer<InAppWebViewController>();
   final Map<String, void Function(String)> _channels = {};
-  StreamSubscription<dynamic>? _webMessageSubscription;
   bool _isInitialized = false;
   bool _disposed = false;
+  Widget? _cachedWidget;
+  final GlobalKey _widgetKey = GlobalKey();
 
-  /// Provides direct access to the underlying `webview_flutter_windows` controller.
-  ///
-  /// Use this for advanced operations not exposed by [PlatformWebViewController],
-  /// such as custom popup policies or DevTools access.
-  ww.WebviewController get windowsController => _controller;
+  InAppWebViewController? get windowsController => _controller;
 
   @override
-  Future<void> initialize() async {
-    if (_isInitialized) return;
-
-    debugPrint('[WindowsWebViewController] Initializing WebView2...');
-    await _controller.initialize();
-    _isInitialized = true;
-
-    // Set up default configuration
-    await _controller.setBackgroundColor(const Color(0xFF1E1E1E));
-    await _controller.setPopupWindowPolicy(ww.WebviewPopupWindowPolicy.deny);
-
-    // Set up message handler BEFORE adding any channels
-    _setupWebMessageHandler();
-
-    debugPrint('[WindowsWebViewController] WebView2 initialized successfully');
-  }
-
-  void _setupWebMessageHandler() {
-    _webMessageSubscription?.cancel();
-
-    _webMessageSubscription = _controller.webMessage.listen((
-      dynamic rawMessage,
-    ) {
-      if (kDebugMode) {
+  Widget get widget {
+    if (_cachedWidget != null) return _cachedWidget!;
+    _cachedWidget = InAppWebView(
+      key: _widgetKey,
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        javaScriptCanOpenWindowsAutomatically: false,
+        mediaPlaybackRequiresUserGesture: false,
+        transparentBackground: true,
+        isInspectable: kDebugMode,
+        allowFileAccess: true,
+        allowContentAccess: true,
+        allowFileAccessFromFileURLs: true,
+        allowUniversalAccessFromFileURLs: true,
+        cacheEnabled: true,
+        supportZoom: false,
+        disableContextMenu: true,
+      ),
+      initialData: InAppWebViewInitialData(
+        data: '<!DOCTYPE html><html><head></head><body></body></html>',
+      ),
+      initialUserScripts: UnmodifiableListView<UserScript>([
+        UserScript(
+          source:
+              "window.flutterChannel = { postMessage: function(msg){ window.flutter_inappwebview.callHandler('flutterChannel', msg); } };",
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+          forMainFrameOnly: true,
+        ),
+      ]),
+      onWebViewCreated: (controller) {
+        _controller = controller;
+        if (!_controllerCompleter.isCompleted) {
+          _controllerCompleter.complete(controller);
+        }
+        for (final entry in _channels.entries) {
+          _addHandler(entry.key, entry.value);
+        }
+        debugPrint('[WindowsWebViewController] InAppWebView created');
+      },
+      onConsoleMessage: (controller, consoleMessage) {
         debugPrint(
-          '[WindowsWebViewController] Raw message: $rawMessage (${rawMessage.runtimeType})',
+          '[WindowsWebViewController] ${consoleMessage.messageLevel.name}: ${consoleMessage.message}',
         );
-      }
-
-      try {
-        String messageStr;
-
-        if (rawMessage is String) {
-          messageStr = rawMessage;
-        } else if (rawMessage is Map) {
-          messageStr = json.encode(rawMessage);
-        } else {
-          messageStr = rawMessage.toString();
-        }
-
-        _channels.forEach((channelName, handler) {
-          if (kDebugMode) {
-            debugPrint(
-              '[WindowsWebViewController] Forwarding to channel: $channelName',
-            );
-          }
-          handler(messageStr);
-        });
-      } catch (e) {
-        if (kDebugMode) {
-          debugPrint('[WindowsWebViewController] Error handling message: $e');
-        }
-      }
-    });
+      },
+      onLoadStop: (controller, url) {
+        debugPrint('[WindowsWebViewController] Page finished: $url');
+      },
+      onReceivedError: (controller, request, error) {
+        debugPrint(
+          '[WindowsWebViewController] Error: ${error.description} on ${request.url}',
+        );
+      },
+    );
+    return _cachedWidget!;
   }
 
-  /// Loads the given HTML string into the WebView.
+  void _addHandler(String name, void Function(String) onMessage) {
+    final c = _controller;
+    if (c == null) return;
+    try {
+      c.removeJavaScriptHandler(handlerName: name);
+    } catch (_) {}
+    c.addJavaScriptHandler(
+      handlerName: name,
+      callback: (args) {
+        String messageStr;
+        final raw = args.isNotEmpty ? args.first : null;
+        if (raw is String) {
+          messageStr = raw;
+        } else if (raw is Map) {
+          messageStr = jsonEncode(raw);
+        } else {
+          messageStr = raw.toString();
+        }
+        onMessage(messageStr);
+      },
+    );
+  }
+
   Future<void> loadHtmlString(String html, {String? baseUrl}) async {
     debugPrint(
       '[WindowsWebViewController] Loading HTML string (length: ${html.length})',
     );
-    await _controller.loadStringContent(html);
+    final c = await _controllerCompleter.future;
+    await c.loadData(
+      data: html,
+      mimeType: 'text/html',
+      encoding: 'utf8',
+      baseUrl: baseUrl != null ? WebUri(baseUrl) : null,
+    );
+  }
+
+  @override
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+    debugPrint(
+      '[WindowsWebViewController] Initializing InAppWebView (WebView2)...',
+    );
+    _isInitialized = true;
+    debugPrint('[WindowsWebViewController] Initialized');
   }
 
   @override
   Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) async {
     final htmlFilePath = await _ensureHtmlFile(page);
-    await _controller.loadUrl(Uri.file(htmlFilePath).toString());
+    final c = await _controllerCompleter.future;
+    final fileUri = Uri.file(htmlFilePath);
+    await c.loadUrl(urlRequest: URLRequest(url: WebUri.uri(fileUri)));
   }
 
   @override
   Future<void> setBackgroundColor(Color color) async {
-    await _controller.setBackgroundColor(color);
+    try {
+      final c = _controller;
+      if (c != null) {
+        final r = (color.r * 255).round();
+        final g = (color.g * 255).round();
+        final b = (color.b * 255).round();
+        final css = 'rgba($r, $g, $b, ${color.a})';
+        await c.evaluateJavascript(
+          source:
+              "document.documentElement.style.backgroundColor='$css';document.body.style.backgroundColor='$css';",
+        );
+      }
+    } catch (_) {}
   }
 
   @override
-  Future<void> setInteractionEnabled(bool enabled) async {
-    // No-op on Windows as WebView2 respects Flutter's overlay stacking.
-  }
+  Future<void> setInteractionEnabled(bool enabled) async {}
 
   @override
   Future<NativeFocusResult> requestNativeFocus() async {
     if (!_isInitialized || _disposed) return NativeFocusResult.failed;
-    final alreadyOwned = _controller.hasNativeFocus;
-    // Always run the handoff, even when the focus flag reads true: WebView2's
-    // MoveFocus is what re-arms keyboard routing after a native boundary.
-    // Moves real Win32 keyboard focus to the WebView2 control so that
-    // subsequent in-page focus calls (and typing) actually work.
-    await _controller.focus();
-    return alreadyOwned
-        ? NativeFocusResult.alreadyOwned
-        : NativeFocusResult.granted;
+    try {
+      final c = _controller;
+      if (c != null) {
+        await c.evaluateJavascript(source: 'window.focus();');
+      }
+      return NativeFocusResult.granted;
+    } catch (_) {
+      return NativeFocusResult.failed;
+    }
   }
 
   @override
-  Future<bool?> hasNativeInputFocus() async {
-    if (!_isInitialized || _disposed) return null;
-    return _controller.hasNativeFocus;
-  }
+  Future<bool?> hasNativeInputFocus() async => null;
 
   @override
   Future<void> releaseNativeFocus() async {
-    if (!_isInitialized || _disposed) return;
-    if (_controller.hasNativeFocus) {
-      await ww.WebviewController.releaseFocus();
-    }
+    try {
+      final c = _controller;
+      if (c != null) {
+        await c.evaluateJavascript(
+          source: 'document.activeElement&&document.activeElement.blur();',
+        );
+      }
+    } catch (_) {}
   }
 
   @override
@@ -165,7 +190,9 @@ class WindowsWebViewController extends WebViewController {
   @override
   Future<Object?> runJavaScript(String script) async {
     try {
-      return await _controller.executeScript(script);
+      final c = await _controllerCompleter.future;
+      await c.evaluateJavascript(source: script);
+      return null;
     } catch (e) {
       debugPrint('[WindowsWebViewController] JS execution error: $e');
       rethrow;
@@ -175,7 +202,8 @@ class WindowsWebViewController extends WebViewController {
   @override
   Future<Object?> runJavaScriptReturningResult(String script) async {
     try {
-      final result = await _controller.executeScript(script);
+      final c = await _controllerCompleter.future;
+      final result = await c.evaluateJavascript(source: script);
       return parseWindowsScriptResult(result);
     } catch (e) {
       debugPrint('[WindowsWebViewController] JS result error: $e');
@@ -191,30 +219,30 @@ class WindowsWebViewController extends WebViewController {
     debugPrint(
       '[WindowsWebViewController] Registering handler for channel: $name',
     );
-
-    // Store the handler - HTML already defines window.flutterChannel
     _channels[name] = onMessage;
-
-    // No need to inject JavaScript - the HTML already has the channel defined
+    _addHandler(name, onMessage);
     return null;
   }
 
   @override
   Future<Object?> removeJavaScriptChannel(String name) async {
     _channels.remove(name);
-    return null; // No-op in JS; HTML owns flutterChannel
+    try {
+      _controller?.removeJavaScriptHandler(handlerName: name);
+    } catch (_) {}
+    return null;
   }
 
   @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-
     debugPrint('[WindowsWebViewController] Disposing...');
-    _webMessageSubscription?.cancel();
-    _channels.clear();
-    if (_isInitialized) {
-      _controller.dispose();
+    for (final name in _channels.keys.toList()) {
+      try {
+        _controller?.removeJavaScriptHandler(handlerName: name);
+      } catch (_) {}
     }
+    _channels.clear();
   }
 }

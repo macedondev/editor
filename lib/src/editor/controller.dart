@@ -5,10 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
 import 'package:flutter_monaco/src/editor/focus_coordinator.dart';
+import 'package:flutter_monaco/src/editor/inline_completions.dart';
 import 'package:flutter_monaco/src/lsp/lsp_connection.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/protocol/envelope.dart';
 import 'package:flutter_monaco/src/protocol/protocol.dart';
+import 'package:flutter_monaco/src/types/inline_completion.dart';
 
 /// Manages the lifecycle and interaction with a Monaco Editor instance.
 ///
@@ -78,6 +80,9 @@ class MonacoController {
   /// its `completions.register` params so recovery from a page reload can
   /// re-register it on the fresh page.
   final Map<String, _CompletionRegistrationState> _completionSources = {};
+
+  /// Live inline completion registrations, keyed by provider id.
+  final Map<String, _InlineCompletionState> _inlineCompletions = {};
 
   /// Live Dart-defined actions, keyed by action id. Each entry keeps its
   /// `actions.register` descriptor for page-reload replay.
@@ -698,6 +703,51 @@ class MonacoController {
     await _invoke('completions.unregister', {'id': id});
   }
 
+  /// Registers an inline completions (ghost text) provider.
+  ///
+  /// The [provider] is called whenever Monaco needs ghost text at the cursor
+  /// (automatic on typing, explicit on demand). Return an
+  /// [InlineCompletionList] with one or more [InlineCompletionItem]s; empty
+  /// list means no ghost text. Provider errors are answered with no items.
+  /// Tab accepts, Esc dismisses - handled by Monaco. No document mutation.
+  Future<MonacoInlineCompletionRegistration> registerInlineCompletions({
+    String? id,
+    required List<MonacoLanguage> languages,
+    required InlineCompletionProvider provider,
+  }) async {
+    if (languages.isEmpty) {
+      throw ArgumentError.value(languages, 'languages', 'Cannot be empty');
+    }
+    if (id != null && _inlineCompletions.containsKey(id)) {
+      throw ArgumentError.value(id, 'id', 'Inline completion source already exists');
+    }
+    final providerId = id ?? 'flutter_inline_${++_registrationSeq}';
+    final registration = _InlineCompletionState(
+      provider: provider,
+      params: {
+        'id': providerId,
+        'languages': [for (final language in languages) language.id],
+      },
+    );
+    _inlineCompletions[providerId] = registration;
+    try {
+      await _invoke('inlineCompletions.register', registration.params);
+    } catch (e) {
+      _inlineCompletions.remove(providerId);
+      rethrow;
+    }
+    return MonacoInlineCompletionRegistration.internal(
+      id: providerId,
+      disposeHandler: () => _unregisterInlineCompletions(providerId),
+    );
+  }
+
+  Future<void> _unregisterInlineCompletions(String id) async {
+    _inlineCompletions.remove(id);
+    if (_disposed) return;
+    await _invoke('inlineCompletions.unregister', {'id': id});
+  }
+
   /// Runs a Monaco editor action, e.g.
   /// `executeAction(MonacoAction.formatDocument)`. Custom command ids run
   /// via `MonacoAction('my.command')`.
@@ -915,6 +965,13 @@ class MonacoController {
       if (!identical(_completionSources[entry.key], entry.value)) continue;
       await _protocol.invoke('completions.register', entry.value.params);
     }
+    for (final entry in List.of(_inlineCompletions.entries)) {
+      if (!identical(_inlineCompletions[entry.key], entry.value)) continue;
+      await _protocol.invoke(
+        'inlineCompletions.register',
+        entry.value.params,
+      );
+    }
     for (final entry in List.of(_customActions.entries)) {
       if (!identical(_customActions[entry.key], entry.value)) continue;
       await _protocol.invoke('actions.register', entry.value.descriptor);
@@ -926,6 +983,8 @@ class MonacoController {
       switch (request.name) {
         case 'completion':
           await _handleCompletionRequest(request);
+        case 'inlineCompletion':
+          await _handleInlineCompletionRequest(request);
         case 'action':
           await _handleActionRequest(request);
         default:
@@ -967,6 +1026,33 @@ class MonacoController {
     } catch (e) {
       debugPrint('[MonacoController] completion provider failed: $e');
       payload = Map<String, dynamic>.from(emptySuggestions);
+    }
+    await _protocol.respond(request.id, value: payload);
+  }
+
+  Future<void> _handleInlineCompletionRequest(ProtocolRequest request) async {
+    const empty = {'items': <Object?>[]};
+    InlineCompletionRequest inlineRequest;
+    try {
+      inlineRequest = InlineCompletionRequest.fromJson(
+        Map<String, dynamic>.from(request.data),
+      );
+    } on FormatException catch (e) {
+      debugPrint('[MonacoController] malformed inlineCompletion request: $e');
+      await _protocol.respond(request.id, value: empty);
+      return;
+    }
+    final provider = _inlineCompletions[inlineRequest.providerId]?.provider;
+    if (provider == null) {
+      await _protocol.respond(request.id, value: empty);
+      return;
+    }
+    Map<String, dynamic> payload;
+    try {
+      payload = (await provider(inlineRequest)).toJson();
+    } catch (e) {
+      debugPrint('[MonacoController] inlineCompletion provider failed: $e');
+      payload = Map<String, dynamic>.from(empty);
     }
     await _protocol.respond(request.id, value: payload);
   }
@@ -1024,6 +1110,74 @@ class MonacoController {
   Future<void> revealPosition(Position position, {bool center = false}) async {
     final range = Range.fromPositions(position, position);
     await revealRange(range, center: center);
+  }
+
+  // --- INLINE EDIT (AI) ---
+
+  Future<PendingInlineEdit> proposeInlineEdit({
+    required Range range,
+    required String text,
+    String? originalText,
+  }) async {
+    final id = await _invoke('inlineEdit.propose', {
+      'range': range.toJson(),
+      'text': text,
+      if (originalText != null) 'originalText': originalText,
+    });
+    if (id is! String || id.isEmpty) {
+      throw MonacoProtocolError(
+        operation: 'inlineEdit.propose',
+        message: 'Expected edit id, got $id',
+      );
+    }
+    final edit = InlineEdit(id: id, range: range, text: text, originalText: originalText);
+    return PendingInlineEdit.internal(
+      id: id,
+      edit: edit,
+      accept: () => _invoke('inlineEdit.accept', {'id': id}).then((_) {}),
+      reject: () => _invoke('inlineEdit.reject', {'id': id}).then((_) {}),
+      dispose: () => _invoke('inlineEdit.clear', {'id': id}).then((_) {}),
+    );
+  }
+
+  Future<void> acceptAllInlineEdits() async {
+    await _invoke('inlineEdit.acceptAll', {});
+  }
+
+  Future<void> rejectAllInlineEdits() async {
+    await _invoke('inlineEdit.rejectAll', {});
+  }
+
+  // --- EDIT TRANSACTIONS (streaming + undo grouping) ---
+
+  /// Begins an edit transaction that groups all subsequent streamed edits into one undo step.
+  ///
+  /// Call [EditTransaction.applyEdits] multiple times for streamed tokens,
+  /// then [EditTransaction.commit] (one undo) or [EditTransaction.abort].
+  Future<EditTransaction> beginEditTransaction() async {
+    await _invoke('document.pushUndoStop', {});
+    return EditTransaction._(
+      (edits) => _invoke('document.pushEditOperations', {
+        'edits': [for (final e in edits) e.toJson()],
+      }).then((_) {}),
+      () => _invoke('document.pushUndoStop', {}).then((_) {}),
+      () => _invoke('document.popUndoStop', {}).then((_) {}),
+    );
+  }
+
+  Future<void> pushEditOperations(List<EditOperation> edits) async {
+    if (edits.isEmpty) return;
+    await _invoke('document.pushEditOperations', {
+      'edits': [for (final e in edits) e.toJson()],
+    });
+  }
+
+  Future<void> pushUndoStop() async {
+    await _invoke('document.pushUndoStop', {});
+  }
+
+  Future<void> popUndoStop() async {
+    await _invoke('document.popUndoStop', {});
   }
 
   // --- DECORATIONS ---
@@ -1396,6 +1550,7 @@ class MonacoController {
     _requestSubscription?.cancel();
     _reloadSubscription?.cancel();
     _completionSources.clear();
+    _inlineCompletions.clear();
     _customActions.clear();
     _events.close();
     _pageReloaded.close();
@@ -1412,6 +1567,13 @@ class _CompletionRegistrationState {
   _CompletionRegistrationState({required this.provider, required this.params});
 
   final CompletionProvider provider;
+  final Map<String, Object?> params;
+}
+
+class _InlineCompletionState {
+  _InlineCompletionState({required this.provider, required this.params});
+
+  final InlineCompletionProvider provider;
   final Map<String, Object?> params;
 }
 

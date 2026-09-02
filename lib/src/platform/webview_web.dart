@@ -1,18 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js_interop';
-import 'dart:js_interop_unsafe';
-import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_monaco/src/assets/html_builder.dart';
 import 'package:flutter_monaco/src/assets/monaco_assets.dart';
 import 'package:flutter_monaco/src/common/monaco_page_config.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
-import 'package:flutter_monaco/src/platform/web_interaction_coordinator.dart';
 import 'package:flutter_monaco/src/platform/web_asset_resolver.dart';
 import 'package:web/web.dart' as web;
+import 'dart:ui_web' as ui_web;
 
 /// Resolves the bundled Monaco `vs/` directory URL on Flutter Web.
 ///
@@ -20,10 +19,7 @@ import 'package:web/web.dart' as web;
 /// own resolver (`ui_web.assetManager`) - the single source of truth that
 /// already honors `<base href>`, a CDN `assetBase`, a custom `assetsDir`, and
 /// URL-encoding. The resolver may return a `<base href>`-relative URL, so it is
-/// absolutized against `web.document.baseURI` - the page's `<base href>`, which
-/// (unlike the raw page URL) excludes the active single-page route under path
-/// URL strategy, so the path stays correct and still resolves inside the
-/// blob-URL iframe that hosts Monaco (see issue #14).
+/// absolutized against `web.document.baseURI`.
 String _monacoVsAssetUrl() {
   final assetUrl = ui_web.assetManager.getAssetUrl(
     '$monacoAssetBaseDir/min/vs',
@@ -32,11 +28,6 @@ String _monacoVsAssetUrl() {
 }
 
 /// Resolves the bundled bridge JavaScript directory URL on Flutter Web.
-///
-/// Same resolution rules as [_monacoVsAssetUrl]: the bridge files are plain
-/// Flutter assets served from the host origin, so `script-src 'self'` admits
-/// them and the blob-URL iframe (which inherits the creator's origin) can
-/// load them via `<script src>`.
 String _monacoBridgeAssetUrl() {
   final assetUrl = ui_web.assetManager.getAssetUrl(
     '$monacoAssetBaseDir/bridge',
@@ -44,73 +35,24 @@ String _monacoBridgeAssetUrl() {
   return resolveWebAssetUrl(web.document.baseURI, assetUrl);
 }
 
-/// WebView implementation for Flutter Web using an iframe.
+/// WebView implementation for Flutter Web using `flutter_inappwebview`.
 ///
-/// On web platforms, native WebViews aren't available, so Monaco is hosted
-/// in an iframe element. This approach provides:
+/// Previously used a raw `HTMLIFrameElement` + `platformViewRegistry`.
+/// Now uses `InAppWebView` (flutter_inappwebview) which on web still renders
+/// an iframe but provides a unified controller API (`evaluateJavascript`,
+/// `loadData`, `addJavaScriptHandler`) consistent with the native
+/// `flutter_inappwebview` implementations.
 ///
-/// - **Isolation:** Monaco runs in a separate browsing context
-/// - **Security:** Content-Security-Policy can be applied per-iframe
-/// - **Compatibility:** Works across all modern browsers
+/// Communication still uses `window.parent.postMessage` from the iframe
+/// (defined in the generated HTML) and is captured via `window.addEventListener('message')`
+/// on the parent, with per-instance token validation (`_messageToken`) to
+/// avoid cross-editor spoofing. `flutter_inappwebview` JavaScript handlers
+/// are also registered for forward compatibility.
 ///
-/// ### Communication
-///
-/// The iframe communicates with Flutter via `postMessage`:
-/// - **Monaco to Flutter:** `window.parent.postMessage(msg, '*')`
-/// - **Flutter to Monaco:** `iframe.contentWindow.eval(script)`
-///
-/// The HTML defines `window.flutterChannel.postMessage` which calls
-/// `window.parent.postMessage`, maintaining API consistency with native.
-///
-/// ### HTML Loading
-///
-/// Monaco HTML is generated as a blob URL to avoid CORS issues with
-/// `file://` or asset paths. The blob URL stays alive for as long as the
-/// iframe exists (released on [dispose] or when a retry replaces it): the
-/// Flutter web engine can detach and re-insert the iframe's DOM node at any
-/// time after creation (platform-view re-composition around tab and route
-/// churn), and re-inserting an iframe reloads its `src` from scratch. A
-/// revoked blob would make that reload render Chromium's ERR_FILE_NOT_FOUND
-/// page inside the editor. The reload itself is recovered by
-/// `MonacoController` re-booting the fresh page shell (see
-/// `MonacoProtocol.pageReloads`).
-///
-/// ### Widget Attachment
-///
-/// The iframe only loads while it is attached to the parent document, and
-/// it is only attached while [widget] is mounted and painted (that is when
-/// the engine composites the platform view slot). Boot therefore requires
-/// the app to keep the widget in the tree - painted underneath any loading
-/// chrome - from `load()` onward. A ready timeout with the iframe still
-/// detached fails fast with a [StateError] naming this requirement instead
-/// of retrying.
-///
-/// ### Focus Handling
-///
-/// Web focus is tricky because the iframe is a separate browsing context.
-/// When Monaco reports focus events, this controller unfocuses Flutter
-/// widgets. Desktop web also reasserts Monaco focus while mobile web avoids
-/// amplifying accidental focus during scroll gestures.
-///
-/// The reverse handoff is explicit: [releaseNativeFocus] (also run by
-/// [setInteractionEnabled] `false`) blurs Monaco inside the iframe AND
-/// returns the parent document's focus to the Flutter view host, so Flutter
-/// overlays receive keyboard events (Escape, Tab, typing) without needing a
-/// first click. While the iframe element is the parent document's
-/// activeElement, no key event can reach Flutter at all.
-///
-/// See also:
-/// - `buildMonacoIndexHtml` (html_builder.dart) for HTML generation with
-///   web-specific worker shims.
-/// - [native.dart] for native platform implementations.
+/// HTML is loaded via `InAppWebViewController.loadData` (no blob URL needed);
+/// the controller waits for the widget to be mounted/painted before considering
+/// boot ready, preserving the `MonacoController.create` web mount constraint.
 class WebViewController implements PlatformWebViewController {
-  /// Monotonic per-controller counter mixed into [_viewId].
-  ///
-  /// A purely clock-derived id collides when several editors initialize in
-  /// the same millisecond (one widget build creating multiple editors): the
-  /// platform view registry rejects the duplicate factory, every
-  /// HtmlElementView resolves to the first iframe, and the other editors
-  /// never become ready.
   static int _instanceCounter = 0;
 
   final Map<String, void Function(String)> _channels = {};
@@ -120,130 +62,156 @@ class WebViewController implements PlatformWebViewController {
   Completer<void> _readyCompleter = Completer<void>();
   bool _isReady = false;
 
-  web.HTMLIFrameElement? _iframe;
+  InAppWebViewController? _inAppController;
+  final Completer<InAppWebViewController> _controllerCompleter =
+      Completer<InAppWebViewController>();
   JSFunction? _messageHandler;
   String? _viewId;
   late final String _messageToken;
 
-  /// The blob URL currently assigned to the iframe's `src`.
-  ///
-  /// Held (not revoked at ready) because the engine may re-insert the
-  /// iframe later and the browser then re-fetches this URL; see the class
-  /// docs. Released only through [_replaceActiveBlobUrl].
-  String? _activeBlobUrl;
-
-  /// Revokes the previous blob URL (if any) and records [next] as current.
-  ///
-  /// The single revoke site in this controller: a retry replaces the failed
-  /// attempt's URL, and [dispose] passes `null` after the iframe is gone.
-  void _replaceActiveBlobUrl(String? next) {
-    final previous = _activeBlobUrl;
-    if (previous != null) {
-      web.URL.revokeObjectURL(previous);
-    }
-    _activeBlobUrl = next;
-  }
-
-  final _widgetKey = GlobalKey();
+  final GlobalKey _widgetKey = GlobalKey();
   Widget? _cachedWidget;
+  final ValueNotifier<bool> _interactionNotifier = ValueNotifier<bool>(true);
 
   @override
-  Widget get widget =>
-      _cachedWidget ??= HtmlElementView(key: _widgetKey, viewType: _viewId!);
-
-  @override
-  Future<void> initialize() async {
-    final instanceId = ++_instanceCounter;
-    _viewId =
-        'monaco-iframe-$instanceId-${DateTime.now().millisecondsSinceEpoch}';
-    debugPrint('[WebViewController] Initializing iframe approach');
-    _messageToken = 'monaco-${DateTime.now().microsecondsSinceEpoch}-$_viewId';
-
-    // Create iframe for Monaco.
-    _iframe = web.HTMLIFrameElement()
-      ..id = _viewId!
-      ..style.width = '100%'
-      ..style.height = '100%'
-      ..style.border = 'none'
-      // Iframes are inline by default; the baseline gap can overflow the
-      // host page by a few pixels, giving mobile Safari something to pan.
-      ..style.display = 'block'
-      // Touch pans and overscroll that start over the editor must never
-      // chain into the host page (issue #11). The embedded document declares
-      // the same policy; this covers the frame boundary itself.
-      ..style.touchAction = 'none'
-      ..style.overscrollBehavior = 'none'
-      ..allow = 'clipboard-read; clipboard-write';
-
-    MonacoWebInteractionCoordinator.instance.registerEditor(_viewId!, _iframe!);
-    _applyInteractionEnabled();
-
-    // Register the view factory.
-    ui_web.platformViewRegistry.registerViewFactory(_viewId!, (_) => _iframe!);
-
-    // Listen for messages from the iframe.
-    final handler = _handleIframeMessage.toJS;
-    _messageHandler = handler;
-    web.window.addEventListener('message', handler);
-
-    debugPrint('[WebViewController] View factory registered with ID: $_viewId');
-  }
-
-  void _handleIframeMessage(web.MessageEvent event) {
-    // Only accept messages from our iframe
-    if (_iframe?.contentWindow != event.source) return;
-
-    final data = event.data;
-    String message;
-    Map<String, dynamic>? json;
-
-    try {
-      // Try to convert as string first
-      message = (data as JSString).toDart;
-    } catch (_) {
-      // If not a string, try to convert as object
-      try {
-        message = jsonEncode((data as JSObject).dartify());
-      } catch (_) {
-        message = data.toString();
-      }
+  Widget get widget {
+    if (_cachedWidget != null) return _cachedWidget!;
+    // Lazily built; `initialize()` must have set _viewId/_messageToken.
+    if (_viewId == null) {
+      throw StateError(
+        'WebViewController.widget accessed before initialize(). '
+        'Call initialize() first.',
+      );
     }
 
+    final inAppWebView = InAppWebView(
+      key: _widgetKey,
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        javaScriptCanOpenWindowsAutomatically: true,
+        mediaPlaybackRequiresUserGesture: false,
+        transparentBackground: true,
+        isInspectable: kDebugMode,
+        allowFileAccess: true,
+        allowContentAccess: true,
+        allowFileAccessFromFileURLs: true,
+        allowUniversalAccessFromFileURLs: true,
+        // iframe attrs
+        iframeAllow: 'clipboard-read; clipboard-write',
+        // keep original iframe styling on web via CSS in HTML; InAppWebView's
+        // web implementation still respects host page touch-action.
+      ),
+      initialData: InAppWebViewInitialData(
+        data: '<!DOCTYPE html><html><head></head><body></body></html>',
+        mimeType: 'text/html',
+        encoding: 'utf8',
+        baseUrl: WebUri(web.document.baseURI),
+      ),
+      onWebViewCreated: (controller) {
+        _inAppController = controller;
+        if (!_controllerCompleter.isCompleted) {
+          _controllerCompleter.complete(controller);
+        }
+        // Register any channels that were added before controller was ready.
+        for (final entry in _channels.entries) {
+          _registerHandler(entry.key, entry.value);
+        }
+        debugPrint('[WebViewController] InAppWebView created: $_viewId');
+      },
+      onConsoleMessage: (controller, consoleMessage) {
+        debugPrint(
+          '[Monaco Console] ${consoleMessage.messageLevel.name}: ${consoleMessage.message}',
+        );
+      },
+      onLoadStop: (controller, url) {
+        debugPrint('[WebViewController] InAppWebView load stop: $url');
+      },
+      onReceivedError: (controller, request, error) {
+        debugPrint(
+          '[WebViewController] InAppWebView error: ${error.description} on ${request.url}',
+        );
+      },
+    );
+
+    // Interaction is driven via IgnorePointer wrapper + notifier so toggling
+    // doesn't require rebuilding the InAppWebView (which would reload).
+    _cachedWidget = ValueListenableBuilder<bool>(
+      valueListenable: _interactionNotifier,
+      builder: (context, enabled, child) {
+        if (enabled) return child!;
+        // pointer-events: none equivalent - absorb all pointer events.
+        return IgnorePointer(child: child);
+      },
+      child: inAppWebView,
+    );
+    return _cachedWidget!;
+  }
+
+  void _registerHandler(String name, void Function(String) onMessage) {
+    final controller = _inAppController;
+    if (controller == null) return;
+    // flutter_inappwebview handler: window.flutter_inappwebview.callHandler(name, msg)
+    // The generated HTML still uses window.flutterChannel.postMessage -> window.parent.postMessage,
+    // but we also support the handler path for forward compat (injected shim below).
+    try {
+      controller.removeJavaScriptHandler(handlerName: name);
+    } catch (_) {}
+    controller.addJavaScriptHandler(
+      handlerName: name,
+      callback: (args) {
+        final msg = args.isNotEmpty ? args.first.toString() : '';
+        // Token is already stamped on handler path via envelope._flutterToken;
+        // validate similarly to postMessage path.
+        if (msg.startsWith('{')) {
+          try {
+            final decoded = jsonDecode(msg);
+            if (decoded is Map<String, dynamic>) {
+              final token = decoded['_flutterToken'];
+              if (token != null && token != _messageToken) return;
+            }
+          } catch (_) {}
+        } else if (msg != 'ready') {
+          return;
+        }
+        _dispatchToChannels(msg);
+        // Also run the legacy focus/ready logic for handler path.
+        _handleChannelMessage(msg);
+      },
+    );
+  }
+
+  void _dispatchToChannels(String message) {
+    for (final handler in _channels.values) {
+      handler(message);
+    }
+  }
+
+  void _handleChannelMessage(String message) {
+    // Shared logic for both postMessage and handler paths - similar to legacy
+    // _handleIframeMessage but without source check (InAppWebView iframe source
+    // is opaque). Token already validated.
+    if (_disposed) return;
+
+    Map<String, dynamic>? json;
     if (message.startsWith('{')) {
       try {
         final decoded = jsonDecode(message);
-        if (decoded is Map<String, dynamic>) {
-          json = decoded;
-        }
+        if (decoded is Map<String, dynamic>) json = decoded;
       } catch (_) {}
     }
 
-    if (json != null) {
-      final token = json['_flutterToken'];
-      if (token != _messageToken) return;
-    } else if (message != 'ready') {
-      return;
-    }
-
-    // Only log non-stats messages to reduce noise (stats fire on every keystroke/selection)
+    // Only log non-stats
     final isStatsMessage = json?['kind'] == 'event' && json?['name'] == 'stats';
     if (!isStatsMessage) {
-      debugPrint('[WebViewController] Received iframe message: $message');
+      debugPrint('[WebViewController] Received message: $message');
     }
 
-    // Lifecycle: the protocol v3 'pageReady' envelope marks the page shell
-    // alive (scripts loaded, protocol available) - that is what load()
-    // waits for; the editor itself is created later by page.boot. The
-    // legacy {event: 'error'} shape still comes from the inline
-    // loader-failure handler in the HTML head (which runs before core.js).
     final lifecycleName = (json != null && json['kind'] == 'lifecycle')
         ? json['name']
         : null;
     if (message == 'ready' || lifecycleName == 'pageReady') {
       _isReady = true;
-      if (!_readyCompleter.isCompleted) {
-        _readyCompleter.complete();
-      }
+      if (!_readyCompleter.isCompleted) _readyCompleter.complete();
       debugPrint('[WebViewController] Monaco page shell ready!');
     } else if (!_isReady &&
         (lifecycleName == 'fatal' || json?['event'] == 'error')) {
@@ -257,8 +225,7 @@ class WebViewController implements PlatformWebViewController {
       }
     }
 
-    // When Monaco reports focus, unfocus Flutter widgets.
-    // This is gated by _interactionEnabled to avoid focus stealing when interaction is disabled.
+    // Focus handling
     final focusData =
         (json != null &&
             json['kind'] == 'event' &&
@@ -268,20 +235,70 @@ class WebViewController implements PlatformWebViewController {
     if (_interactionEnabled &&
         focusData is Map &&
         focusData['focused'] == true) {
-      // Unfocus any Flutter widget
       FocusManager.instance.primaryFocus?.unfocus();
       if (!_isMobileInputPlatform()) {
-        _iframe?.contentWindow?.callMethod(
-          'eval'.toJS,
-          'window.flutterMonaco && window.flutterMonaco.forceFocus()'.toJS,
+        // Best-effort force focus via JS
+        _inAppController?.evaluateJavascript(
+          source: 'window.flutterMonaco && window.flutterMonaco.forceFocus()',
         );
       }
     }
+  }
 
-    // Forward to all channels
-    for (final handler in _channels.values) {
-      handler(message);
+  @override
+  Future<void> initialize() async {
+    final instanceId = ++_instanceCounter;
+    _viewId =
+        'monaco-iframe-$instanceId-${DateTime.now().millisecondsSinceEpoch}';
+    debugPrint('[WebViewController] Initializing InAppWebView approach');
+    _messageToken = 'monaco-${DateTime.now().microsecondsSinceEpoch}-$_viewId';
+
+    // Listen for postMessage from the iframe (legacy path). On web, the iframe
+    // created by InAppWebView still posts to window.parent, which arrives here.
+    final handler = _handleWindowMessage.toJS;
+    _messageHandler = handler;
+    web.window.addEventListener('message', handler);
+
+    _interactionNotifier.value = _interactionEnabled;
+    debugPrint('[WebViewController] Initialized with ID: $_viewId');
+  }
+
+  void _handleWindowMessage(web.MessageEvent event) {
+    // For InAppWebView web, event.source is the iframe's contentWindow; we don't
+    // have a direct reference to validate, so rely on token only.
+    final data = event.data;
+    String message;
+    Map<String, dynamic>? json;
+
+    try {
+      message = (data as JSString).toDart;
+    } catch (_) {
+      try {
+        message = jsonEncode((data as JSObject).dartify());
+      } catch (_) {
+        message = data.toString();
+      }
     }
+
+    if (message.startsWith('{')) {
+      try {
+        final decoded = jsonDecode(message);
+        if (decoded is Map<String, dynamic>) json = decoded;
+      } catch (_) {}
+    }
+
+    if (json != null) {
+      final token = json['_flutterToken'];
+      if (token != _messageToken) return;
+    } else if (message != 'ready') {
+      return;
+    }
+
+    // De-duplicate: if this message was already handled via handler path,
+    // it will have been dispatched; but postMessage path is primary on web,
+    // so dispatch once here.
+    _handleChannelMessage(message);
+    _dispatchToChannels(message);
   }
 
   Future<void> _ensureReady() async {
@@ -305,21 +322,18 @@ class WebViewController implements PlatformWebViewController {
     final r = (color.r * 255).round();
     final g = (color.g * 255).round();
     final b = (color.b * 255).round();
-    _iframe?.style.backgroundColor = 'rgba($r, $g, $b, ${color.a})';
+    final css = 'rgba($r, $g, $b, ${color.a})';
+    // Apply to host via InAppWebView CSS, and also to iframe content if loaded.
+    try {
+      await _inAppController?.evaluateJavascript(
+        source:
+            "document.documentElement.style.backgroundColor='$css';document.body.style.backgroundColor='$css';",
+      );
+    } catch (_) {}
   }
 
   void _applyInteractionEnabled() {
-    final iframe = _iframe;
-    if (iframe == null) return;
-    final viewId = _viewId;
-    if (viewId == null) {
-      iframe.style.pointerEvents = _interactionEnabled ? 'auto' : 'none';
-      return;
-    }
-    MonacoWebInteractionCoordinator.instance.setBaseEnabled(
-      viewId,
-      _interactionEnabled,
-    );
+    _interactionNotifier.value = _interactionEnabled;
   }
 
   @override
@@ -329,16 +343,12 @@ class WebViewController implements PlatformWebViewController {
     _applyInteractionEnabled();
 
     if (!enabled) {
-      // A pointer-inert editor must not keep the keyboard either: hand
-      // document focus back to Flutter so overlays receive key events
-      // (Escape closes a dialog, Tab traverses it) without a first click.
       await releaseNativeFocus();
     }
   }
 
   @override
   Future<NativeFocusResult> requestNativeFocus() async {
-    // No-op on web; iframe focus is handled by the in-page focus helpers.
     return NativeFocusResult.unsupported;
   }
 
@@ -347,39 +357,24 @@ class WebViewController implements PlatformWebViewController {
 
   @override
   Future<void> releaseNativeFocus() async {
-    // Web's "native focus" (layer 2 of the focus model) is the browser's
-    // document focus. While the parent document's activeElement is the
-    // editor iframe, every key event dispatches inside the iframe's
-    // document; Flutter's keyboard listeners live on the Flutter view host
-    // in the parent document and receive nothing. Blurring inside the
-    // iframe alone is not enough - keys keep draining into the iframe's
-    // body. The handoff is two-sided, mirroring the desktop
-    // implementations: blur Monaco's textarea INSIDE the iframe, then move
-    // the parent document's focus onto the Flutter view host so keys flow
-    // to Flutter again.
+    // Web "native focus" is document focus. With InAppWebView, the iframe is
+    // inside Flutter's host; blur inside iframe + focus Flutter host.
     _blurInsideIframe();
-    if (_iframeHoldsDocumentFocus) {
-      _focusFlutterHost();
-    }
-  }
-
-  /// Whether the parent document currently routes keyboard input into the
-  /// editor's iframe. Compared by element id (set in [initialize]) because
-  /// JS-interop reference equality is compiler-dependent.
-  bool get _iframeHoldsDocumentFocus {
-    final viewId = _viewId;
-    if (viewId == null) return false;
-    final active = web.document.activeElement;
-    return active != null && active.tagName == 'IFRAME' && active.id == viewId;
+    // Best-effort focus host element.
+    try {
+      final host =
+          web.document.querySelector('flutter-view') as web.HTMLElement?;
+      if (host != null) {
+        if (!host.hasAttribute('tabindex')) host.tabIndex = -1;
+        host.focus(web.FocusOptions(preventScroll: true));
+      }
+    } catch (_) {}
   }
 
   void _blurInsideIframe() {
-    // Best-effort: blur Monaco's textarea so the editor stops handling keys
-    // and its caret stops blinking while it is interaction-disabled.
     try {
-      _iframe?.contentWindow?.callMethod(
-        'eval'.toJS,
-        '''
+      _inAppController?.evaluateJavascript(
+        source: '''
           (function() {
             try {
               var ta = document.querySelector('textarea.inputarea');
@@ -388,47 +383,22 @@ class WebViewController implements PlatformWebViewController {
               if (ae && ae.blur) ae.blur();
             } catch (e) {}
           })();
-        '''
-            .toJS,
+        ''',
       );
     } catch (_) {}
   }
 
-  /// Moves the parent document's focus from the editor iframe onto the
-  /// Flutter view host element, so the framework's key listeners receive
-  /// events again.
-  void _focusFlutterHost() {
-    final iframe = _iframe;
-    if (iframe == null) return;
-    try {
-      // closest() keeps this correct under multi-view embeddings: focus the
-      // <flutter-view> THIS editor lives in, not the first one on the page.
-      final host = iframe.closest('flutter-view');
-      if (host == null || !host.isA<web.HTMLElement>()) {
-        // Unknown host DOM (engine change / exotic embedding): at least pull
-        // focus off the iframe so keys stop draining into an inert editor.
-        iframe.blur();
-        return;
-      }
-      final hostElement = host as web.HTMLElement;
-      if (!hostElement.hasAttribute('tabindex')) {
-        // Programmatic focus() requires focusability; -1 keeps the host out
-        // of the user's Tab order.
-        hostElement.tabIndex = -1;
-      }
-      hostElement.focus(web.FocusOptions(preventScroll: true));
-    } catch (_) {}
-  }
-
   @override
-  Future<void> enableJavaScript() async {}
+  Future<void> enableJavaScript() async {
+    // InAppWebView has JS enabled via settings.
+  }
 
   @override
   Future<Object?> runJavaScript(String script) async {
     if (_disposed) return null;
-
     try {
-      _iframe?.contentWindow?.callMethod('eval'.toJS, script.toJS);
+      final controller = await _controllerCompleter.future;
+      await controller.evaluateJavascript(source: script);
       return null;
     } catch (e) {
       debugPrint('[WebViewController] JS execution error: $e');
@@ -439,13 +409,10 @@ class WebViewController implements PlatformWebViewController {
   @override
   Future<Object?> runJavaScriptReturningResult(String script) async {
     if (_disposed) return null;
-
     try {
-      final result = _iframe?.contentWindow?.callMethod(
-        'eval'.toJS,
-        script.toJS,
-      );
-      return result?.dartify();
+      final controller = await _controllerCompleter.future;
+      final result = await controller.evaluateJavascript(source: script);
+      return result;
     } catch (e) {
       debugPrint('[WebViewController] JS result error: $e');
       rethrow;
@@ -459,21 +426,32 @@ class WebViewController implements PlatformWebViewController {
   ) async {
     debugPrint('[WebViewController] Adding JS channel: $name');
     _channels[name] = onMessage;
+    // If controller already created, register handler now for handler-path.
+    if (_inAppController != null) {
+      _registerHandler(name, onMessage);
+    }
     return null;
   }
 
   @override
   Future<Object?> removeJavaScriptChannel(String name) async {
     _channels.remove(name);
+    try {
+      _inAppController?.removeJavaScriptHandler(handlerName: name);
+    } catch (_) {}
     return null;
   }
 
   @override
   Future<void> load({MonacoPageConfig page = const MonacoPageConfig()}) async {
-    debugPrint('[WebViewController] Loading Monaco in iframe');
-    await _waitForIframeAttachment();
+    debugPrint('[WebViewController] Loading Monaco via InAppWebView');
+    // Wait for the InAppWebView widget to be mounted and controller available.
+    // The widget must be in the tree (see MonacoController docs); we poll
+    // briefly similarly to _waitForIframeAttachment.
+    await _waitForControllerAttachment();
 
     final vsPath = _monacoVsAssetUrl();
+    final bridgeBase = _monacoBridgeAssetUrl();
 
     Object? lastError;
     const maxLoadAttempts = 2;
@@ -483,7 +461,7 @@ class WebViewController implements PlatformWebViewController {
 
       final html = buildMonacoIndexHtml(
         vsPath: vsPath,
-        bridgeBase: _monacoBridgeAssetUrl(),
+        bridgeBase: bridgeBase,
         monacoVersion: MonacoAssets.monacoVersion,
         isWeb: true,
         messageToken: _messageToken,
@@ -492,27 +470,51 @@ class WebViewController implements PlatformWebViewController {
         allowedConnectSources: page.allowedConnectSources,
       );
 
-      final blobUrl = web.URL.createObjectURL(
-        web.Blob([html.toJS].toJS, web.BlobPropertyBag(type: 'text/html')),
-      );
-      _replaceActiveBlobUrl(blobUrl);
+      // Inject shim so window.flutterChannel also works via handler path
+      // (covers case where handler is preferred). Injected before first script.
+      final shim = '''
+<script>
+  (function(){
+    var _origPost = null;
+    if (window.flutterChannel && window.flutterChannel.postMessage) _origPost = window.flutterChannel.postMessage;
+    window.flutterChannel = {
+      postMessage: function(msg) {
+        try {
+          if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+            var s = typeof msg === 'string' ? msg : JSON.stringify(msg);
+            window.flutter_inappwebview.callHandler('flutterChannel', s);
+            return;
+          }
+        } catch(e) {}
+        if (_origPost) { try { _origPost.call(window.flutterChannel, msg); return; } catch(e){} }
+        try { window.parent.postMessage(msg, '*'); } catch(e) {}
+      }
+    };
+  })();
+</script>
+''';
+      final patchedHtml = html.replaceFirst('<script>', '$shim\n<script>');
 
       try {
-        _iframe!.src = blobUrl;
+        final controller = await _controllerCompleter.future;
+        await controller.loadData(
+          data: patchedHtml,
+          mimeType: 'text/html',
+          encoding: 'utf8',
+          baseUrl: WebUri(web.document.baseURI),
+          historyUrl: WebUri(web.document.baseURI),
+        );
         await _ensureReady();
-        // The blob URL intentionally stays alive (see _activeBlobUrl): an
-        // engine-driven iframe re-insertion reloads `src`, which must still
-        // resolve.
         return;
       } catch (e) {
-        // A ready timeout while the iframe is outside the DOM is not a
-        // transient load failure: a detached iframe never loads its src at
-        // all, so retrying would only burn another silent 20s. This is a
-        // usage error - readiness is being awaited while nothing put the
-        // platform view on screen - and must surface as one.
-        if (e is TimeoutException && !(_iframe?.isConnected ?? false)) {
+        // If widget not attached, this is a usage error - fail fast like iframe version.
+        final isDetached =
+            _cachedWidget == null ||
+            _widgetKey.currentContext == null ||
+            !(_widgetKey.currentContext!.findRenderObject()?.attached ?? false);
+        if (e is TimeoutException && isDetached) {
           throw StateError(
-            'Monaco iframe is not attached to the DOM, so the editor page '
+            'Monaco InAppWebView is not attached to the DOM, so the editor page '
             'can never load. On web, whenReady only completes while the '
             "controller's webViewWidget is mounted and painted: keep the "
             'widget in the tree underneath your loading UI (an opaque Stack '
@@ -522,26 +524,43 @@ class WebViewController implements PlatformWebViewController {
           );
         }
         lastError = e;
-        if (attempt == maxLoadAttempts) {
-          rethrow;
-        }
+        if (attempt == maxLoadAttempts) rethrow;
         debugPrint(
           '[WebViewController] Monaco load attempt $attempt failed, retrying: $e',
         );
-        _iframe?.src = 'about:blank';
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
     }
 
-    throw StateError('Monaco iframe failed to load: $lastError');
+    throw StateError('Monaco InAppWebView failed to load: $lastError');
   }
 
-  Future<void> _waitForIframeAttachment() async {
-    final iframe = _iframe;
-    if (iframe == null || iframe.isConnected) return;
-
+  Future<void> _waitForControllerAttachment() async {
+    // Wait for onWebViewCreated
+    if (_controllerCompleter.isCompleted) {
+      // Also wait a few frames for the widget to be attached/painted.
+      const maxFrames = 120;
+      for (var i = 0; i < maxFrames; i++) {
+        final ctx = _widgetKey.currentContext;
+        final attached = ctx?.findRenderObject()?.attached ?? false;
+        if (attached) return;
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+      return;
+    }
+    // Controller not yet created - widget not yet built. Wait briefly for first frame.
     const maxFrames = 120;
-    for (var i = 0; i < maxFrames && !iframe.isConnected; i++) {
+    for (var i = 0; i < maxFrames; i++) {
+      if (_controllerCompleter.isCompleted) {
+        // Now wait for attachment as above
+        for (var j = 0; j < 20; j++) {
+          final ctx = _widgetKey.currentContext;
+          final attached = ctx?.findRenderObject()?.attached ?? false;
+          if (attached) return;
+          await Future<void>.delayed(const Duration(milliseconds: 16));
+        }
+        return;
+      }
       await Future<void>.delayed(const Duration(milliseconds: 16));
     }
   }
@@ -551,37 +570,31 @@ class WebViewController implements PlatformWebViewController {
     if (_disposed) return;
     _disposed = true;
 
-    debugPrint('[WebViewController] Disposing...');
-    final viewId = _viewId;
-    if (viewId != null) {
-      MonacoWebInteractionCoordinator.instance.unregisterEditor(viewId);
-    }
+    debugPrint('[WebViewController] Disposing InAppWebView...');
     if (_messageHandler != null) {
       web.window.removeEventListener('message', _messageHandler!);
       _messageHandler = null;
     }
+    for (final name in _channels.keys.toList()) {
+      try {
+        _inAppController?.removeJavaScriptHandler(handlerName: name);
+      } catch (_) {}
+    }
     _channels.clear();
     _cachedWidget = null;
     _detachParentBindings();
-    _iframe?.remove();
-    _iframe = null;
-    _replaceActiveBlobUrl(null);
+    // InAppWebView controller will be disposed by framework.
   }
 
-  /// Removing the iframe element discards its browsing context WITHOUT
-  /// firing `pagehide`, so listeners the embedded document registered on
-  /// the parent's `visualViewport`/window (the mobile-web viewport-fit of
-  /// issue #11) would stay attached to the host page and keep the dead
-  /// document - and its whole Monaco instance - rooted until the next
-  /// parent viewport event evicts them. Detach them eagerly so a disposed
-  /// editor is collectable immediately.
   void _detachParentBindings() {
     try {
-      _iframe?.contentWindow?.callMethod(
-        'eval'.toJS,
-        'window.__flutterMonacoDetachParentBindings && window.__flutterMonacoDetachParentBindings();'
-            .toJS,
-      );
+      final c = _inAppController;
+      if (c != null) {
+        c.evaluateJavascript(
+          source:
+              'window.__flutterMonacoDetachParentBindings && window.__flutterMonacoDetachParentBindings();',
+        );
+      }
     } catch (_) {}
   }
 }

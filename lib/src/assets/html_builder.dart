@@ -84,6 +84,8 @@ const List<String> monacoBridgeScripts = [
   'diff-api.js',
   'scroll-handoff.js',
   'lsp.js',
+  'inline-completion-api.js',
+  'inline-edit-api.js',
   // 'viewport-fit.js' (web only, inserted by the builder)
   'boot.js',
 ];

@@ -1,5 +1,0 @@
-release:
-  - changed-files:
-      - any-glob-to-any-file:
-          - pubspec.yaml
-          - CHANGELOG.md

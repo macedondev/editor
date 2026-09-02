@@ -1,60 +1,3 @@
-/// A Flutter plugin for integrating the Monaco Editor into Flutter applications.
-///
-/// Flutter Monaco provides a full-featured code editor powered by the same engine
-/// that drives Visual Studio Code. It supports syntax highlighting for 100+ languages,
-/// multiple themes, and a comprehensive API for editor manipulation.
-///
-/// ## Features
-///
-/// - **100+ Language Support** - Syntax highlighting for all major programming languages
-/// - **Language Server Protocol** - Connect real language servers for
-///   completions, diagnostics, hover, go-to-definition, rename, and more
-/// - **Multiple Themes** - VS Light, VS Dark, High Contrast themes
-/// - **Rich API** - Full programmatic control over the editor
-/// - **Multi-Editor Support** - Run multiple independent editor instances
-/// - **Cross-Platform** - Works on Android, iOS, macOS, Windows, and Web
-///
-/// ## Quick Start
-///
-/// ```dart
-/// import 'package:flutter_monaco/flutter_monaco.dart';
-///
-/// // Simple usage with the widget
-/// MonacoEditor(
-///   options: EditorOptions(
-///     language: MonacoLanguage.javascript,
-///     theme: MonacoTheme.vsDark,
-///   ),
-/// )
-///
-/// // Advanced usage with controller
-/// final controller = await MonacoController.create(
-///   options: EditorOptions(
-///     language: MonacoLanguage.python,
-///     fontSize: 16,
-///   ),
-/// );
-///
-/// await controller.whenReady;
-/// await controller.document.setText('print("Hello, World!")');
-/// final content = await controller.document.getText();
-/// ```
-///
-/// ## Platform Support
-///
-/// - ✅ Android (7.0+, API 24)
-/// - ✅ iOS (13.0+)
-/// - ✅ macOS (10.15+)
-/// - ✅ Windows (10 version 1809+)
-/// - ✅ Web (supported)
-/// - ❌ Linux (not supported)
-///
-/// ## Additional Resources
-///
-/// - [GitHub Repository](https://github.com/omar-hanafy/flutter_monaco)
-/// - [API Documentation](https://pub.dev/documentation/flutter_monaco/latest/)
-/// - [Example App](https://github.com/omar-hanafy/flutter_monaco/tree/main/example)
-/// - [Issue Tracker](https://github.com/omar-hanafy/flutter_monaco/issues)
 library;
 
 // Core exports
@@ -76,6 +19,8 @@ export 'src/diff/diff_controller.dart' show MonacoDiffController;
 export 'src/diff/diff_options.dart' show MonacoDiffOptions;
 export 'src/editor/completions.dart'
     show CompletionProvider, MonacoCompletionRegistration;
+export 'src/editor/inline_completions.dart'
+    show InlineCompletionProvider, MonacoInlineCompletionRegistration;
 export 'src/editor/custom_actions.dart' show MonacoActionRegistration;
 export 'src/editor/decorations.dart' show MonacoDecorationSet;
 export 'src/editor/document.dart' show MonacoDocument;
@@ -142,6 +87,13 @@ export 'src/types/completion.dart'
         CompletionList,
         CompletionRequest,
         InsertTextRule;
+export 'src/types/inline_completion.dart'
+    show
+        InlineCompletionContext,
+        InlineCompletionItem,
+        InlineCompletionList,
+        InlineCompletionRequest,
+        InlineCompletionTriggerKind;
 export 'src/types/decorations.dart' show DecorationOptions;
 export 'src/types/geometry.dart' show Position, Range;
 export 'src/types/json_diagnostics.dart'
