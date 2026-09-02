@@ -21,6 +21,8 @@ export 'src/editor/completions.dart'
     show CompletionProvider, MonacoCompletionRegistration;
 export 'src/editor/inline_completions.dart'
     show InlineCompletionProvider, MonacoInlineCompletionRegistration;
+export 'src/editor/inline_edit.dart' show PendingInlineEdit;
+export 'src/editor/edit_transaction.dart' show EditTransaction;
 export 'src/editor/custom_actions.dart' show MonacoActionRegistration;
 export 'src/editor/decorations.dart' show MonacoDecorationSet;
 export 'src/editor/document.dart' show MonacoDocument;
@@ -32,6 +34,8 @@ export 'src/editor/events.dart'
         MonacoScrollHandoffEvent,
         MonacoSelectionChanged,
         MonacoUnknownEvent;
+export 'src/editor/content_change_batcher.dart'
+    show ContentChangeBatch, ContentChangeBatcher;
 export 'src/editor/focus_coordinator.dart' show MonacoFocusIntent;
 export 'src/editor/view_state.dart' show MonacoViewState;
 
@@ -94,6 +98,7 @@ export 'src/types/inline_completion.dart'
         InlineCompletionList,
         InlineCompletionRequest,
         InlineCompletionTriggerKind;
+export 'src/types/inline_edit.dart' show InlineEdit, InlineEditStatus;
 export 'src/types/decorations.dart' show DecorationOptions;
 export 'src/types/geometry.dart' show Position, Range;
 export 'src/types/json_diagnostics.dart'

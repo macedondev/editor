@@ -415,16 +415,20 @@ window.__FMB.editorApi = function (ctx) {
                       totalLength += (c.text || '').length;
                       changes.push({ range: c.range, text: c.text });
                     }
-                    // D15: omit the deltas when the combined inserted text
-                    // tops 64 KiB, or when the change COUNT alone would
-                    // bloat the envelope (multi-cursor edit storms carry a
-                    // range object per change even with tiny text).
                     var truncated = totalLength > 65536 || e.changes.length > 1000;
+                    var versionId = null;
+                    try {
+                      versionId = model ? model.getAlternativeVersionId() : null;
+                      if (versionId == null && model && model.getVersionId) versionId = model.getVersionId();
+                    } catch (_) {}
                     emitEvent('contentChanged', {
                       uri: model && model.uri ? model.uri.toString() : null,
                       isFlush: e.isFlush,
                       changes: truncated ? undefined : changes,
                       truncated: truncated,
+                      versionId: versionId,
+                      isUndoing: e.isUndoing || false,
+                      isRedoing: e.isRedoing || false,
                     });
                   };
                   const modelSubscriptions = new Map();

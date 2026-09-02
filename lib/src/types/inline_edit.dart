@@ -1,3 +1,4 @@
+// ignore_for_file: public_member_api_docs
 import 'package:flutter_monaco/src/types/geometry.dart';
 
 /// A pending AI edit proposal that has not yet been applied to the model.

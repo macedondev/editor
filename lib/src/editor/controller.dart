@@ -1,16 +1,23 @@
+// ignore_for_file: public_member_api_docs, unnecessary_import
+
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_monaco/flutter_monaco.dart';
+import 'package:flutter_monaco/src/editor/content_change_batcher.dart';
+import 'package:flutter_monaco/src/editor/edit_transaction.dart';
 import 'package:flutter_monaco/src/editor/focus_coordinator.dart';
 import 'package:flutter_monaco/src/editor/inline_completions.dart';
+import 'package:flutter_monaco/src/editor/inline_edit.dart';
 import 'package:flutter_monaco/src/lsp/lsp_connection.dart';
 import 'package:flutter_monaco/src/platform/platform_webview.dart';
 import 'package:flutter_monaco/src/protocol/envelope.dart';
 import 'package:flutter_monaco/src/protocol/protocol.dart';
 import 'package:flutter_monaco/src/types/inline_completion.dart';
+import 'package:flutter_monaco/src/types/inline_edit.dart';
+import 'package:flutter_monaco/src/types/text.dart';
 
 /// Manages the lifecycle and interaction with a Monaco Editor instance.
 ///
@@ -60,6 +67,8 @@ class MonacoController {
   // Decoded editor events (sealed MonacoEvent union).
   final _events = StreamController<MonacoEvent>.broadcast();
   StreamSubscription<ProtocolEvent>? _eventSubscription;
+  final ContentChangeBatcher _contentBatcher =
+      ContentChangeBatcher(debounce: const Duration(milliseconds: 16));
 
   // Page-reload recovery (see onPageReloaded).
   final _pageReloaded = StreamController<void>.broadcast();
@@ -134,6 +143,13 @@ class MonacoController {
   /// truncation marker).
   Stream<MonacoContentChanged> get onContentChanged =>
       events.where((e) => e is MonacoContentChanged).cast();
+
+  /// Batched content changes - debounces rapid streamed edits (16ms default).
+  ///
+  /// Use this for AI streaming to avoid one Dart event per token. Normal typing
+  /// still arrives, but 1k/10k/100k streamed tokens are coalesced.
+  Stream<ContentChangeBatch> get batchedContentChanges =>
+      _contentBatcher.stream;
 
   /// The new primary [Range] (or `null`) whenever the selection changes.
   Stream<Range?> get onSelectionChanged => events
@@ -900,7 +916,11 @@ class MonacoController {
       if (event.name == 'lspStatus' || event.name == 'lspMessage') {
         return;
       }
-      _events.add(MonacoEvent.fromProtocolEvent(event));
+      final decoded = MonacoEvent.fromProtocolEvent(event);
+      _events.add(decoded);
+      if (decoded is MonacoContentChanged) {
+        _contentBatcher.add(decoded);
+      }
     });
   }
 
@@ -1156,7 +1176,7 @@ class MonacoController {
   /// then [EditTransaction.commit] (one undo) or [EditTransaction.abort].
   Future<EditTransaction> beginEditTransaction() async {
     await _invoke('document.pushUndoStop', {});
-    return EditTransaction._(
+    return EditTransaction.internal(
       (edits) => _invoke('document.pushEditOperations', {
         'edits': [for (final e in edits) e.toJson()],
       }).then((_) {}),
@@ -1552,6 +1572,7 @@ class MonacoController {
     _completionSources.clear();
     _inlineCompletions.clear();
     _customActions.clear();
+    _contentBatcher.dispose();
     _events.close();
     _pageReloaded.close();
     _liveStats.dispose();

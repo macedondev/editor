@@ -40,6 +40,13 @@ sealed class MonacoEvent {
                       .toList()
                 : null,
             truncated: data['truncated'] == true,
+            versionId: data['versionId'] is int
+                ? data['versionId'] as int
+                : (data['versionId'] is num
+                    ? (data['versionId'] as num).toInt()
+                    : null),
+            isUndoing: data['isUndoing'] == true,
+            isRedoing: data['isRedoing'] == true,
           );
         case 'selectionChanged':
           final selection = data['selection'];
@@ -73,6 +80,9 @@ final class MonacoContentChanged extends MonacoEvent {
     required this.truncated,
     this.documentUri,
     this.changes,
+    this.versionId,
+    this.isUndoing = false,
+    this.isRedoing = false,
   });
 
   /// URI of the changed document, when the model carries one.
@@ -88,6 +98,15 @@ final class MonacoContentChanged extends MonacoEvent {
   /// ship (over 64 KiB of inserted text, or more than 1000 individual
   /// changes); pull the full text instead.
   final bool truncated;
+
+  /// Monotonic model version (alternative version id) when available.
+  final int? versionId;
+
+  /// Whether this change is part of an undo.
+  final bool isUndoing;
+
+  /// Whether this change is part of a redo.
+  final bool isRedoing;
 }
 
 /// The primary selection changed.

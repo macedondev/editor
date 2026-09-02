@@ -1,3 +1,4 @@
+// ignore_for_file: public_member_api_docs
 import 'dart:async';
 
 import 'package:flutter_monaco/src/types/text.dart';
@@ -13,6 +14,14 @@ import 'package:flutter_monaco/src/types/text.dart';
 /// ```
 final class EditTransaction {
   EditTransaction._(this._apply, this._pushUndoStop, this._popUndoStop);
+
+  /// Internal factory used by [MonacoController].
+  factory EditTransaction.internal(
+    Future<void> Function(List<EditOperation> edits) apply,
+    Future<void> Function() pushUndoStop,
+    Future<void> Function() popUndoStop,
+  ) =>
+      EditTransaction._(apply, pushUndoStop, popUndoStop);
 
   final Future<void> Function(List<EditOperation> edits) _apply;
   final Future<void> Function() _pushUndoStop;
